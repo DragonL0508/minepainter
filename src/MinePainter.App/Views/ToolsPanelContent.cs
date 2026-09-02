@@ -18,6 +18,7 @@ public sealed class ToolsPanelContent : UserControl
         ("move", MaterialIconKind.CursorMove, "移動 (M)"),
         ("brush", MaterialIconKind.Brush, "筆刷 (B)"),
         ("eraser", MaterialIconKind.Eraser, "橡皮擦 (E)"),
+        ("bgeraser", MaterialIconKind.EraserVariant, "去背筆 (Shift+E)：擦掉與筆刷中心相近的顏色，物件留下"),
         ("fill", MaterialIconKind.FormatColorFill, "油漆桶 (F)"),
         ("eyedropper", MaterialIconKind.Eyedropper, "滴管 (I)"),
         ("text", MaterialIconKind.FormatText, "文字 (T)"),

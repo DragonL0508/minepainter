@@ -545,6 +545,7 @@ public partial class MainWindow : Window
         session.ActiveTool = key switch
         {
             "eraser" => session.Eraser,
+            "bgeraser" => session.BackgroundEraser,
             "eyedropper" => session.Eyedropper,
             "move" => session.Move,
             "rectselect" => session.RectSelect,
@@ -566,11 +567,12 @@ public partial class MainWindow : Window
     /// <summary>依工具顯示對應的選項群組（單行內切換，不改變工具列高度）。</summary>
     private void UpdateToolOptions(string key)
     {
-        SizeGroup.IsVisible = key is "brush" or "eraser" or "shape";
-        HardnessGroup.IsVisible = key is "brush" or "eraser";
+        SizeGroup.IsVisible = key is "brush" or "eraser" or "bgeraser" or "shape";
+        HardnessGroup.IsVisible = key is "brush" or "eraser" or "bgeraser";
         SmoothingGroup.IsVisible = key is "brush" or "eraser";
         OpacityGroup.IsVisible = key is "brush" or "eraser" or "fill";
-        ToleranceGroup.IsVisible = key is "fill" or "wand";
+        ToleranceGroup.IsVisible = key is "fill" or "wand" or "bgeraser";
+        BgEraserGroup.IsVisible = key == "bgeraser";
         TextGroup.IsVisible = key == "text";
         ShapeGroup.IsVisible = key == "shape";
     }
@@ -1968,7 +1970,7 @@ public partial class MainWindow : Window
             ["view.actualSize"] = () => Canvas.SetZoomPercent(100),
             ["view.bestFit"] = () => Canvas.ZoomToFit(),
         };
-        foreach (var key in new[] { "brush", "eraser", "eyedropper", "move", "rectselect", "lasso", "wand", "fill", "text", "shape" })
+        foreach (var key in new[] { "brush", "eraser", "bgeraser", "eyedropper", "move", "rectselect", "lasso", "wand", "fill", "text", "shape" })
         {
             var toolKey = key;
             _shortcutActions[$"tool.{key}"] = () => SelectTool(toolKey);
@@ -2148,6 +2150,14 @@ public partial class MainWindow : Window
         SmoothingBar.ValueChanged += _ => ApplyBrushOptions();
         OpacityBar.ValueChanged += _ => ApplyBrushOptions();
         ToleranceBar.ValueChanged += _ => ApplyBrushOptions();
+        SoftnessBar.ValueChanged += _ => ApplyBrushOptions();
+        foreach (var k in new[] { "連續", "一次" }) BgSamplingCombo.Items.Add(k);
+        foreach (var k in new[] { "連續", "不連續" }) BgLimitCombo.Items.Add(k);
+        BgSamplingCombo.SelectedIndex = 0;
+        BgLimitCombo.SelectedIndex = 0;
+        BgSamplingCombo.SelectionChanged += (_, _) => ApplyBrushOptions();
+        BgLimitCombo.SelectionChanged += (_, _) => ApplyBrushOptions();
+        ProtectFgCheck.IsCheckedChanged += (_, _) => ApplyBrushOptions();
 
         ZoomBar.ValueChanged += v =>
         {
@@ -2175,6 +2185,15 @@ public partial class MainWindow : Window
 
         session.Shape.StrokeWidth = Math.Max(1f, (float)SizeBox.Value / 4);
         session.Tolerance = (byte)ToleranceBar.Value;
+
+        var bg = session.BackgroundEraser.Settings;
+        bg.Radius = radius;
+        bg.Hardness = hardness;
+        bg.Tolerance = session.Tolerance;
+        bg.Softness = (float)(SoftnessBar.Value / 100);
+        bg.Sampling = BgSamplingCombo.SelectedIndex == 1 ? BackgroundSampling.Once : BackgroundSampling.Continuous;
+        bg.Contiguous = BgLimitCombo.SelectedIndex != 1;
+        bg.ProtectForeground = ProtectFgCheck.IsChecked == true;
     }
 
     private void ApplyShapeOptions()

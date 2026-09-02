@@ -1176,6 +1176,7 @@ public sealed class EditorSession : IDisposable
 
     public BrushTool Brush { get; }
     public EraserTool Eraser { get; }
+    public BackgroundEraserTool BackgroundEraser { get; }
     public EyedropperTool Eyedropper { get; }
     public MoveTool Move { get; }
     public RectangleSelectTool RectSelect { get; }
@@ -1223,6 +1224,7 @@ public sealed class EditorSession : IDisposable
 
         Brush = new BrushTool();
         Eraser = new EraserTool();
+        BackgroundEraser = new BackgroundEraserTool();
         Eyedropper = new EyedropperTool();
         Move = new MoveTool();
         RectSelect = new RectangleSelectTool();

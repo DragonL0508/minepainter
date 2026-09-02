@@ -69,6 +69,7 @@ public static class ShortcutMap
 
         new("tool.brush", "工具", "筆刷", new KeyGesture(Key.B)),
         new("tool.eraser", "工具", "橡皮擦", new KeyGesture(Key.E)),
+        new("tool.bgeraser", "工具", "去背筆", new KeyGesture(Key.E, KeyModifiers.Shift)),
         new("tool.eyedropper", "工具", "滴管", new KeyGesture(Key.I)),
         new("tool.move", "工具", "移動", new KeyGesture(Key.M)),
         new("tool.rectselect", "工具", "矩形選取", new KeyGesture(Key.S)),

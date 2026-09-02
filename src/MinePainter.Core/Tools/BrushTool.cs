@@ -101,7 +101,7 @@ public class BrushTool : ITool
     }
 
     /// <summary>把筆劃遮罩以正確語意烙進圖層（在 SyncRoot 內）。</summary>
-    private static unsafe void CommitStroke(RasterLayer layer, StrokeBuffer buffer)
+    internal static unsafe void CommitStroke(RasterLayer layer, StrokeBuffer buffer)
     {
         var color = buffer.IsEraser
             ? SKColors.White.WithAlpha((byte)(buffer.Opacity * 255))
