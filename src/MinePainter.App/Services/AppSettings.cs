@@ -28,6 +28,9 @@ public sealed class AppSettings
     /// <summary>移動工具拖曳時覆疊層帶著效果堆疊結果（外框／陰影／漸層跟著走）；關掉省效能。</summary>
     public bool RenderEffectsWhileDragging { get; set; } = true;
 
+    /// <summary>啟動音效（啟動畫面出現／載入完成／主視窗現身）。</summary>
+    public bool StartupSounds { get; set; } = true;
+
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
     private static string FilePath => System.IO.Path.Combine(

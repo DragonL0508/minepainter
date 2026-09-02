@@ -111,6 +111,8 @@
           <MenuItem Header="設定(_S)">
             <MenuItem Header="快捷鍵(_K)…" Click="OnShortcutsClicked" />
             <MenuItem Header="主題(_T)…" Click="OnThemeClicked" />
+            <MenuItem x:Name="StartupSoundMenuItem" Header="啟動音效" ToggleType="CheckBox"
+                      Click="OnToggleStartupSoundClicked" />
           </MenuItem>
         </controls:ClickSubmenuMenu>
       </DockPanel>

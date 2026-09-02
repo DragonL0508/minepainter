@@ -39,6 +39,7 @@ public partial class App : Application
             // 剛好在 260ms 的退場結束時接上，使用者看到的是 splash 淡出、視窗隨即出現，中間沒有空白。
             // 注意不能在這裡就設 desktop.MainWindow —— lifetime 會在這個方法回傳後立刻 Show 它。
             NativeSplash.RequestFadeOut();
+            Services.StartupSounds.LoadingFinished();
             NativeSplash.FadeOutStarted.ContinueWith(_ => Dispatcher.UIThread.Post(() =>
             {
                 desktop.MainWindow = main;

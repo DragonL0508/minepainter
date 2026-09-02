@@ -76,6 +76,7 @@ public partial class MainWindow : Window
     public MainWindow(string? initialFile)
     {
         InitializeComponent();
+        StartupSoundMenuItem.IsChecked = Services.AppSettings.Instance.StartupSounds;
 
         OnnxModels.ModelDirectories.Clear();
         OnnxModels.ModelDirectories.Add(ModelFolder);
@@ -137,6 +138,7 @@ public partial class MainWindow : Window
         _initialFile = initialFile;
         Opened += (_, _) =>
         {
+            Services.StartupSounds.MainWindowShown();
             PrepareBeforeShow(); // 正常流程 App 已先呼叫過（啟動畫面期間）；這裡是保險
             ShowPanels();
             StartPerfLabelTimer();
@@ -1965,6 +1967,13 @@ public partial class MainWindow : Window
     private void OnActualSizeClicked(object? sender, RoutedEventArgs e) => Canvas.SetZoomPercent(100);
 
     private void OnBestFitClicked(object? sender, RoutedEventArgs e) => Canvas.ZoomToFit();
+
+    private void OnToggleStartupSoundClicked(object? sender, RoutedEventArgs e)
+    {
+        Services.AppSettings.Instance.StartupSounds = StartupSoundMenuItem.IsChecked;
+        Services.AppSettings.Instance.Save();
+        Toasts.Show(StartupSoundMenuItem.IsChecked ? "啟動音效：開" : "啟動音效：關");
+    }
 
     private void OnTogglePixelGridClicked(object? sender, RoutedEventArgs e)
     {
