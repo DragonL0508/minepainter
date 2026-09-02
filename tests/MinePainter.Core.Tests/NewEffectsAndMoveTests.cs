@@ -116,6 +116,41 @@ public class NewEffectsAndMoveTests
     }
 
     [Fact]
+    public void InnerGlow_Directional_LightsOnlyTheEdgeFacingTheLight()
+    {
+        // 光從上方（90°）打：方塊只有上緣被染紅，下緣、左右都不動
+        const int n = 32;
+        var src = new uint[n * n];
+        for (var y = 6; y < 26; y++)
+        for (var x = 6; x < 26; x++)
+            src[y * n + x] = Premul(0, 0, 0, 255);
+
+        var ctx = EffectContext.FromPixels(src, n, n, margin: 16);
+        new InnerGlowEffect { Directional = true, Angle = 90, Size = 6, Spread = 0, Opacity = 100, Color = SKColors.Red }.Render(ctx);
+
+        for (var i = 0; i < ctx.Dst.Length; i++) Assert.Equal(A(src[i]), A(ctx.Dst[i]));
+
+        Assert.True(Red(ctx.Dst[6 * n + 16]) > 200, "上緣應該亮");
+        Assert.InRange(Red(ctx.Dst[9 * n + 16]), 1, Red(ctx.Dst[6 * n + 16]) - 1);
+        Assert.Equal(0, Red(ctx.Dst[25 * n + 16])); // 下緣背光
+        Assert.Equal(0, Red(ctx.Dst[16 * n + 6]));  // 左緣側面
+        Assert.Equal(0, Red(ctx.Dst[16 * n + 25])); // 右緣側面
+        Assert.Equal(0, Red(ctx.Dst[16 * n + 16]));
+    }
+
+    [Fact]
+    public void InnerGlow_AngleSurvivesSerializerRoundTrip()
+    {
+        // 角度參數只在「指定角度」模式才出現在 Parameters；存回去再讀出來角度不能掉
+        var fx = new InnerGlowEffect { Directional = true, Angle = 135, Color = SKColors.Cyan };
+        var id = EffectSerializer.TypeIdOf(fx);
+        var back = (InnerGlowEffect)EffectSerializer.Load(id, EffectSerializer.Save(fx));
+        Assert.True(back.Directional);
+        Assert.Equal(135f, back.Angle);
+        Assert.Equal(SKColors.Cyan, back.Color);
+    }
+
+    [Fact]
     public void InnerGlow_ZeroOpacityIsIdentity()
     {
         var src = new uint[8 * 8];

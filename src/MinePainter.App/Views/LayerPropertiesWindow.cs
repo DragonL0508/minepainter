@@ -806,7 +806,7 @@ public sealed class LayerPropertiesWindow : Window
             {
                 var e = entry;
                 var item = new MenuItem { Header = e.Name };
-                item.Click += (_, _) => AddToStack(layer, Services.EffectParamMemory.Recall(e.Create()), true);
+                item.Click += (_, _) => AddToStack(layer, Services.EffectParamMemory.Recall(e.Create(), _session.Foreground), true);
                 sub.Items.Add(item);
             }
             flyout.Items.Add(sub);
@@ -816,7 +816,6 @@ public sealed class LayerPropertiesWindow : Window
 
     private async void AddToStack(RasterLayer layer, IEffect effect, bool showDialog)
     {
-        effect = EffectSerializer.WithPrimaryColor(effect, _session.Foreground);
         var entry = LayerEffect.Create(effect, _session.Selection?.Clone().Mask, _session.Foreground);
         if (!showDialog)
         {

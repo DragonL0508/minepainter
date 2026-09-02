@@ -91,6 +91,8 @@ public static class EffectSerializer
         var entry = EffectRegistry.All.FirstOrDefault(e => e.Id == typeId)
             ?? throw new InvalidDataException($"未知效果：{typeId}");
         object effect = entry.Create();
+        // 跑兩遍：有些參數要等模式切過去才會出現在 Parameters 裡（例如內光暈的光源角度）
+        for (var pass = 0; pass < 2; pass++)
         foreach (var def in ((IEffect)effect).Parameters)
         {
             if (!parameters.TryGetValue(def.Key, out var raw))

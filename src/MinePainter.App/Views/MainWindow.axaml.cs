@@ -312,7 +312,7 @@ public partial class MainWindow : Window
                 return;
             }
             var fx = EffectRegistry.All.FirstOrDefault(e => e.Name == name);
-            if (fx != null) _ = ApplyEffectAsync(Services.EffectParamMemory.Recall(fx.Create()), fx.Name, showDialog: true);
+            if (fx != null) _ = ApplyEffectAsync(Services.EffectParamMemory.Recall(fx.Create(), Canvas.Session?.Foreground ?? SKColors.Black), fx.Name, showDialog: true);
         }, TimeSpan.FromMilliseconds(800));
     }
 
@@ -1834,7 +1834,7 @@ public partial class MainWindow : Window
             {
                 var e = entry;
                 var item = new MenuItem { Header = e.Name + "…" };
-                item.Click += (_, _) => _ = ApplyEffectAsync(Services.EffectParamMemory.Recall(e.Create()), e.Name, showDialog: true);
+                item.Click += (_, _) => _ = ApplyEffectAsync(Services.EffectParamMemory.Recall(e.Create(), Canvas.Session?.Foreground ?? SKColors.Black), e.Name, showDialog: true);
                 sub.Items.Add(item);
             }
             EffectsMenu.Items.Add(sub);
@@ -1842,7 +1842,7 @@ public partial class MainWindow : Window
     }
 
     private Task ApplyAdjustmentAsync(AdjustmentRegistry.Entry entry) =>
-        ApplyEffectAsync(Services.EffectParamMemory.Recall(new AdjustmentEffect(entry.CreateDefault())), entry.DisplayName, entry.HasDialog);
+        ApplyEffectAsync(Services.EffectParamMemory.Recall(new AdjustmentEffect(entry.CreateDefault()), Canvas.Session?.Foreground ?? SKColors.Black), entry.DisplayName, entry.HasDialog);
 
     private async Task ApplyAutoLevelAsync()
     {
@@ -1927,7 +1927,6 @@ public partial class MainWindow : Window
     /// <summary>非破壞性：效果進圖層效果堆疊（有選取就帶遮罩），對話框即時預覽由合成器背景重算。</summary>
     private async Task ApplyToLayerStackAsync(EditorSession session, RasterLayer layer, IEffect effect, string name, bool showDialog)
     {
-        effect = EffectSerializer.WithPrimaryColor(effect, session.Foreground);
         var entry = LayerEffect.Create(effect, session.Selection?.Clone().Mask, session.Foreground);
         using var preview = new LayerEffectPreview(session, layer, entry, isNew: true);
         if (!showDialog)
