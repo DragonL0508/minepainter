@@ -4,6 +4,7 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Media.Imaging;
 using Avalonia.VisualTree;
 using Material.Icons;
 using Material.Icons.Avalonia;
@@ -605,10 +606,12 @@ public partial class LayersPanel : UserControl
 
             _dragActive = true;
             e.Pointer.Capture(LayerList);
-            if (_pressRow != null) _pressRow.Item.Opacity = 0.5;
+            if (_pressRow != null) _pressRow.Item.Opacity = 0.35;
+            BeginGhost();
         }
 
         AutoScroll(p);
+        MoveGhost(p);
         UpdateDropTarget(p);
     }
 
@@ -636,6 +639,61 @@ public partial class LayersPanel : UserControl
         _highlightItem?.ClearValue(BackgroundProperty);
         _highlightItem = null;
         if (_pressRow != null) _pressRow.Item.Opacity = 1;
+        DragGhost.IsVisible = false;
+        DragGhostImage.Source = null;
+        _ghost?.Dispose();
+        _ghost = null;
+    }
+
+    // ---- 拖曳中跟著指標走的那一列（列本身的快照）----
+
+    private RenderTargetBitmap? _ghost;
+    private double _ghostGrabY;
+
+    /// <summary>
+    /// 把被拖的那一列畫成點陣圖當「抓在手上的東西」。
+    /// 直接把 ListBoxItem 搬到 overlay 上不行 —— 它還在 ListBox 的排版裡，
+    /// 抽走會讓清單當場少一列、放開又要塞回去；快照最省事也最穩。
+    /// </summary>
+    private void BeginGhost()
+    {
+        if (_pressRow == null) return;
+        var item = _pressRow.Item;
+        var size = item.Bounds.Size;
+        if (size.Width < 1 || size.Height < 1) return;
+
+        var scale = (item.GetVisualRoot() as Avalonia.Rendering.IRenderRoot)?.RenderScaling ?? 1.0;
+        var pixels = new PixelSize(
+            Math.Max(1, (int)Math.Round(size.Width * scale)),
+            Math.Max(1, (int)Math.Round(size.Height * scale)));
+        try
+        {
+            _ghost = new RenderTargetBitmap(pixels, new Vector(96 * scale, 96 * scale));
+            _ghost.Render(item);
+        }
+        catch
+        {
+            _ghost?.Dispose();
+            _ghost = null;
+            return; // 畫不出來就退回原本的「只有插入線」行為
+        }
+
+        DragGhostImage.Source = _ghost;
+        DragGhost.Width = size.Width;
+        DragGhost.Height = size.Height;
+        // 抓在指標按下的那一點：拖起來的位置不會跳
+        _ghostGrabY = item.TranslatePoint(default, LayerList) is { } pt
+            ? Math.Clamp(_pressPoint.Y - pt.Y, 0, size.Height)
+            : size.Height / 2;
+        DragGhost.IsVisible = true;
+    }
+
+    private void MoveGhost(Point p)
+    {
+        if (!DragGhost.IsVisible) return;
+        Canvas.SetLeft(DragGhost, 4);
+        Canvas.SetTop(DragGhost, Math.Clamp(p.Y - _ghostGrabY,
+            -DragGhost.Height / 2, Math.Max(0, LayerList.Bounds.Height - DragGhost.Height / 2)));
     }
 
     private void AutoScroll(Point p)

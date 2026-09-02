@@ -211,7 +211,7 @@ public sealed record MotionBlurEffect : IEffect
 /// <summary>放射狀模糊：繞中心沿圓弧取樣。</summary>
 public sealed record RadialBlurEffect : IEffect
 {
-    public float Angle { get; init; } = 2f;    // 0..360
+    public float Angle { get; init; } = 15f;   // 0..360（掃過的總角度）
     public float CenterX { get; init; } = 0f;  // -1..1
     public float CenterY { get; init; } = 0f;
     public int Quality { get; init; } = 2;     // 1..5
@@ -219,6 +219,9 @@ public sealed record RadialBlurEffect : IEffect
     public string Name => "放射狀模糊";
     public string Category => "模糊";
     public int SourceMargin => EffectContext.WholeLayer;
+
+    /// <summary>取樣沿著「以範圍中心為圓心」的圓弧，換了範圍結果就不同 —— 不能只重算髒區。</summary>
+    public bool IsPositionIndependent => false;
 
     private static readonly ParamDef[] Params =
     [
@@ -234,8 +237,25 @@ public sealed record RadialBlurEffect : IEffect
     public void Render(EffectContext ctx)
     {
         var (cx, cy) = ctx.Center(CenterX, CenterY);
-        var half = Angle * MathF.PI / 360f;
+        var angle = Math.Clamp(Angle, 0f, 360f);
         var quality = Math.Clamp(Quality, 1, 5);
+        var half = angle * MathF.PI / 360f; // 半角（弧度）
+        if (half <= 1e-4f) { ctx.CopySrcToDst(); return; }
+
+        // 取樣數：以「最外圈像素掃過的弧長」推，但上限固定 ——
+        // 角度愈拉愈大只會更糊，不會愈算愈久（舊版是 O(角度×半徑)，拉到底直接卡死）。
+        var maxR = MaxRadius(ctx, cx, cy);
+        var step = 2.5f / quality;               // 每 step 個像素取一個樣本
+        var maxSamples = 8 + 12 * quality;       // 20..68
+        var cap = Math.Clamp((int)MathF.Round(maxR * half * 2f / step) + 1, 2, maxSamples);
+
+        // 取樣點夾在「畫布內的來源」裡：來源緩衝是整片 tile，畫布外那一圈是透明的，
+        // 直接讓弧線掃出去會在邊角掃出一片透明（角度愈大愈明顯）。
+        var loX = Math.Max(ctx.SrcRect.Left, 0) - ctx.Region.Left + 0.5f;
+        var hiX = Math.Min(ctx.SrcRect.Right, ctx.DocSize.Width) - ctx.Region.Left - 0.5f;
+        var loY = Math.Max(ctx.SrcRect.Top, 0) - ctx.Region.Top + 0.5f;
+        var hiY = Math.Min(ctx.SrcRect.Bottom, ctx.DocSize.Height) - ctx.Region.Top - 0.5f;
+
         ctx.ForRows(y =>
         {
             for (var x = 0; x < ctx.Width; x++)
@@ -243,24 +263,31 @@ public sealed record RadialBlurEffect : IEffect
                 var px = x + 0.5f - cx;
                 var py = y + 0.5f - cy;
                 var d = MathF.Sqrt(px * px + py * py);
-                var arc = d * half * 2;
-                var n = Math.Clamp((int)(arc * quality * 0.5f) + 1, 1, 64 * quality);
-                if (n <= 1 || half <= 0)
-                {
-                    ctx.Dst[y * ctx.Width + x] = ctx.SrcAt(x, y);
-                    continue;
-                }
+
+                // 靠近圓心的像素弧長短，少取幾個樣本就夠（結果一樣，只是省時間）
+                var n = Math.Clamp((int)MathF.Round(d * half * 2f / step) + 1, 2, cap);
                 var baseAngle = MathF.Atan2(py, px);
+
                 long sb = 0, sg = 0, sr = 0, sa = 0;
                 for (var i = 0; i < n; i++)
                 {
-                    var a = baseAngle - half + (2 * half) * i / (n - 1);
-                    var p = ctx.SrcBilinearClamp(cx + MathF.Cos(a) * d, cy + MathF.Sin(a) * d);
+                    var a = baseAngle - half + 2f * half * i / (n - 1);
+                    var p = ctx.SrcBilinearClamp(
+                        Math.Clamp(cx + MathF.Cos(a) * d, loX, MathF.Max(loX, hiX)),
+                        Math.Clamp(cy + MathF.Sin(a) * d, loY, MathF.Max(loY, hiY)));
                     sb += B(p); sg += G(p); sr += R(p); sa += A(p);
                 }
                 ctx.Dst[y * ctx.Width + x] = Pack((int)(sb / n), (int)(sg / n), (int)(sr / n), (int)(sa / n));
             }
         });
+    }
+
+    /// <summary>範圍四角到圓心的最遠距離（最外圈像素）。</summary>
+    private static float MaxRadius(EffectContext ctx, float cx, float cy)
+    {
+        var dx = MathF.Max(cx, ctx.Width - cx);
+        var dy = MathF.Max(cy, ctx.Height - cy);
+        return MathF.Sqrt(dx * dx + dy * dy);
     }
 }
 

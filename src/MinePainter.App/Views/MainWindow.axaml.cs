@@ -78,6 +78,10 @@ public partial class MainWindow : Window
         InitializeComponent();
         StartupSoundMenuItem.IsChecked = Services.AppSettings.Instance.StartupSounds;
 
+        // 預設最大化（使用者上次是視窗模式就沿用）；要在 Show 之前設好，
+        // 不然會先閃一下 1360×860 再放大，浮動面板也要跟著重排一次
+        if (Services.AppSettings.Instance.WindowMaximized) WindowState = WindowState.Maximized;
+
         OnnxModels.ModelDirectories.Clear();
         OnnxModels.ModelDirectories.Add(ModelFolder);
         OnnxModels.ModelDirectories.Add(System.IO.Path.Combine(AppContext.BaseDirectory, "models"));
@@ -152,6 +156,8 @@ public partial class MainWindow : Window
             if (Environment.GetEnvironmentVariable("MINEPAINTER_DEBUG_OFFSCREEN") is "1" or "main" &&
                 Screens.Primary is { } primary)
             {
+                _debugOffscreen = true; // 驗證模式：不要把這一輪的視窗/面板配置寫回使用者的設定
+                WindowState = WindowState.Normal; // 最大化的視窗搬不出螢幕，會整片蓋在使用者面前
                 Position = new PixelPoint(primary.Bounds.Right + 40, primary.Bounds.Y + 40);
             }
 
@@ -185,6 +191,9 @@ public partial class MainWindow : Window
 
     private readonly string? _initialFile;
     private bool _prepared;
+
+    /// <summary>MINEPAINTER_DEBUG_OFFSCREEN 驗證模式：視窗被硬搬到螢幕外，配置不該存回設定。</summary>
+    private bool _debugOffscreen;
 
     /// <summary>
     /// Show() 之前能先做掉的重活，趁啟動畫面還在時呼叫，主視窗才不會在啟動畫面退場後又空白半秒：
@@ -364,6 +373,7 @@ public partial class MainWindow : Window
                 {
                     panel().HideAnimated();
                 }
+                SchedulePanelLayoutSave(); // 開關狀態也記住
             };
         }
     }
@@ -380,6 +390,8 @@ public partial class MainWindow : Window
         {
             panel.CloseRequested += () => toggle.IsChecked = false;
             panel.PositionChanged += (_, _) => OnPanelMoved(panel);
+            panel.KeyFallback = HandlePanelKey; // 焦點在面板上時的快捷鍵（Ctrl+Z…）
+            panel.SizeChanged += (_, _) => SchedulePanelLayoutSave(); // 拉大小也記住
             return panel;
         }
     }
@@ -412,12 +424,14 @@ public partial class MainWindow : Window
     {
         if (!_panelsPlaced)
         {
+            _panelSaveTimer.Tick += (_, _) => SavePanelLayout(withWindowState: false);
             _panelsPlaced = true;
             var frame = MainWorkArea();
             Place(_toolsPanel, new PanelAnchor(false, false, Px(18), Px(96)));
             Place(_palettePanel, new PanelAnchor(false, true, Px(18), Px(470)));
             Place(_layersPanel, new PanelAnchor(true, false, Px(348), Px(96)));
             Place(_historyPanel, new PanelAnchor(true, true, Px(286), Px(380)));
+            RestorePanelLayout(frame); // 上次關掉時的位置／大小／開關蓋過預設排法
 
             void Place(PanelWindow panel, PanelAnchor anchor)
             {
@@ -521,6 +535,8 @@ public partial class MainWindow : Window
         if (IsBogusArea(area) || panel.Position.X <= -30000 || panel.Position.Y <= -30000) return;
         if (panel.Anchor is { } a && AnchoredPosition(a, area) == panel.Position) return;
 
+        SchedulePanelLayoutSave();
+
         var pos = panel.Position;
         var w = Px(panel.Bounds.Width > 0 ? panel.Bounds.Width : panel.Width);
         var h = Px(panel.Bounds.Height);
@@ -537,6 +553,86 @@ public partial class MainWindow : Window
         yield return (_historyPanel, HistoryToggle);
         yield return (_layersPanel, LayersToggle);
         yield return (_palettePanel, PaletteToggle);
+    }
+
+    // ---- 面板配置的記憶（settings.json）----
+
+    /// <summary>設定檔裡的面板 id（與 <see cref="PanelPairs"/> 同順序）。</summary>
+    private static readonly string[] PanelIds = ["tools", "history", "layers", "palette"];
+
+    /// <summary>
+    /// 套用上次關掉時記下的面板配置：貼哪一組邊、距離、大小、開關。
+    /// 沒記錄過（第一次啟動、或設定檔壞掉）就維持內建預設排法。
+    /// </summary>
+    private void RestorePanelLayout(PixelRect frame)
+    {
+        var saved = Services.AppSettings.Instance.Panels;
+        if (saved.Count == 0) return;
+
+        var i = 0;
+        foreach (var (panel, toggle) in PanelPairs())
+        {
+            var id = PanelIds[i++];
+            if (!saved.TryGetValue(id, out var layout)) continue;
+
+            var anchor = new PanelAnchor(layout.Right, layout.Bottom, layout.OffsetX, layout.OffsetY);
+            panel.Anchor = anchor;
+            panel.Position = AnchoredPosition(anchor, frame);
+            // 大小只有「可拉大小」的面板記得住（工具／調色盤的高度是隨內容算的）
+            if (panel.IsResizable && layout.Width >= panel.MinWidth && layout.Height >= panel.MinHeight)
+            {
+                panel.Width = layout.Width;
+                panel.Height = layout.Height;
+            }
+            toggle.IsChecked = layout.Visible;
+        }
+    }
+
+    /// <summary>
+    /// 面板動過了 → 1 秒後把配置寫回設定。拖曳中每一次 PositionChanged 都寫檔太吵，
+    /// 只在關閉時寫又會被當掉／強制結束整碗端走。
+    /// </summary>
+    private readonly Avalonia.Threading.DispatcherTimer _panelSaveTimer = new()
+    {
+        Interval = TimeSpan.FromSeconds(1),
+    };
+
+    private void SchedulePanelLayoutSave()
+    {
+        if (!_panelsPlaced) return;
+        _panelSaveTimer.Stop();
+        _panelSaveTimer.Start();
+    }
+
+    /// <summary>
+    /// 把目前的面板配置寫回設定。<paramref name="withWindowState"/>＝連「有沒有最大化」一起記
+    /// （只有真的關視窗那次才算數：拖曳中的存檔看到的可能是最小化／驗證模式硬拉成視窗的狀態）。
+    /// </summary>
+    private void SavePanelLayout(bool withWindowState)
+    {
+        _panelSaveTimer.Stop();
+        if (!_panelsPlaced || _debugOffscreen) return;
+        var settings = Services.AppSettings.Instance;
+        var i = 0;
+        foreach (var (panel, toggle) in PanelPairs())
+        {
+            var id = PanelIds[i++];
+            if (panel.Anchor is not { } a) continue;
+            settings.Panels[id] = new Services.AppSettings.PanelLayout
+            {
+                Right = a.Right,
+                Bottom = a.Bottom,
+                OffsetX = a.OffsetX,
+                OffsetY = a.OffsetY,
+                Width = panel.Bounds.Width > 0 ? panel.Bounds.Width : panel.Width,
+                Height = panel.Bounds.Height > 0 ? panel.Bounds.Height : panel.Height,
+                Visible = toggle.IsChecked == true,
+            };
+        }
+        // 最小化中關掉的話 WindowState 是 Minimized，那不是使用者想記住的狀態
+        if (withWindowState && WindowState != WindowState.Minimized)
+            settings.WindowMaximized = WindowState == WindowState.Maximized;
+        settings.Save();
     }
 
     // ---- 工具切換 ----
@@ -1204,6 +1300,7 @@ public partial class MainWindow : Window
             // 先掛上關閉旗標：子視窗的退場動畫會 Cancel 掉一次 Closing，
             // 那會連帶中止整個關閉流程（症狀＝要按兩次才關得掉）。
             Controls.WindowAnimator.IsShuttingDown = true;
+            SavePanelLayout(withWindowState: true); // 面板還在才問得到位置
             foreach (var (panel, _) in PanelPairs()) panel.AllowClose();
             foreach (var owned in OwnedWindows.ToList()) owned.Close(); // 圖層屬性等臨時視窗
             return;
@@ -2114,6 +2211,16 @@ public partial class MainWindow : Window
         if (session == null || session.SnapToCanvas == on) return;
         session.SnapToCanvas = on;
         if (!on) session.SnapGuides = null; // 導線跟著模式收掉
+    }
+
+    /// <summary>
+    /// 浮動面板（獨立 OS 視窗）沒處理掉的按鍵：當成主視窗的按鍵處理一次。
+    /// 面板上的焦點不該讓整套快捷鍵失效 —— 使用者按了「新增圖層」之後就想直接 Ctrl+Z。
+    /// </summary>
+    private void HandlePanelKey(Avalonia.Input.KeyEventArgs e)
+    {
+        OnGlobalKeyDown(this, e);
+        if (!e.Handled) OnKeyDown(e);
     }
 
     protected override void OnKeyDown(Avalonia.Input.KeyEventArgs e)

@@ -103,7 +103,10 @@ public sealed class MoveTool : ITool
         // 3) 有選取範圍 → 這一下一定是在動選取的內容，不會碰到圖層或物件。
         //    範圍內按下就提起；範圍外先不提起（否則單純「點一下取消選取」也會白挖一次像素），
         //    等真的拖曳過門檻才提，見 OnPointerMove。
-        if (session.Selection is { IsEmpty: false } selection)
+        //    文字圖層例外：它的內容是文字物件不是像素，提起只會挖到一塊空白 ——
+        //    看起來就是「怎麼拖都沒東西跟著動」。改走下面的物件／整層平移（選取框跟著走）。
+        if (session.Selection is { IsEmpty: false } selection &&
+            doc.ActiveLayer is not RasterLayer { IsTextLayer: true })
         {
             _dragStart = e.DocPosition;
             if (selection.CoverageAt((int)e.DocPosition.X, (int)e.DocPosition.Y) > 0)
@@ -413,9 +416,21 @@ public sealed class MoveTool : ITool
                 var delta = _lastMoveDelta;
                 var label = _movingGroup ? "移動群組" : "移動圖層";
 
+                // 選取框跟著搬走的內容走（放開才柵格化一次：拖曳中每一步重算遮罩太貴）。
+                // 沒有選取時兩者都是 null，undo/redo 也就什麼都不做。
+                var oldSelection = session.Selection;
+                var newSelection = oldSelection is { IsEmpty: false } sel && delta != SKPointI.Empty
+                    ? sel.TransformedTo(
+                        SKRect.Create(sel.Bounds.Left + delta.X, sel.Bounds.Top + delta.Y,
+                            sel.Bounds.Width, sel.Bounds.Height),
+                        session.Document.Bounds) ?? oldSelection
+                    : oldSelection;
+                if (!ReferenceEquals(newSelection, oldSelection)) session.ApplySelection(newSelection);
+
                 session.History.Push(new ActionHistoryEntry(label, session.Document.Bounds,
                     undo: _ =>
                     {
+                        if (!ReferenceEquals(newSelection, oldSelection)) session.ApplySelection(oldSelection);
                         for (var i = 0; i < layers.Length; i++)
                         {
                             layers[i].Offset = oldOffsets[i];
@@ -429,6 +444,7 @@ public sealed class MoveTool : ITool
                     },
                     redo: _ =>
                     {
+                        if (!ReferenceEquals(newSelection, oldSelection)) session.ApplySelection(newSelection);
                         for (var i = 0; i < layers.Length; i++)
                         {
                             layers[i].Offset = newOffsets[i];

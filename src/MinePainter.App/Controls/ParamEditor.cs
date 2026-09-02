@@ -17,6 +17,9 @@ public sealed class ParamEditor : StackPanel
     private readonly Func<object, IReadOnlyList<ParamDef>> _defs;
     private bool _suppress;
 
+    /// <summary>「全新的同型別物件」，用來取得各參數的預設值（滑桿雙擊回預設）。建不出來就是 null。</summary>
+    private readonly object? _defaults;
+
     public object Current { get; private set; }
 
     /// <summary>曲線編輯器背景的直方圖（可省）。</summary>
@@ -33,6 +36,7 @@ public sealed class ParamEditor : StackPanel
         Spacing = 6;
         Current = target;
         _defs = defs;
+        _defaults = TryCreateDefaults(target);
         Histogram = histogram;
         Rebuild();
     }
@@ -42,6 +46,41 @@ public sealed class ParamEditor : StackPanel
     {
         Current = target;
         Rebuild();
+    }
+
+    /// <summary>
+    /// 參數的預設值（效果／調整都是「不可變 record + 預設值寫在屬性初始式」，
+    /// 所以建一個全新的同型別實例讀回來就是預設值）。建不出來（例如缺無參數建構式）回 null。
+    /// </summary>
+    private static object? TryCreateDefaults(object target)
+    {
+        try
+        {
+            // 調整效果包了一層 IAdjustment，要換的是裡面那個
+            if (target is AdjustmentEffect adj)
+            {
+                var inner = Activator.CreateInstance(adj.Adjustment.GetType());
+                return inner is MinePainter.Core.Adjustments.IAdjustment a ? new AdjustmentEffect(a) : null;
+            }
+            return Activator.CreateInstance(target.GetType());
+        }
+        catch
+        {
+            return null; // 沒有預設值可回：雙擊就不做事
+        }
+    }
+
+    private double? DefaultOf(Func<object, double> get)
+    {
+        if (_defaults == null) return null;
+        try
+        {
+            return get(_defaults);
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private void Update(object next, bool commit)
@@ -108,6 +147,7 @@ public sealed class ParamEditor : StackPanel
         };
         bar.DragCompleted += _ => { if (!_suppress) Committed?.Invoke(Current); };
         bar.Tag = s;
+        SetResettable(bar, DefaultOf(s.Get), s.Decimals);
         if (!s.IsSeed) return bar;
 
         // 亂數種子：加一顆「重新產生」骰子（paint.net 的 Reseed）
@@ -146,6 +186,7 @@ public sealed class ParamEditor : StackPanel
             Value = an.Get(Current),
             VerticalAlignment = VerticalAlignment.Center,
         };
+        SetResettable(bar, DefaultOf(an.Get), 0);
         dial.ValueChanged += v =>
         {
             if (_suppress) return;
@@ -168,6 +209,14 @@ public sealed class ParamEditor : StackPanel
         DockPanel.SetDock(dial, Dock.Left);
         dial.Margin = new Thickness(0, 0, 8, 0);
         return new DockPanel { Children = { dial, bar } };
+    }
+
+    /// <summary>滑桿雙擊回預設值（paint.net 的「重設」；沒有預設值可回時不掛）。</summary>
+    private static void SetResettable(BarSlider bar, double? def, int decimals)
+    {
+        if (def == null) return;
+        bar.DefaultValue = def;
+        ToolTip.SetTip(bar, $"雙擊重設為 {def.Value.ToString(decimals > 0 ? "F" + decimals : "0")}{bar.Suffix}");
     }
 
     private Control BuildColor(ColorParam col)

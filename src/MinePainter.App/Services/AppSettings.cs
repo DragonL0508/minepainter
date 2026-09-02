@@ -31,6 +31,27 @@ public sealed class AppSettings
     /// <summary>啟動音效（啟動畫面出現／載入完成／主視窗現身）。</summary>
     public bool StartupSounds { get; set; } = true;
 
+    /// <summary>主視窗啟動時最大化（預設是）。</summary>
+    public bool WindowMaximized { get; set; } = true;
+
+    /// <summary>浮動面板的位置／大小／開關（key = 面板 id）。空的＝用內建預設排法。</summary>
+    public Dictionary<string, PanelLayout> Panels { get; set; } = new();
+
+    /// <summary>
+    /// 一個浮動面板記住的東西：貼哪一組邊、與那條邊的距離（螢幕像素，相對主視窗工作區）、
+    /// 大小，以及開關有沒有打開。與 <see cref="Controls.PanelAnchor"/> 一一對應。
+    /// </summary>
+    public sealed class PanelLayout
+    {
+        public bool Right { get; set; }
+        public bool Bottom { get; set; }
+        public int OffsetX { get; set; }
+        public int OffsetY { get; set; }
+        public double Width { get; set; }
+        public double Height { get; set; }
+        public bool Visible { get; set; } = true;
+    }
+
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
     private static string FilePath => System.IO.Path.Combine(

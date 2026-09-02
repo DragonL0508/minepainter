@@ -50,6 +50,9 @@ public sealed class BarSlider : Control
     /// <summary>條底部的視覺軌（色相環／黑白漸層），提示數值意義。</summary>
     public SliderTrack Track { get => GetValue(TrackProperty); set => SetValue(TrackProperty, value); }
 
+    /// <summary>雙擊要回到的值（null＝沒有預設值可回，雙擊不做事）。</summary>
+    public double? DefaultValue { get; set; }
+
     public event Action<double>? ValueChanged;
     public event Action<double>? DragCompleted;
 
@@ -233,6 +236,18 @@ public sealed class BarSlider : Control
     {
         base.OnPointerPressed(e);
         if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
+
+        // 雙擊＝回到預設值（第一下已經把值拉到指標處，這一下要蓋掉它）
+        if (e.ClickCount == 2 && DefaultValue is { } def)
+        {
+            _dragging = false;
+            e.Pointer.Capture(null);
+            SetAndNotify(def);
+            DragCompleted?.Invoke(Value);
+            e.Handled = true;
+            return;
+        }
+
         _dragging = true;
         e.Pointer.Capture(this);
         ApplyPointer(e.GetPosition(this));

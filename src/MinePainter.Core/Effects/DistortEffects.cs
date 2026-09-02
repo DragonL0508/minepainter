@@ -435,3 +435,55 @@ public sealed record TwistEffect : IEffect
         });
     }
 }
+
+/// <summary>
+/// 傾斜（斜體）：把內容依角度切變。水平傾斜＝每往上一列就往右推一點（正值＝像斜體往右倒）。
+/// 基準線（不動的那條線）可選中心／上緣／下緣 —— 文字要像斜體就用「下緣」（基線不動）。
+/// </summary>
+public sealed record SkewEffect : IEffect
+{
+    public float Horizontal { get; init; } = 15f;  // -80..80（度）
+    public float Vertical { get; init; }           // -80..80（度）
+    public int Pivot { get; init; }                // 0=中心 1=上緣 2=下緣
+
+    public string Name => "傾斜";
+    public string Category => "扭曲";
+    public int SourceMargin => EffectContext.WholeLayer;
+
+    /// <summary>切變量以「範圍內的基準線」為準，換了範圍結果就不同 —— 不能只重算髒區。</summary>
+    public bool IsPositionIndependent => false;
+
+    private static readonly ParamDef[] Params =
+    [
+        new SliderParam("horizontal", "水平傾斜", -80, 80, o => ((SkewEffect)o).Horizontal,
+            (o, v) => ((SkewEffect)o) with { Horizontal = (float)v }, "°", 1),
+        new SliderParam("vertical", "垂直傾斜", -80, 80, o => ((SkewEffect)o).Vertical,
+            (o, v) => ((SkewEffect)o) with { Vertical = (float)v }, "°", 1),
+        new ChoiceParam("pivot", "基準", ["中心", "上緣", "下緣"],
+            o => ((SkewEffect)o).Pivot, (o, v) => ((SkewEffect)o) with { Pivot = v }),
+    ];
+    public IReadOnlyList<ParamDef> Parameters => Params;
+
+    public void Render(EffectContext ctx)
+    {
+        var shx = MathF.Tan(Math.Clamp(Horizontal, -80f, 80f) * MathF.PI / 180f);
+        var shy = MathF.Tan(Math.Clamp(Vertical, -80f, 80f) * MathF.PI / 180f);
+        if (shx == 0f && shy == 0f) { ctx.CopySrcToDst(); return; }
+
+        var pivotY = Pivot switch { 1 => 0f, 2 => ctx.Height, _ => ctx.Height / 2f };
+        var pivotX = ctx.Width / 2f;
+
+        ctx.ForRows(y =>
+        {
+            for (var x = 0; x < ctx.Width; x++)
+            {
+                // 反向映射：目標像素往回找來源（正的水平角度＝上方往右移，所以來源要往左找）
+                var px = x + 0.5f;
+                var py = y + 0.5f;
+                var sx = px + shx * (py - pivotY);
+                var sy = py - shy * (px - pivotX);
+                ctx.Dst[y * ctx.Width + x] = ctx.SrcBilinear(sx, sy);
+            }
+        });
+    }
+}

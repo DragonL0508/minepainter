@@ -21,6 +21,16 @@ public sealed class PanelWindow : Window
     /// <summary>相對主視窗的錨點；主視窗移動／改變大小時照這個相對位置跟著走。</summary>
     public PanelAnchor? Anchor { get; set; }
 
+    /// <summary>可拉大小的面板（圖層／歷史記錄）：只有這種面板記得住上次的大小。</summary>
+    public bool IsResizable { get; }
+
+    /// <summary>
+    /// 面板自己沒處理掉的按鍵轉給主視窗（快捷鍵一律註冊在主視窗上）。
+    /// 沒有這條的話，只要在面板上點過一下（例如按「新增圖層」），焦點就在面板這個
+    /// 獨立的 OS 視窗裡，Ctrl+Z 之類的按鍵誰也收不到 —— 看起來就是「undo 壞了」。
+    /// </summary>
+    public Action<KeyEventArgs>? KeyFallback { get; set; }
+
     private bool _allowClose;
     private bool _closing;
     private bool _cancelHide;
@@ -38,6 +48,7 @@ public sealed class PanelWindow : Window
         Title = title;
         Width = width;
         var resizable = resizableHeight is { } h0;
+        IsResizable = resizable;
         if (resizable)
         {
             Height = resizableHeight!.Value;
@@ -111,6 +122,15 @@ public sealed class PanelWindow : Window
         };
         WindowAnimator.Prepare(_root);
         Content = resizable ? ResizeGrips.Wrap(this, _root) : _root;
+    }
+
+    protected override void OnKeyDown(KeyEventArgs e)
+    {
+        base.OnKeyDown(e);
+        if (e.Handled) return;
+        // 面板裡正在打字（圖層改名之類）就別把按鍵送去當快捷鍵
+        if (FocusManager?.GetFocusedElement() is TextBox or ComboBox or ComboBoxItem) return;
+        KeyFallback?.Invoke(e);
     }
 
     protected override void OnOpened(EventArgs e)

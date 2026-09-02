@@ -12,6 +12,12 @@ public static class EditCommands
     public static void SelectAll(EditorSession session)
     {
         var doc = session.Document;
+        // 文字圖層沒有可選的像素（要畫得先平面化），選了只會讓「移動選取內容」提起一塊空白
+        if (doc.ActiveLayer is RasterLayer { IsTextLayer: true })
+        {
+            session.Notify("文字圖層不能選取像素；要編輯像素請先「圖層文字平面化」");
+            return;
+        }
         using var path = new SKPath();
         path.AddRect(SKRect.Create(0, 0, doc.Width, doc.Height));
         SelectionCommands.SetSelection(session, SelectionMask.FromPath(path, doc.Bounds), "全選");

@@ -509,3 +509,64 @@ public sealed record ObjectFeatherEffect : IEffect
         return (uint)b | ((uint)g << 8) | ((uint)r << 16) | ((uint)a << 24);
     }
 }
+
+/// <summary>
+/// 顏色透明化：把「接近指定顏色」的像素的 alpha 打到 0（去背用的手動版）。
+/// 容許度內＝全透明、容許度到容許度+柔邊之間＝依距離漸進，之外原樣保留。
+/// 顏色距離取三通道差的最大值（Chebyshev）：拉容許度時的變化最直覺。
+/// </summary>
+public sealed record ColorToAlphaEffect : IEffect
+{
+    public SKColor Color { get; init; } = SKColors.White;
+    public int Tolerance { get; init; } = 30;  // 0..255
+    public int Softness { get; init; } = 20;   // 0..255
+    public bool Invert { get; init; }          // 反過來：只留這個顏色
+
+    public string Name => "顏色透明化";
+    public string Category => "物件";
+    public int SourceMargin => 0;
+
+    private static readonly ParamDef[] Params =
+    [
+        new ColorParam("color", "顏色", o => ((ColorToAlphaEffect)o).Color,
+            (o, v) => ((ColorToAlphaEffect)o) with { Color = v }) { UsePrimaryByDefault = true },
+        new SliderParam("tolerance", "容許度", 0, 255, o => ((ColorToAlphaEffect)o).Tolerance,
+            (o, v) => ((ColorToAlphaEffect)o) with { Tolerance = (int)v }),
+        new SliderParam("softness", "柔邊", 0, 255, o => ((ColorToAlphaEffect)o).Softness,
+            (o, v) => ((ColorToAlphaEffect)o) with { Softness = (int)v }),
+        new BoolParam("invert", "反轉（只保留這個顏色）", o => ((ColorToAlphaEffect)o).Invert,
+            (o, v) => ((ColorToAlphaEffect)o) with { Invert = v }),
+    ];
+    public IReadOnlyList<ParamDef> Parameters => Params;
+
+    public void Render(EffectContext ctx)
+    {
+        var tol = Math.Clamp(Tolerance, 0, 255);
+        var soft = Math.Clamp(Softness, 0, 255);
+        int cr = Color.Red, cg = Color.Green, cb = Color.Blue;
+        var invert = Invert;
+
+        ctx.ForRows(y =>
+        {
+            for (var x = 0; x < ctx.Width; x++)
+            {
+                var p = ctx.SrcAt(x, y);
+                var i = y * ctx.Width + x;
+                if (A(p) == 0) { ctx.Dst[i] = p; continue; }
+
+                Unpremul(p, out var b, out var g, out var r, out var a);
+                var d = Math.Max(Math.Abs(r - cr), Math.Max(Math.Abs(g - cg), Math.Abs(b - cb)));
+
+                // keep = 這個像素保留多少不透明度
+                float keep;
+                if (d <= tol) keep = 0f;
+                else if (soft <= 0 || d >= tol + soft) keep = 1f;
+                else keep = (d - tol) / (float)soft;
+                if (invert) keep = 1f - keep;
+
+                var na = Clamp255(a * keep);
+                ctx.Dst[i] = na <= 0 ? 0u : na >= a ? p : Premul(b, g, r, na);
+            }
+        });
+    }
+}

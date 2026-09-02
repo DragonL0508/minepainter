@@ -17,6 +17,12 @@
                MinHeight="80" ScrollViewer.VerticalScrollBarVisibility="Auto"
                ScrollViewer.HorizontalScrollBarVisibility="Disabled" />
       <Canvas x:Name="DragOverlay" IsHitTestVisible="False">
+        <!-- 拖曳中的那一列本身：抓起來跟著指標走（插入線只說「會放在哪」） -->
+        <Border x:Name="DragGhost" IsVisible="False" Opacity="0.85" CornerRadius="4" ClipToBounds="True"
+                BorderBrush="{x:Static app:AppTheme.AccentBrush}" BorderThickness="1"
+                Background="{x:Static app:AppTheme.PanelBrush}">
+          <Image x:Name="DragGhostImage" />
+        </Border>
         <Border x:Name="DropIndicator" Height="3" Background="{x:Static app:AppTheme.AccentBrush}" CornerRadius="1.5" IsVisible="False" />
       </Canvas>
     </Panel>

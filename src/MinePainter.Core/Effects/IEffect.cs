@@ -54,6 +54,7 @@ public static class EffectRegistry
         new("dents", "扭曲", "凹痕", () => new DentsEffect()),
         new("frostedGlass", "扭曲", "霧面玻璃", () => new FrostedGlassEffect()),
         new("pixelate", "扭曲", "像素化", () => new PixelateEffect()),
+        new("skew", "扭曲", "傾斜", () => new SkewEffect()),
         new("polarInversion", "扭曲", "極座標反轉", () => new PolarInversionEffect()),
         new("tileReflection", "扭曲", "拼貼反射", () => new TileReflectionEffect()),
         new("twist", "扭曲", "扭轉", () => new TwistEffect()),
@@ -67,6 +68,7 @@ public static class EffectRegistry
         new("objectGlow", "物件", "物件光暈", () => new ObjectGlowEffect()),
         new("objectGradient", "物件", "物件漸層", () => new ObjectGradientEffect()),
         new("objectFeather", "物件", "羽化物件", () => new ObjectFeatherEffect()),
+        new("colorToAlpha", "物件", "顏色透明化", () => new ColorToAlphaEffect()),
 
         new("glow", "相片", "光暈", () => new GlowEffect()),
         new("redEye", "相片", "紅眼移除", () => new RedEyeRemovalEffect()),
