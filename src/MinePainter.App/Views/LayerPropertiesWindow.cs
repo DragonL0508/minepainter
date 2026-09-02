@@ -806,7 +806,7 @@ public sealed class LayerPropertiesWindow : Window
             {
                 var e = entry;
                 var item = new MenuItem { Header = e.Name };
-                item.Click += (_, _) => AddToStack(layer, e.Create(), true);
+                item.Click += (_, _) => AddToStack(layer, Services.EffectParamMemory.Recall(e.Create()), true);
                 sub.Items.Add(item);
             }
             flyout.Items.Add(sub);
@@ -830,7 +830,11 @@ public sealed class LayerPropertiesWindow : Window
         var dialog = new EffectDialog(preview, effect, effect.Name);
         await dialog.ShowDialog(main ?? (Window)this);
         await dialog.WaitIdleAsync();
-        if (dialog.Confirmed) preview.Commit(dialog.Result);
+        if (dialog.Confirmed)
+        {
+            preview.Commit(dialog.Result);
+            Services.EffectParamMemory.Remember(dialog.Result);
+        }
         else preview.Cancel();
         StateChanged?.Invoke();
         SyncFromModel();

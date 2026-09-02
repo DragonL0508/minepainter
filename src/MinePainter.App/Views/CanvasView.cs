@@ -622,6 +622,28 @@ public sealed class CanvasView : Control
                 }
                 e.Handled = true;
                 break;
+            case Key.Left or Key.Right or Key.Up or Key.Down when session?.SelectedElement is { } sel && !ctrl:
+            {
+                // 方向鍵微調選中的物件：1px；Shift = 10px（paint.net 的習慣）
+                var step = e.KeyModifiers.HasFlag(KeyModifiers.Shift) ? 10f : 1f;
+                var (dx, dy) = e.Key switch
+                {
+                    Key.Left => (-step, 0f),
+                    Key.Right => (step, 0f),
+                    Key.Up => (0f, -step),
+                    _ => (0f, step),
+                };
+                if (session.Document.FindLayer(sel.LayerId) is Core.Layers.RasterLayer nlayer &&
+                    nlayer.FindElement(sel.ElementId) is { } nudged)
+                {
+                    Core.History.VectorCommands.ReplaceElement(session.Document, session.History, nlayer,
+                        nudged, nudged.Translated(dx, dy), "微調物件");
+                    session.RefreshSelectionHandles();
+                    StateChanged?.Invoke();
+                }
+                e.Handled = true;
+                break;
+            }
             case Key.D0 or Key.NumPad0 when session != null && !ctrl:
                 ZoomToFit();
                 e.Handled = true;

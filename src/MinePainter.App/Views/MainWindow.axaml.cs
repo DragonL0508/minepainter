@@ -310,7 +310,7 @@ public partial class MainWindow : Window
                 return;
             }
             var fx = EffectRegistry.All.FirstOrDefault(e => e.Name == name);
-            if (fx != null) _ = ApplyEffectAsync(fx.Create(), fx.Name, showDialog: true);
+            if (fx != null) _ = ApplyEffectAsync(Services.EffectParamMemory.Recall(fx.Create()), fx.Name, showDialog: true);
         }, TimeSpan.FromMilliseconds(800));
     }
 
@@ -1825,7 +1825,7 @@ public partial class MainWindow : Window
             {
                 var e = entry;
                 var item = new MenuItem { Header = e.Name + "…" };
-                item.Click += (_, _) => _ = ApplyEffectAsync(e.Create(), e.Name, showDialog: true);
+                item.Click += (_, _) => _ = ApplyEffectAsync(Services.EffectParamMemory.Recall(e.Create()), e.Name, showDialog: true);
                 sub.Items.Add(item);
             }
             EffectsMenu.Items.Add(sub);
@@ -1833,7 +1833,7 @@ public partial class MainWindow : Window
     }
 
     private Task ApplyAdjustmentAsync(AdjustmentRegistry.Entry entry) =>
-        ApplyEffectAsync(new AdjustmentEffect(entry.CreateDefault()), entry.DisplayName, entry.HasDialog);
+        ApplyEffectAsync(Services.EffectParamMemory.Recall(new AdjustmentEffect(entry.CreateDefault())), entry.DisplayName, entry.HasDialog);
 
     private async Task ApplyAutoLevelAsync()
     {
@@ -1904,6 +1904,7 @@ public partial class MainWindow : Window
             if (fx.Commit(name))
             {
                 _lastEffect = dialog.Result;
+                Services.EffectParamMemory.Remember(dialog.Result);
                 Toasts.Show(name);
             }
         }
@@ -1936,6 +1937,7 @@ public partial class MainWindow : Window
         {
             preview.Commit(dialog.Result);
             _lastEffect = dialog.Result;
+            Services.EffectParamMemory.Remember(dialog.Result);
             Toasts.Show($"{name}（已記錄在圖層）");
         }
         else
@@ -1954,7 +1956,11 @@ public partial class MainWindow : Window
         var dialog = new EffectDialog(preview, entry.Effect, entry.Name);
         await dialog.ShowDialog(this);
         await dialog.WaitIdleAsync();
-        if (dialog.Confirmed) preview.Commit(dialog.Result);
+        if (dialog.Confirmed)
+        {
+            preview.Commit(dialog.Result);
+            Services.EffectParamMemory.Remember(dialog.Result);
+        }
         else preview.Cancel();
         AfterEffect();
     }

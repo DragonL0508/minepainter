@@ -25,6 +25,9 @@ public sealed class AppSettings
     /// <summary>效果／調整套用時記錄在圖層的效果堆疊（非破壞性），而不是直接改像素。</summary>
     public bool NonDestructiveEffects { get; set; } = true;
 
+    /// <summary>每種效果上次確定套用的參數（效果 id → 參數字典），下次開同一個效果沿用。</summary>
+    public Dictionary<string, Dictionary<string, string>> EffectParams { get; set; } = new();
+
     /// <summary>移動工具拖曳時覆疊層帶著效果堆疊結果（外框／陰影／漸層跟著走）；關掉省效能。</summary>
     public bool RenderEffectsWhileDragging { get; set; } = true;
 

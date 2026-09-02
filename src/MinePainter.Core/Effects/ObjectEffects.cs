@@ -218,18 +218,23 @@ internal sealed class GradientRamp
     }
 }
 
-/// <summary>物件陰影：alpha 位移＋模糊後上色，墊在內容底下。</summary>
+/// <summary>
+/// 物件陰影：alpha 位移＋模糊後上色，墊在內容底下。
+/// <see cref="Thickness"/> &gt; 0 時陰影沿位移方向再延伸（把每一步的輪廓疊起來），
+/// 看起來像有厚度的立體塊；位移設小、厚度設大就是 Minecraft 標題那種擠出感。
+/// </summary>
 public sealed record ObjectShadowEffect : IEffect
 {
     public int OffsetX { get; init; } = 5;     // -100..100
     public int OffsetY { get; init; } = 5;
+    public int Thickness { get; init; } = 0;   // 0..100（沿位移方向擠出的 px）
     public int Blur { get; init; } = 5;        // 0..50
     public int Opacity { get; init; } = 60;    // 0..100
     public SKColor Color { get; init; } = SKColors.Black;
 
     public string Name => "物件陰影";
     public string Category => "物件";
-    public int SourceMargin => Math.Max(Math.Abs(OffsetX), Math.Abs(OffsetY)) + GaussianMargin(Blur);
+    public int SourceMargin => Math.Max(Math.Abs(OffsetX), Math.Abs(OffsetY)) + Thickness + GaussianMargin(Blur);
 
     private static readonly ParamDef[] Params =
     [
@@ -237,6 +242,8 @@ public sealed record ObjectShadowEffect : IEffect
             (o, v) => ((ObjectShadowEffect)o) with { OffsetX = (int)v }),
         new SliderParam("oy", "位移 Y", -100, 100, o => ((ObjectShadowEffect)o).OffsetY,
             (o, v) => ((ObjectShadowEffect)o) with { OffsetY = (int)v }),
+        new SliderParam("thickness", "厚度", 0, 100, o => ((ObjectShadowEffect)o).Thickness,
+            (o, v) => ((ObjectShadowEffect)o) with { Thickness = (int)v }),
         new SliderParam("blur", "模糊", 0, 50, o => ((ObjectShadowEffect)o).Blur,
             (o, v) => ((ObjectShadowEffect)o) with { Blur = (int)v }),
         new SliderParam("opacity", "不透明度", 0, 100, o => ((ObjectShadowEffect)o).Opacity,
@@ -248,7 +255,7 @@ public sealed record ObjectShadowEffect : IEffect
 
     public void Render(EffectContext ctx)
     {
-        var shadow = ShadowMask(ctx, OffsetX, OffsetY, 0, Blur, Color, Opacity / 100f);
+        var shadow = ShadowMask(ctx, OffsetX, OffsetY, 0, Blur, Color, Opacity / 100f, Thickness);
         ctx.ForRows(y =>
         {
             for (var x = 0; x < ctx.Width; x++)
@@ -259,19 +266,25 @@ public sealed record ObjectShadowEffect : IEffect
         });
     }
 
-    /// <summary>來源 alpha → 位移、外擴（spread，方形近似）、模糊、上色（Src 大小）。</summary>
-    internal static uint[] ShadowMask(EffectContext ctx, int offsetX, int offsetY, int spread, int blur, SKColor color, float opacity)
+    /// <summary>
+    /// 來源 alpha → 位移、擠出（thickness：沿位移方向每 px 疊一次輪廓）、外擴（spread，方形近似）、模糊、上色（Src 大小）。
+    /// </summary>
+    internal static uint[] ShadowMask(EffectContext ctx, int offsetX, int offsetY, int spread, int blur, SKColor color, float opacity, int thickness = 0)
     {
         var w = ctx.SrcWidth;
         var h = ctx.SrcHeight;
         var alpha = new byte[w * h];
-        for (var y = 0; y < h; y++)
-        for (var x = 0; x < w; x++)
+        foreach (var (ox, oy) in ExtrusionOffsets(offsetX, offsetY, thickness))
         {
-            var sx = x - offsetX;
-            var sy = y - offsetY;
-            if ((uint)sx >= (uint)w || (uint)sy >= (uint)h) continue;
-            alpha[y * w + x] = (byte)A(ctx.Src[sy * w + sx]);
+            for (var y = 0; y < h; y++)
+            for (var x = 0; x < w; x++)
+            {
+                var sx = x - ox;
+                var sy = y - oy;
+                if ((uint)sx >= (uint)w || (uint)sy >= (uint)h) continue;
+                var a = (byte)A(ctx.Src[sy * w + sx]);
+                if (a > alpha[y * w + x]) alpha[y * w + x] = a;
+            }
         }
 
         if (spread > 0)
@@ -312,6 +325,29 @@ public sealed record ObjectShadowEffect : IEffect
         }
         if (blur > 0) result = GaussianBlur(result, w, h, blur, ctx.Cancellation);
         return result;
+    }
+
+    /// <summary>
+    /// 擠出用的位移清單：從 (offsetX, offsetY) 起，沿位移方向每 1px 一步、共 thickness 步（去重）。
+    /// 位移為零時沿右下 45° 擠出，厚度才不會沒地方長。
+    /// </summary>
+    internal static IReadOnlyList<(int X, int Y)> ExtrusionOffsets(int offsetX, int offsetY, int thickness)
+    {
+        var list = new List<(int, int)> { (offsetX, offsetY) };
+        if (thickness <= 0) return list;
+        float dx = offsetX, dy = offsetY;
+        var len = MathF.Sqrt(dx * dx + dy * dy);
+        if (len < 0.5f) { dx = 1; dy = 1; len = MathF.Sqrt(2); }
+        dx /= len; dy /= len;
+        var seen = new HashSet<(int, int)> { (offsetX, offsetY) };
+        // 步距取 1/√2 才不會在斜向走出缺口（每步至少一軸前進 <1px）
+        var step = 0.7f;
+        for (var t = step; t <= thickness + 1e-3f; t += step)
+        {
+            var o = ((int)MathF.Round(offsetX + dx * t), (int)MathF.Round(offsetY + dy * t));
+            if (seen.Add(o)) list.Add(o);
+        }
+        return list;
     }
 }
 
