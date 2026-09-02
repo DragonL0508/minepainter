@@ -83,7 +83,10 @@ public class BackgroundRemovalAndFeatherTests
 
         // 不動靜態的 ModelDirectories：其他測試（如「所有效果預設渲染」）平行跑時不該看到模型
         var model = new OnnxModelInfo("u2netp", Path.Combine(dir, "u2netp.onnx"));
-        var fx = new BackgroundRemovalEffect([model]);
+        var fx = new BackgroundRemovalEffect([model])
+        {
+            UseGpu = Environment.GetEnvironmentVariable("MINEPAINTER_TEST_GPU") == "1", // DirectML 路徑（失敗會退回 CPU）
+        };
 
         const int w = 256, h = 256;
         var src = Canvas(w, h, (x, y) =>
