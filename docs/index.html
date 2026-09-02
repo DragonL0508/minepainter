@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>MinePainter</title>
-<meta name="description" content="MinePainter：paint.net 風格的 Windows 繪圖程式，解壓縮就能用。" />
+<meta name="description" content="MinePainter：讓 paint.net 和 Adobe 生了個孩子，支援 Windows。" />
 <link rel="icon" href="icon.png" />
 <style>
   /* 標題字型只切出 ASCII 子集（標題是英文），檔案 2 KB */
@@ -70,7 +70,7 @@
     padding: 16px 30px; border-radius: 999px;
     transition: transform .35s var(--ease), box-shadow .35s ease;
   }
-  .btn:hover { transform: translateY(-2px); box-shadow: 0 14px 40px -10px rgba(244,194,42,.55); }
+  .btn:hover { transform: translateY(-2px); box-shadow: 0 0 44px -4px rgba(244,194,42,.5); }
   .btn:active { transform: translateY(0) scale(.98); }
   .btn svg { transition: transform .35s var(--ease); }
   .btn:hover svg { transform: translateY(3px); }
@@ -107,7 +107,7 @@
 
   <div class="rise"><div class="icon-wrap"><img class="icon" src="icon.png" alt="" width="128" height="128" /></div></div>
   <h1 class="rise d1">MinePainter</h1>
-  <p class="tagline rise d2">paint.net 風格的 Windows 繪圖程式，解壓縮就能用。</p>
+  <p class="tagline rise d2">讓 paint.net 和 Adobe 生了個孩子，支援 Windows。</p>
 
   <a class="btn rise d3" id="download" href="https://github.com/DragonL0508/minepainter/releases/latest">
     <span>下載 Windows 版</span>
@@ -132,7 +132,8 @@
     const rel = await res.json();
     const sc = (rel.assets || []).find(a => /win-x64\.zip$/i.test(a.name));
     if (sc) document.getElementById('download').href = sc.browser_download_url;
-    document.getElementById('meta').textContent = sc ? `${rel.tag_name} · ${size(sc.size)}` : rel.tag_name;
+    const date = new Date(rel.published_at).toLocaleDateString('zh-TW');
+    document.getElementById('meta').textContent = [rel.tag_name, sc && size(sc.size), `${date} 更新`].filter(Boolean).join(' · ');
   } catch {
     // 查不到（沒發過 Release、API 額度用完、離線…）就維持指向 releases/latest 的保底連結
   }
