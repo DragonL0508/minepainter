@@ -16,6 +16,7 @@ namespace MinePainter.App.Platform;
 internal static class ClipboardImage
 {
     private const uint CF_DIB = 8;
+    private const uint CF_HDROP = 15;
     private const uint CF_DIBV5 = 17;
     private const uint GMEM_MOVEABLE = 0x0002;
 
@@ -74,6 +75,41 @@ internal static class ClipboardImage
         surface.Canvas.Clear(SKColors.Transparent);
         surface.Canvas.DrawBitmap(decoded, 0, 0);
         return surface.Snapshot();
+    }
+
+    /// <summary>
+    /// 剪貼簿裡的檔案清單（在檔案總管按 Ctrl+C 複製檔案時放的 CF_HDROP）。沒有就是空清單。
+    /// DROPFILES：pFiles（檔名區起點）、pt、fNC、fWide；之後是以 \0 分隔、雙 \0 結尾的路徑串。
+    /// </summary>
+    public static IReadOnlyList<string> TryGetFilePaths()
+    {
+        if (!OperatingSystem.IsWindows()) return [];
+        if (!TryOpen()) return [];
+        byte[]? drop;
+        try
+        {
+            drop = GetBytes(CF_HDROP);
+        }
+        finally
+        {
+            CloseClipboard();
+        }
+        if (drop == null || drop.Length < 20) return [];
+
+        var offset = BitConverter.ToInt32(drop, 0);
+        var wide = BitConverter.ToInt32(drop, 16) != 0;
+        if (offset <= 0 || offset >= drop.Length) return [];
+
+        var text = wide
+            ? System.Text.Encoding.Unicode.GetString(drop, offset, drop.Length - offset)
+            : System.Text.Encoding.Default.GetString(drop, offset, drop.Length - offset);
+        var result = new List<string>();
+        foreach (var part in text.Split('\0'))
+        {
+            if (part.Length == 0) break; // 雙 \0 結尾
+            result.Add(part);
+        }
+        return result;
     }
 
     // ---- DIB ⇄ BMP ----

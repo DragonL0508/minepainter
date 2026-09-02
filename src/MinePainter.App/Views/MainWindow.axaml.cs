@@ -3,6 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Controls.Presenters;
 using Avalonia.Controls.Primitives;
 using Avalonia.Controls.Templates;
+using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Media;
 using Avalonia.Platform.Storage;
@@ -70,6 +71,11 @@ public partial class MainWindow : Window
     public MainWindow(string? initialFile)
     {
         InitializeComponent();
+
+        // 影像檔拖進視窗：問要「開啟」還是「加入圖層」
+        DragDrop.SetAllowDrop(this, true);
+        AddHandler(DragDrop.DragOverEvent, OnDragOver);
+        AddHandler(DragDrop.DropEvent, OnDrop);
         InitVectorOptions();
         BuildFloatingPanels();
         WireToolOptionBars();
@@ -935,6 +941,85 @@ public partial class MainWindow : Window
         if (path != null) OpenFile(path);
     }
 
+    // ---- 拖放檔案 ----
+
+    private static readonly string[] ImageExtensions = [".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp"];
+    private static readonly string[] OpenableExtensions = [".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp", ".mpp", ".pdn"];
+
+    private static bool HasExtension(string path, string[] list) =>
+        list.Contains(Path.GetExtension(path), StringComparer.OrdinalIgnoreCase);
+
+    private static List<string> DroppedPaths(DragEventArgs e)
+    {
+        var result = new List<string>();
+        if (e.Data.GetFiles() is not { } items) return result;
+        foreach (var item in items)
+        {
+            var path = item.TryGetLocalPath();
+            if (path != null && File.Exists(path) && HasExtension(path, OpenableExtensions)) result.Add(path);
+        }
+        return result;
+    }
+
+    private void OnDragOver(object? sender, DragEventArgs e)
+    {
+        e.DragEffects = DroppedPaths(e).Count > 0 ? DragDropEffects.Copy : DragDropEffects.None;
+        e.Handled = true;
+    }
+
+    private async void OnDrop(object? sender, DragEventArgs e)
+    {
+        var paths = DroppedPaths(e);
+        if (paths.Count == 0) return;
+        e.Handled = true;
+
+        var session = Canvas.Session;
+        var canAddLayers = session != null && paths.Any(p => HasExtension(p, ImageExtensions));
+        var dialog = new DropFilesDialog(paths.Select(Path.GetFileName).ToList()!, canAddLayers);
+        await dialog.ShowDialog(this);
+
+        switch (dialog.Result)
+        {
+            case DropFilesDialog.Choice.Open:
+                foreach (var path in paths) OpenFile(path);
+                break;
+
+            case DropFilesDialog.Choice.AddLayers:
+                session = CommitPending();
+                if (session == null) return;
+                var skipped = 0;
+                foreach (var path in paths)
+                {
+                    if (!HasExtension(path, ImageExtensions))
+                    {
+                        skipped++; // .mpp/.pdn 是整份文件，不能當一層
+                        continue;
+                    }
+                    ImportLayerFromFile(session, path);
+                }
+                if (skipped > 0) Toasts.Show($"{skipped} 個檔案是文件格式（.mpp/.pdn），只能用「開啟」");
+                _layersContent.Refresh();
+                RefreshUiState();
+                break;
+        }
+    }
+
+    /// <summary>把影像檔匯入成目前文件的一層（插在作用中圖層上方）。失敗以 toast 回報，回傳是否成功。</summary>
+    private bool ImportLayerFromFile(EditorSession session, string path)
+    {
+        try
+        {
+            using var bitmap = ImageCodec.LoadBitmap(path);
+            ImageCommands.ImportImageLayer(session, bitmap, Path.GetFileNameWithoutExtension(path));
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Toasts.Show($"匯入失敗：{Path.GetFileName(path)}（{ex.Message}）");
+            return false;
+        }
+    }
+
     private void OpenFile(string path)
     {
         try
@@ -1285,8 +1370,33 @@ public partial class MainWindow : Window
         var image = Platform.ClipboardImage.TryGetImage();
         if (image == null)
         {
-            Toasts.Show("剪貼簿裡沒有影像");
-            return;
+            // 剪貼簿裡是檔案（檔案總管 Ctrl+C）：一個影像檔＝貼成浮動內容；多個＝各自成一層
+            var files = Platform.ClipboardImage.TryGetFilePaths()
+                .Where(p => File.Exists(p) && HasExtension(p, ImageExtensions)).ToList();
+            if (files.Count == 0)
+            {
+                Toasts.Show("剪貼簿裡沒有影像或影像檔");
+                return;
+            }
+            if (files.Count > 1)
+            {
+                var imported = files.Count(f => ImportLayerFromFile(session, f));
+                if (imported > 0) Toasts.Show($"已把 {imported} 個影像檔各自貼成一層");
+                _layersContent.Refresh();
+                RefreshUiState();
+                return;
+            }
+            try
+            {
+                using var bitmap = ImageCodec.LoadBitmap(files[0]);
+                image = SKImage.FromBitmap(bitmap);
+            }
+            catch (Exception ex)
+            {
+                Toasts.Show($"無法讀取 {Path.GetFileName(files[0])}（{ex.Message}）");
+                return;
+            }
+            if (image == null) return;
         }
 
         // 超出畫布：問要延展還是維持（paint.net 的行為）
