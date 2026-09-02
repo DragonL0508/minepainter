@@ -10,7 +10,7 @@ public sealed record ShortcutDef(string Id, string Category, string Name, KeyGes
 /// （抄 Pinta、與 paint.net 相容）；使用者覆寫存進 <see cref="AppSettings.Shortcuts"/>。
 /// MainWindow 與 CanvasView 的按鍵處理都查這張表，改一處兩邊同步。
 /// 不參與自訂的特殊鍵：Ctrl+Shift+Z（重做別名）、浮動內容的 Enter/Esc、空白鍵平移、
-/// 滾輪縮放與 Shift/Caps Lock + 滾輪平移。
+/// 滾輪平移與 Shift／Ctrl + 滾輪。
 /// </summary>
 public static class ShortcutMap
 {

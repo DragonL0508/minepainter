@@ -9,7 +9,7 @@ using SkiaSharp;
 namespace MinePainter.App.Views;
 
 /// <summary>
-/// 畫布控制項：滾輪（縮放／Shift 左右平移／按住 Caps Lock 上下平移）、中鍵、空白鍵 → viewport；
+/// 畫布控制項：滾輪（上下平移／Shift 左右平移／Ctrl 縮放）、中鍵、空白鍵 → viewport；
 /// 其餘 pointer 事件轉交 EditorSession.ActiveTool。
 /// 仍採連續重繪（RequestAnimationFrame 迴圈）量測效能；之後改成 dirty 驅動。
 /// </summary>
@@ -266,18 +266,18 @@ public sealed class CanvasView : Control
 
         // 平移改的也是目標值，跟縮放共用同一套插值，滾起來一樣是連續的。
         // 往上滾 = 內容往下/往右走（跟捲軸同向）。
-        if (e.KeyModifiers.HasFlag(KeyModifiers.Shift))
-        {
-            _targetViewport = _targetViewport.PanBy(delta * WheelPanStep, 0);
-        }
-        else if (Platform.KeyState.IsCapsLockHeld)
-        {
-            _targetViewport = _targetViewport.PanBy(0, delta * WheelPanStep);
-        }
-        else
+        if (e.KeyModifiers.HasFlag(KeyModifiers.Control))
         {
             var factor = Math.Pow(1.18, delta);
             _targetViewport = _targetViewport.ZoomAt(e.GetPosition(this), factor);
+        }
+        else if (e.KeyModifiers.HasFlag(KeyModifiers.Shift))
+        {
+            _targetViewport = _targetViewport.PanBy(delta * WheelPanStep, 0);
+        }
+        else
+        {
+            _targetViewport = _targetViewport.PanBy(0, delta * WheelPanStep);
         }
         e.Handled = true;
     }
