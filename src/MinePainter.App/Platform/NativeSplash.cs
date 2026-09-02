@@ -252,8 +252,8 @@ internal static unsafe class NativeSplash
             var phase = ((t - GlowInMs) % (2 * BreathMs)) / (double)BreathMs; // 0..2
             var k = phase <= 1 ? phase : 2 - phase;
             k = 0.5 - 0.5 * Math.Cos(Math.PI * k);
-            glowOpacity *= 1 - 0.28 * k;
-            glowScale *= 1 + 0.07 * k;
+            glowOpacity *= 1 - 0.2 * k;
+            glowScale *= 1 + 0.04 * k;
         }
 
         // 退場：淡出 + 微放大（像被主視窗接走）
@@ -271,7 +271,7 @@ internal static unsafe class NativeSplash
         var cx = size / 2.0;
         var cy = size / 2.0;
 
-        // 1. 光暈：#5CFFD24A @0 → #26FFC61A @0.45 → 透明 @1
+        // 1. 光暈（刻意很淡，只是讓 icon 不像貼在桌面上）：#1EFFD24A @0 → #0CFFC61A @0.45 → 透明 @1
         var glowR = GlowRadiusDip * s * glowScale;
         if (glowOpacity > 0.002)
         {
@@ -289,12 +289,12 @@ internal static unsafe class NativeSplash
                     if (d < 0.45)
                     {
                         var k = d / 0.45;
-                        a = Lerp(0x5C, 0x26, k); gg = Lerp(0xD2, 0xC6, k); bb = Lerp(0x4A, 0x1A, k);
+                        a = Lerp(0x1E, 0x0C, k); gg = Lerp(0xD2, 0xC6, k); bb = Lerp(0x4A, 0x1A, k);
                     }
                     else
                     {
                         var k = (d - 0.45) / 0.55;
-                        a = Lerp(0x26, 0, k); gg = 0xC6; bb = 0x1A;
+                        a = Lerp(0x0C, 0, k); gg = 0xC6; bb = 0x1A;
                     }
                     a *= glowOpacity / 255.0;
                     frame[py * size + px] = Premul(0xFF, gg, bb, a);
