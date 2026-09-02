@@ -1,6 +1,7 @@
 using MinePainter.Core.History;
 using MinePainter.Core.Layers;
 using MinePainter.Core.Selections;
+using MinePainter.Core.Vectors;
 using SkiaSharp;
 
 namespace MinePainter.Core.Tools;
@@ -32,6 +33,22 @@ public sealed class HandleDragController
 
     public bool IsActive => _kind != TargetKind.None;
 
+    /// <summary>
+    /// 物件的效果外擴量（doc px）：這層效果堆疊（外框／陰影／光暈…）會把像素畫到物件排版框之外，
+    /// 使用者看到的框要包住算繪後的像素，不然框線會壓在外框上、把手也蓋住陰影。
+    /// </summary>
+    public static float ElementEffectPad(RasterLayer layer) =>
+        layer.HasActiveEffects ? Effects.LayerEffectRenderer.TotalMargin(layer) : 0f;
+
+    /// <summary>使用者看到的物件框 = 排版框往外加效果外擴量。</summary>
+    public static SKRect ElementFrame(RasterLayer layer, VectorElement element)
+    {
+        var frame = element.FrameBounds;
+        var pad = ElementEffectPad(layer);
+        if (pad > 0 && !frame.IsEmpty) frame.Inflate(pad, pad);
+        return frame;
+    }
+
     /// <summary>目前畫布上「被框住的東西」的外框；null = 沒有。</summary>
     public static SKRect? GetFrame(EditorSession session)
     {
@@ -43,7 +60,7 @@ public sealed class HandleDragController
             ReferenceEquals(layer, session.Document.ActiveLayer) &&
             layer.FindElement(sel.ElementId) is { } element)
         {
-            var frame = element.FrameBounds;
+            var frame = ElementFrame(layer, element);
             return frame.IsEmpty ? null : frame;
         }
 

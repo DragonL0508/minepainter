@@ -45,6 +45,7 @@ public sealed class ElementDragHelper
     private ResizeAxis _resizeAxis; // 邊把手只動一軸
     private float _origHeight;
     private float _origWidth;
+    private float _framePad;      // 使用者看到的框比排版框多出的效果外擴量（每邊）
     private SKPoint _rotateCenter;   // rotate 時的軸心（起始框中心，整趟固定）
     private float _rotateAnchorDeg;  // 右鍵按下時指標相對軸心的角度
 
@@ -64,11 +65,14 @@ public sealed class ElementDragHelper
             if (!ReferenceEquals(layer, doc.ActiveLayer)) return false; // 只操作作用中圖層的物件
             if (layer.FindElement(sel.ElementId) is not { } element) return false;
 
-            var b = element.FrameBounds; // 把手畫在使用者看到的框上，命中也要對同一個框
-            var handles = MoveTool.HandlePoints(b);
-            var hit = MoveTool.HitCorner(b, p, handleTolerance);
+            var b = element.FrameBounds;
+            // 把手畫在使用者看到的框（含效果外擴）上，命中也要對同一個框
+            var shown = HandleDragController.ElementFrame(layer, element);
+            var handles = MoveTool.HandlePoints(shown);
+            var hit = MoveTool.HitCorner(shown, p, handleTolerance);
             if (hit >= 0)
             {
+                _framePad = HandleDragController.ElementEffectPad(layer);
                 _mode = Mode.Resize;
                 _layer = layer;
                 _original = element;
@@ -194,8 +198,9 @@ public sealed class ElementDragHelper
                 // Shift：以文字「最原始」的比例（ScaleX = 1，字型本來的寬高）等比縮放，
                 // 之前拉寬拉窄的變形一併歸零；以拉得比較多的那一軸為準。
                 var keepAspect = modifiers.HasFlag(ToolModifiers.Shift);
-                var newHeight = Math.Abs(p.Y - _anchor.Y);
-                var newWidth = Math.Abs(p.X - _anchor.X);
+                // 錨點在含效果外擴的框上；扣掉兩邊外擴才是排版框的新尺寸
+                var newHeight = Math.Max(1f, Math.Abs(p.Y - _anchor.Y) - _framePad * 2);
+                var newWidth = Math.Max(1f, Math.Abs(p.X - _anchor.X) - _framePad * 2);
                 // 邊把手：另一軸不跟指標走。上下邊維持目前 ScaleX（寬隨字級等比）；左右邊字級不動
                 if (_resizeAxis == ResizeAxis.Vertical) newWidth = _origWidth * (newHeight / _origHeight);
                 else if (_resizeAxis == ResizeAxis.Horizontal) newHeight = _origHeight;
