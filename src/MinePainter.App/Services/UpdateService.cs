@@ -146,9 +146,10 @@ public static class UpdateService
             @echo off
             title MinePainter update
             :wait
-            tasklist /FI "PID eq {pid}" 2>nul | find "{pid}" >nul
+            rem full paths: a Git-for-Windows "find" earlier on PATH would shadow the Windows one
+            "%SystemRoot%\System32\tasklist.exe" /FI "PID eq {pid}" 2>nul | "%SystemRoot%\System32\find.exe" "{pid}" >nul
             if not errorlevel 1 (
-                timeout /t 1 /nobreak >nul
+                "%SystemRoot%\System32\timeout.exe" /t 1 /nobreak >nul
                 goto wait
             )
             set n=0
@@ -157,7 +158,7 @@ public static class UpdateService
             if not errorlevel 1 goto ok
             set /a n+=1
             if %n% lss 60 (
-                timeout /t 1 /nobreak >nul
+                "%SystemRoot%\System32\timeout.exe" /t 1 /nobreak >nul
                 goto copy
             )
             echo Could not replace "{exe}".
