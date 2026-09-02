@@ -1,17 +1,14 @@
-using System.Diagnostics;
 using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 using Avalonia.Threading;
+using MinePainter.App.Platform;
 using MinePainter.App.Views;
 
 namespace MinePainter.App;
 
 public partial class App : Application
 {
-    /// <summary>啟動畫面最短顯示時間：進場動畫要播得完，主視窗建得再快也不閃一下就收。</summary>
-    private static readonly TimeSpan SplashMinShow = TimeSpan.FromMilliseconds(1050);
-
     public override void Initialize() => AvaloniaXamlLoader.Load(this);
 
     public override void OnFrameworkInitializationCompleted()
@@ -23,47 +20,30 @@ public partial class App : Application
 
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
-            var splash = new SplashWindow();
-            // 開發驗證用：MINEPAINTER_DEBUG_OFFSCREEN=1 時啟動畫面也擺到主螢幕右側之外
-            if (Environment.GetEnvironmentVariable("MINEPAINTER_DEBUG_OFFSCREEN") == "1" &&
-                splash.Screens.Primary is { } primary)
+            // 啟動畫面（Program.Main 一開始就秀出來的）還在跑，這裡放心做重活
+            MainWindow main;
+            try
             {
-                splash.WindowStartupLocation = Avalonia.Controls.WindowStartupLocation.Manual;
-                splash.Position = new PixelPoint(primary.Bounds.Right + 40, primary.Bounds.Y + 40);
+                main = new MainWindow(desktop.Args?.FirstOrDefault());
+                // 預熱：Show() 的大頭是第一次套模板＋排版與載入初始文件（實測合計 600ms+），
+                // 趁啟動畫面還在時先做掉，之後真正 Show 只剩建 OS 視窗與第一幀
+                main.PrepareBeforeShow();
             }
-            splash.Show();
-
-            // 先讓啟動畫面畫出第一幀，再做真正的重活（建主視窗）——
-            // Background 優先權排在 Render 之後，所以這裡跑的時候 icon 已經在螢幕上
-            Dispatcher.UIThread.Post(() =>
+            catch
             {
-                MainWindow main;
-                try
-                {
-                    main = new MainWindow(desktop.Args?.FirstOrDefault());
-                }
-                catch
-                {
-                    splash.Close();
-                    throw;
-                }
+                NativeSplash.Kill();
+                throw;
+            }
+
+            // 主視窗在啟動畫面「開始退場」時就 Show：建 OS 視窗＋第一幀實測要 300ms 以上，
+            // 剛好在 260ms 的退場結束時接上，使用者看到的是 splash 淡出、視窗隨即出現，中間沒有空白。
+            // 注意不能在這裡就設 desktop.MainWindow —— lifetime 會在這個方法回傳後立刻 Show 它。
+            NativeSplash.RequestFadeOut();
+            NativeSplash.FadeOutStarted.ContinueWith(_ => Dispatcher.UIThread.Post(() =>
+            {
                 desktop.MainWindow = main;
-                main.Opened += (_, _) =>
-                {
-                    // 主視窗第一幀畫出來後才收啟動畫面；來不及播完進場就再等一下
-                    Dispatcher.UIThread.Post(async () =>
-                    {
-                        var hold = SplashMinShow;
-                        // 開發驗證用：MINEPAINTER_DEBUG_SPLASH_HOLD=<毫秒> 讓啟動畫面停久一點（截圖用）
-                        if (int.TryParse(Environment.GetEnvironmentVariable("MINEPAINTER_DEBUG_SPLASH_HOLD"), out var ms))
-                            hold = TimeSpan.FromMilliseconds(ms);
-                        var remaining = hold - splash.Elapsed;
-                        if (remaining > TimeSpan.Zero) await Task.Delay(remaining);
-                        await splash.FadeOutAndCloseAsync();
-                    }, DispatcherPriority.Background);
-                };
                 main.Show();
-            }, DispatcherPriority.Background);
+            }));
         }
 
         base.OnFrameworkInitializationCompleted();

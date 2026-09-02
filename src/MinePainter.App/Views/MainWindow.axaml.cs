@@ -117,13 +117,10 @@ public partial class MainWindow : Window
         SizeChanged += (_, _) => RepositionPanels();
         Activated += (_, _) => EnsurePanelsVisible(); // 從最小化／別的程式切回來時對齊一次
 
+        _initialFile = initialFile;
         Opened += (_, _) =>
         {
-            if (initialFile != null && File.Exists(initialFile))
-                OpenFile(initialFile);
-            else
-                SetDocument(ImageCodec.CreateBlankDocument(1920, 1080, SKColors.White));
-
+            PrepareBeforeShow(); // 正常流程 App 已先呼叫過（啟動畫面期間）；這裡是保險
             ShowPanels();
             StartPerfLabelTimer();
             Canvas.Focus();
@@ -165,6 +162,34 @@ public partial class MainWindow : Window
         AddHandler(KeyDownEvent, OnGlobalKeyDown, Avalonia.Interactivity.RoutingStrategies.Tunnel);
         AddHandler(KeyUpEvent, OnGlobalKeyUp, Avalonia.Interactivity.RoutingStrategies.Tunnel);
         Deactivated += (_, _) => SetAlignMode(false); // 按住時切走視窗，KeyUp 收不到
+    }
+
+    private readonly string? _initialFile;
+    private bool _prepared;
+
+    /// <summary>
+    /// Show() 之前能先做掉的重活，趁啟動畫面還在時呼叫，主視窗才不會在啟動畫面退場後又空白半秒：
+    /// 載入初始文件（建 session、接上各面板，實測 160ms+）、把主視窗與四個浮動面板的模板套用與排版先跑一遍
+    /// （實測 260ms+）。畫布視口的 fit 本來就延到第一幀，面板位置要等視窗真的擺好才算，所以那些留在 Opened。
+    /// </summary>
+    public void PrepareBeforeShow()
+    {
+        if (_prepared) return;
+        _prepared = true;
+
+        Measure(new Size(Width, Height));
+        Arrange(new Rect(0, 0, Width, Height));
+        foreach (var (panel, _) in PanelPairs())
+        {
+            var h = double.IsNaN(panel.Height) ? double.PositiveInfinity : panel.Height;
+            panel.Measure(new Size(panel.Width, h));
+            panel.Arrange(new Rect(panel.DesiredSize));
+        }
+
+        if (_initialFile != null && File.Exists(_initialFile))
+            OpenFile(_initialFile);
+        else
+            SetDocument(ImageCodec.CreateBlankDocument(1920, 1080, SKColors.White));
     }
 
     /// <summary>開發驗證用：鋪測試圖（漸層 + 筆刷 + 形狀），再開指定效果（見 Opened 裡的說明）。</summary>
