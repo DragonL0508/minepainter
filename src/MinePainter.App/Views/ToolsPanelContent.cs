@@ -26,6 +26,10 @@ public sealed class ToolsPanelContent : UserControl
     ];
 
     private readonly Dictionary<string, ToggleButton> _buttons = new();
+    private readonly Panel _host;
+    private readonly Border _indicator;
+    private string? _activeKey;
+    private Point _lastIndicatorPos = new(double.NaN, double.NaN);
     private bool _suppress;
 
     public event Action<string>? ToolSelected;
@@ -64,7 +68,46 @@ public sealed class ToolsPanelContent : UserControl
             _buttons[key] = button;
             grid.Children.Add(button);
         }
-        Content = grid;
+
+        // 選取指示器：一塊半透明的主題色墊在按鈕底下，切換工具時滑到新按鈕（Motion.Move）。
+        // 按鈕自己的選中底色是 160ms 淡入，兩者疊起來就是「高亮從舊工具流到新工具」。
+        _indicator = new Border
+        {
+            Width = 34,
+            Height = 30,
+            CornerRadius = new CornerRadius(4),
+            Background = AppTheme.AccentBrush,
+            Opacity = 0.35,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            VerticalAlignment = VerticalAlignment.Top,
+            IsHitTestVisible = false,
+            IsVisible = false,
+        };
+        Controls.Motion.TrackTransform(_indicator);
+        _host = new Panel { Children = { _indicator, grid } };
+        _host.LayoutUpdated += (_, _) => PlaceIndicator(animate: false);
+        Content = _host;
+    }
+
+    /// <summary>把指示器放到目前工具的按鈕底下；第一次（還沒顯示）直接就位不播動畫。</summary>
+    private void PlaceIndicator(bool animate)
+    {
+        if (_activeKey == null || !_buttons.TryGetValue(_activeKey, out var button)) return;
+        if (button.Bounds.Width <= 0) return; // 尚未排版
+        if (button.TranslatePoint(new Point(0, 0), _host) is not { } p) return;
+        if (_indicator.IsVisible && p == _lastIndicatorPos) return; // 每次 layout 都會來，位置沒變就別打斷進行中的滑動
+        _lastIndicatorPos = p;
+        var target = Controls.Motion.Translate(p.X, p.Y);
+        if (!_indicator.IsVisible || !animate)
+        {
+            var saved = _indicator.Transitions;
+            _indicator.Transitions = null;
+            _indicator.RenderTransform = target;
+            _indicator.Transitions = saved;
+            _indicator.IsVisible = true;
+            return;
+        }
+        _indicator.RenderTransform = target;
     }
 
     public void SetActive(string key)
@@ -73,5 +116,8 @@ public sealed class ToolsPanelContent : UserControl
         foreach (var (k, b) in _buttons)
             b.IsChecked = k == key;
         _suppress = false;
+        var moved = _activeKey != key;
+        _activeKey = key;
+        PlaceIndicator(animate: moved);
     }
 }

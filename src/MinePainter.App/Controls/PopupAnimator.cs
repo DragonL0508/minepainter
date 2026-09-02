@@ -17,37 +17,9 @@ namespace MinePainter.App.Controls;
 /// </summary>
 public static class PopupAnimator
 {
-    private static readonly TimeSpan Duration = TimeSpan.FromMilliseconds(140);
-
-    /// <summary>對任一控制項播一次「滑入」（起始值先套用，下一輪 layout 再設目標值）。</summary>
-    public static void Play(Control target)
-    {
-        target.RenderTransformOrigin = new RelativePoint(0.5, 0, RelativeUnit.Relative);
-        target.Transitions ??= [];
-        if (!target.Transitions.Any(t => t is DoubleTransition d && d.Property == Visual.OpacityProperty))
-        {
-            target.Transitions.Add(new DoubleTransition
-            {
-                Property = Visual.OpacityProperty,
-                Duration = Duration,
-                Easing = new CubicEaseOut(),
-            });
-            target.Transitions.Add(new TransformOperationsTransition
-            {
-                Property = Visual.RenderTransformProperty,
-                Duration = Duration,
-                Easing = new CubicEaseOut(),
-            });
-        }
-
-        target.Opacity = 0;
-        target.RenderTransform = TransformOperations.Parse("translateY(-6px) scaleY(0.97)");
-        Dispatcher.UIThread.Post(() =>
-        {
-            target.Opacity = 1;
-            target.RenderTransform = TransformOperations.Identity;
-        }, DispatcherPriority.Loaded);
-    }
+    /// <summary>對任一控制項播一次「滑入」（Motion.Base，原點在頂端中央）。</summary>
+    public static void Play(Control target) =>
+        Motion.FadeSlideIn(target, "translateY(-6px) scaleY(0.97)", Motion.Base, new RelativePoint(0.5, 0, RelativeUnit.Relative));
 }
 
 /// <summary>會播開啟動畫的 Flyout（用法同 Flyout）。</summary>

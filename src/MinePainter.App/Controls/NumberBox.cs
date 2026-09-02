@@ -102,7 +102,7 @@ public sealed class NumberBox : UserControl
         if (values.Count == 0) return;
 
         var grid = new WrapPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Width = 4 * 44 };
-        var flyout = new Flyout { Content = grid, Placement = PlacementMode.Bottom, ShowMode = FlyoutShowMode.Transient };
+        var flyout = new AnimatedFlyout { Content = grid, Placement = PlacementMode.Bottom, ShowMode = FlyoutShowMode.Transient };
         foreach (var v in values)
         {
             var value = v;

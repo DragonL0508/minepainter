@@ -1,4 +1,5 @@
 using Avalonia;
+using Avalonia.Animation;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
@@ -33,6 +34,13 @@ public sealed class BarSlider : Control
 
     public static readonly StyledProperty<SliderTrack> TrackProperty =
         AvaloniaProperty.Register<BarSlider, SliderTrack>(nameof(Track), SliderTrack.None);
+
+    /// <summary>
+    /// 填滿條實際畫到的值。拖曳時緊跟 Value；其他來源（雙擊回預設、常用值、滾輪、undo、切工具）
+    /// 用 Motion.Base 滑過去——條會「跑」到新位置，使用者看得出值是從哪裡變到哪裡。文字永遠顯示真正的 Value。
+    /// </summary>
+    private static readonly StyledProperty<double> ShownValueProperty =
+        AvaloniaProperty.Register<BarSlider, double>("ShownValue");
 
     public double Minimum { get => GetValue(MinimumProperty); set => SetValue(MinimumProperty, value); }
     public double Maximum { get => GetValue(MaximumProperty); set => SetValue(MaximumProperty, value); }
@@ -69,7 +77,25 @@ public sealed class BarSlider : Control
 
     static BarSlider()
     {
-        AffectsRender<BarSlider>(MinimumProperty, MaximumProperty, ValueProperty, SuffixProperty, LabelProperty, DecimalsProperty, TrackProperty);
+        AffectsRender<BarSlider>(MinimumProperty, MaximumProperty, ValueProperty, SuffixProperty, LabelProperty, DecimalsProperty, TrackProperty, ShownValueProperty);
+        ValueProperty.Changed.AddClassHandler<BarSlider>((s, _) => s.SyncShown());
+    }
+
+    private readonly Transitions _shownTransitions =
+    [
+        new Avalonia.Animation.DoubleTransition { Property = ShownValueProperty, Duration = Motion.Base, Easing = Motion.Enter },
+    ];
+
+    private void SyncShown()
+    {
+        if (_dragging)
+        {
+            // 拖曳中不要有延遲：暫時拆掉 transition 直接設
+            Transitions = null;
+            SetValue(ShownValueProperty, Value);
+            Transitions = _shownTransitions;
+        }
+        else SetValue(ShownValueProperty, Value);
     }
 
     public BarSlider()
@@ -77,6 +103,8 @@ public sealed class BarSlider : Control
         Height = 24;
         MinWidth = 70;
         Cursor = new Cursor(StandardCursorType.SizeWestEast);
+        Transitions = _shownTransitions;
+        SetValue(ShownValueProperty, Value);
     }
 
     // 自繪內容用到 Theme brush：換主題要主動重繪（掛/卸時訂閱，避免 static 事件洩漏）
@@ -105,7 +133,8 @@ public sealed class BarSlider : Control
         context.DrawRectangle(TrackBrush, BorderPen, rect, radius, radius);
 
         var range = Maximum - Minimum;
-        var t = range <= 0 ? 0 : (Value - Minimum) / range;
+        var shown = Math.Clamp(GetValue(ShownValueProperty), Minimum, Maximum);
+        var t = range <= 0 ? 0 : (shown - Minimum) / range;
         var fillWidth = Math.Max(0, rect.Width * t);
         if (fillWidth > 0.5)
         {
@@ -309,7 +338,7 @@ public sealed class BarSlider : Control
         var panel = new StackPanel { Spacing = 4, Children = { box, hint } };
         if (!string.IsNullOrEmpty(Label))
             panel.Children.Insert(0, new TextBlock { Text = Label, FontSize = 12 });
-        var flyout = new Flyout { Content = panel, Placement = PlacementMode.Bottom, ShowMode = FlyoutShowMode.Transient };
+        var flyout = new AnimatedFlyout { Content = panel, Placement = PlacementMode.Bottom, ShowMode = FlyoutShowMode.Transient };
 
         void Apply()
         {

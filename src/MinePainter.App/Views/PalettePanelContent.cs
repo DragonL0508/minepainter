@@ -78,6 +78,8 @@ public sealed class PalettePanelContent : UserControl
             BorderThickness = new Thickness(1),
             Background = Brushes.Black,
         };
+        // 點色票時目前色平滑過去；拖色輪是連續改動，Quick 才不會有拖尾感
+        Motion.BrushTransition(_current, Border.BackgroundProperty, Motion.Quick);
 
         _hex = new TextBox { FontSize = 12, Text = "000000", MinWidth = 0, Height = 28 };
         _hex.LostFocus += (_, _) => ApplyHex();
@@ -167,17 +169,29 @@ public sealed class PalettePanelContent : UserControl
         Margin = new Thickness(1, 4, 0, -2),
     };
 
-    private static Button SwatchButton(SKColor? color) => new()
+    private static Button SwatchButton(SKColor? color)
     {
-        Width = Cell - 2,
-        Height = Cell - 2,
-        Margin = new Thickness(1),
-        CornerRadius = new CornerRadius(3),
-        Padding = new Thickness(0),
-        BorderThickness = new Thickness(1),
-        BorderBrush = AppTheme.SeparatorBrush,
-        Background = color is { } c ? new SolidColorBrush(Color.FromRgb(c.Red, c.Green, c.Blue)) : AppTheme.InnerBrush,
-    };
+        var b = new Button
+        {
+            Width = Cell - 2,
+            Height = Cell - 2,
+            Margin = new Thickness(1),
+            CornerRadius = new CornerRadius(3),
+            Padding = new Thickness(0),
+            BorderThickness = new Thickness(1),
+            BorderBrush = AppTheme.SeparatorBrush,
+            Background = color is { } c ? new SolidColorBrush(Color.FromRgb(c.Red, c.Green, c.Blue)) : AppTheme.InnerBrush,
+        };
+        b.Classes.Add("swatch"); // hover 微放大（Styles/Animations.axaml）
+        // 自己的一組 transition：最近使用列換色時顏色滑過去，而不是整列閃一下
+        b.Transitions =
+        [
+            new Avalonia.Animation.BrushTransition { Property = BackgroundProperty, Duration = Motion.Base, Easing = Motion.Enter },
+            new Avalonia.Animation.BrushTransition { Property = BorderBrushProperty, Duration = Motion.Base, Easing = Motion.Enter },
+            new Avalonia.Animation.TransformOperationsTransition { Property = RenderTransformProperty, Duration = Motion.Quick, Easing = Motion.Enter },
+        ];
+        return b;
+    }
 
     private BarSlider MakeChannel(string label)
     {

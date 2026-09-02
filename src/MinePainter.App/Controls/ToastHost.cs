@@ -40,13 +40,13 @@ public sealed class ToastHost : StackPanel
         Dispatcher.UIThread.Post(async () =>
         {
             await Animate(toast, fromOpacity: 0, toOpacity: 1, fromX: 26, toX: 0,
-                duration: TimeSpan.FromMilliseconds(260), new CubicEaseOut());
+                duration: Motion.Emphasis, Motion.Enter);
 
             await Task.Delay(Lifetime);
             if (!Children.Contains(toast)) return;
 
             await Animate(toast, fromOpacity: 1, toOpacity: 0, fromX: 0, toX: 14,
-                duration: TimeSpan.FromMilliseconds(420), new CubicEaseIn());
+                duration: Motion.Emphasis + Motion.Quick, Motion.Exit);
             Children.Remove(toast);
         }, DispatcherPriority.Background);
     }

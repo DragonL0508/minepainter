@@ -11,6 +11,7 @@ public sealed class HistoryPanelContent : UserControl
     private readonly ListBox _list;
     private EditorSession? _session;
     private bool _suppress;
+    private int _lastCount;
 
     public event Action? StateChanged;
 
@@ -62,7 +63,18 @@ public sealed class HistoryPanelContent : UserControl
             }
 
             _list.SelectedIndex = history.UndoStack.Count; // 目前位置
+
+            // 新做的步驟從下方浮出來（只動新增的那幾列；undo/redo 只是選取位置移動，底色自己會過渡）
+            var count = _list.Items.Count;
+            if (_lastCount > 0 && count > _lastCount)
+            {
+                for (var i = _lastCount; i < count; i++)
+                    if (_list.Items[i] is Control c) Controls.Motion.FadeSlideIn(c, "translateY(6px)");
+            }
+            _lastCount = count;
+            if (_list.SelectedItem is { } sel) Dispatcher.UIThread.Post(() => _list.ScrollIntoView(sel), DispatcherPriority.Loaded);
         }
+        else _lastCount = 0;
 
         _suppress = false;
     }

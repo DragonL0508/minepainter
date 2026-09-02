@@ -678,14 +678,15 @@ public partial class MainWindow : Window
     /// <summary>依工具顯示對應的選項群組（單行內切換，不改變工具列高度）。</summary>
     private void UpdateToolOptions(string key)
     {
-        SizeGroup.IsVisible = key is "brush" or "eraser" or "bgeraser" or "shape";
-        HardnessGroup.IsVisible = key is "brush" or "eraser" or "bgeraser";
-        SmoothingGroup.IsVisible = key is "brush" or "eraser";
-        OpacityGroup.IsVisible = key is "brush" or "eraser" or "fill";
-        ToleranceGroup.IsVisible = key is "fill" or "wand" or "bgeraser";
-        BgEraserGroup.IsVisible = key == "bgeraser";
-        TextGroup.IsVisible = key == "text";
-        ShapeGroup.IsVisible = key == "shape";
+        // 新出現的群組從下方 4px 淡入；消失的立刻收掉（淡出中會佔位，單行版面會跳）
+        Motion.Reveal(SizeGroup, key is "brush" or "eraser" or "bgeraser" or "shape");
+        Motion.Reveal(HardnessGroup, key is "brush" or "eraser" or "bgeraser");
+        Motion.Reveal(SmoothingGroup, key is "brush" or "eraser");
+        Motion.Reveal(OpacityGroup, key is "brush" or "eraser" or "fill");
+        Motion.Reveal(ToleranceGroup, key is "fill" or "wand" or "bgeraser");
+        Motion.Reveal(BgEraserGroup, key == "bgeraser");
+        Motion.Reveal(TextGroup, key == "text");
+        Motion.Reveal(ShapeGroup, key == "shape");
     }
 
     // ---- 文件生命週期（分頁） ----
@@ -762,7 +763,7 @@ public partial class MainWindow : Window
         // ContentFade 路徑不需要 Transitions；保留方法讓建構流程不變
     }
 
-    /// <summary>點分頁的切換：110ms 淡出 → 換 session → 180ms 淡入。</summary>
+    /// <summary>點分頁的切換：Quick 淡出 → 換 session → Base 淡入。</summary>
     private void ActivateTabAnimated(DocumentTab tab)
     {
         if (ReferenceEquals(tab, _activeTab) && _pendingSwitch == null) return;
@@ -772,7 +773,7 @@ public partial class MainWindow : Window
         _pendingSwitch = tab;
         if (alreadyFading) return;
 
-        Canvas.BeginContentFade(0, 110);
+        Canvas.BeginContentFade(0, (int)Motion.Quick.TotalMilliseconds);
         Avalonia.Threading.DispatcherTimer.RunOnce(() =>
         {
             var target = _pendingSwitch;
@@ -783,8 +784,8 @@ public partial class MainWindow : Window
 
             // ActivateTab 會把 fade snap 回 1；這裡壓回 0 再淡入到 1
             Canvas.SnapContentFade(0);
-            Canvas.BeginContentFade(1, 180);
-        }, TimeSpan.FromMilliseconds(115));
+            Canvas.BeginContentFade(1, (int)Motion.Base.TotalMilliseconds);
+        }, Motion.Quick + TimeSpan.FromMilliseconds(5));
     }
 
     /// <summary>不經動畫直接把畫布內容透明度復位（同步切換路徑用）。</summary>
@@ -804,7 +805,8 @@ public partial class MainWindow : Window
         var index = _tabs.IndexOf(tab);
         if (index < 0) return true; // 已被關掉（連點）
         _tabs.RemoveAt(index);
-        TabStrip.Children.Remove(tab.TabItem);
+        // 與新分頁的淡入對稱：縮小淡出後才從列上拿掉
+        Motion.FadeOut(tab.TabItem, () => TabStrip.Children.Remove(tab.TabItem), "scale(0.9)");
         tab.Session.History.Changed -= tab.DirtyHandler;
         tab.Session.Document.SizeChanged -= tab.SizeHandler;
 
@@ -958,20 +960,10 @@ public partial class MainWindow : Window
             ActivateTabAnimated(tab);
         };
 
-        // 新分頁淡入
-        tab.TabItem.Opacity = 0;
-        tab.TabItem.Transitions =
-        [
-            new Avalonia.Animation.DoubleTransition
-            {
-                Property = OpacityProperty,
-                Duration = TimeSpan.FromMilliseconds(160),
-                Easing = new Avalonia.Animation.Easings.CubicEaseOut(),
-            },
-        ];
+        // 選中／未選中的底色平滑切換；新分頁從下方微微浮上來
+        Motion.BrushTransition(tab.TabItem, Border.BackgroundProperty);
         TabStrip.Children.Insert(TabStrip.Children.Count - 1, tab.TabItem); // 「＋」永遠在最後
-        Avalonia.Threading.Dispatcher.UIThread.Post(
-            () => tab.TabItem.Opacity = 1, Avalonia.Threading.DispatcherPriority.Loaded);
+        Motion.FadeSlideIn(tab.TabItem, "translateY(4px) scale(0.96)");
     }
 
     private void UpdateTabVisuals()
@@ -3142,7 +3134,7 @@ public partial class MainWindow : Window
         var session = Canvas.Session;
         if (session?.SelectionHandles is not { } frame || Canvas.Bounds.Width <= 0)
         {
-            if (_frameActions.IsVisible) _frameActions.IsVisible = false;
+            Motion.SetVisible(_frameActions, false);
             return;
         }
 
@@ -3180,7 +3172,7 @@ public partial class MainWindow : Window
             Avalonia.Controls.Canvas.SetLeft(_frameActions, rect.X);
             Avalonia.Controls.Canvas.SetTop(_frameActions, rect.Y);
         }
-        if (!_frameActions.IsVisible) _frameActions.IsVisible = true;
+        Motion.SetVisible(_frameActions, true);
     }
 
     /// <summary>

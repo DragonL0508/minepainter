@@ -247,7 +247,7 @@ public sealed class ParamEditor : StackPanel
 
         // 點色票 → 彈出選色面板（色輪／明度／不透明度／hex），拖曳中即時預覽
         var picker = new ColorPickerPanel { Color = current, Margin = new Thickness(4) };
-        var flyout = new Flyout { Content = picker, Placement = PlacementMode.Bottom, ShowMode = FlyoutShowMode.Transient };
+        var flyout = new AnimatedFlyout { Content = picker, Placement = PlacementMode.Bottom, ShowMode = FlyoutShowMode.Transient };
         picker.Changed += c =>
         {
             if (_suppress) return;
@@ -288,7 +288,7 @@ public sealed class ParamEditor : StackPanel
         };
         ToolTip.SetTip(swatch, "選中節點的顏色（點一下選色）");
         var picker = new ColorPickerPanel { Color = editor.SelectedStop.Color, Margin = new Thickness(4) };
-        var flyout = new Flyout { Content = picker, Placement = PlacementMode.Bottom, ShowMode = FlyoutShowMode.Transient };
+        var flyout = new AnimatedFlyout { Content = picker, Placement = PlacementMode.Bottom, ShowMode = FlyoutShowMode.Transient };
         picker.Changed += c =>
         {
             if (_suppress) return;

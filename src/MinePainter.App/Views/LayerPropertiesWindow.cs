@@ -3,6 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Threading;
 using Avalonia.VisualTree;
 using MinePainter.App.Controls;
 using MinePainter.App.Services;
@@ -50,6 +51,9 @@ public sealed class LayerPropertiesWindow : Window
     private readonly BarSlider _opacityBar = new() { Minimum = 0, Maximum = 100, Suffix = "%", Height = 26 };
     private readonly StackPanel _adjustmentParams = new() { Spacing = 4 };
     private readonly StackPanel _effectsPanel = new() { Spacing = 0 };
+
+    /// <summary>目前畫著的效果卡片（依效果 Id），重建前記位置給 FLIP 用。</summary>
+    private readonly Dictionary<Guid, Control> _cards = new();
     private readonly StackPanel _detailRows = new() { Spacing = 3 };
     private Border _root = null!;
 
@@ -345,6 +349,11 @@ public sealed class LayerPropertiesWindow : Window
 
     private void BuildEffectsSection()
     {
+        // FLIP：重建前記每張卡片的位置，重建後從舊位置滑到新位置；新卡片淡入、拖曳排序不再「跳」一下
+        var oldCardPositions = new Dictionary<Guid, Point>();
+        foreach (var (id, card) in _cards)
+            if (card.IsVisible && card.TranslatePoint(default, _effectsPanel) is { } pt) oldCardPositions[id] = pt;
+        _cards.Clear();
         _effectsPanel.Children.Clear();
         if (_node is not RasterLayer layer) return;
         var doc = _session.Document;
@@ -433,6 +442,24 @@ public sealed class LayerPropertiesWindow : Window
             var row = BuildEffectCard(layer, effects, i, drag);
             drag.Rows.Add(row);
             list.Children.Add(row);
+            _cards[effects[i].Id] = row;
+        }
+        if (oldCardPositions.Count > 0)
+        {
+            var snapshot = _cards.ToList();
+            Dispatcher.UIThread.Post(() =>
+            {
+                foreach (var (id, row) in snapshot)
+                {
+                    if (row.TranslatePoint(default, _effectsPanel) is not { } now) continue;
+                    if (oldCardPositions.TryGetValue(id, out var old))
+                    {
+                        var dy = old.Y - now.Y;
+                        if (Math.Abs(dy) > 0.5) Motion.Slide(row, 0, dy);
+                    }
+                    else Motion.FadeSlideIn(row, "translateY(-6px)");
+                }
+            }, DispatcherPriority.Loaded);
         }
         _effectsPanel.Children.Add(new ScrollViewer
         {
@@ -527,7 +554,11 @@ public sealed class LayerPropertiesWindow : Window
             _slot = visual;
 
             list.Children.Remove(_indicator);
-            if (visual >= 0) list.Children.Insert(Math.Min(visual, list.Children.Count), _indicator);
+            if (visual >= 0)
+            {
+                list.Children.Insert(Math.Min(visual, list.Children.Count), _indicator);
+                Motion.FadeSlideIn(_indicator, "scaleX(0.6)", Motion.Quick, RelativePoint.Center);
+            }
         }
 
         private void Reset(Border card, Control row)

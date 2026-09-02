@@ -13,12 +13,12 @@ namespace MinePainter.App.Controls;
 ///
 /// 動不了 OS 視窗本身（無邊框 + 透明底），所以動的是內容；
 /// 關閉時先播完退場再真正 Hide/Close，否則會看到瞬間消失。
-/// 時間比照 Styles/Animations.axaml 的 90–160ms。
+/// 時長用 Motion 的 token（進場 Base、退場 Quick）。
 /// </summary>
 public static class WindowAnimator
 {
-    private static readonly TimeSpan InDuration = TimeSpan.FromMilliseconds(150);
-    private static readonly TimeSpan OutDuration = TimeSpan.FromMilliseconds(110);
+    private static readonly TimeSpan InDuration = Motion.Base;
+    private static readonly TimeSpan OutDuration = Motion.Quick;
 
     /// <summary>
     /// 應用程式正在關閉。此時所有子視窗必須立刻真的關掉 ——

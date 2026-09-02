@@ -225,7 +225,7 @@ public partial class LayersPanel : UserControl
     // ---- 結構變化動畫（FLIP） ----
 
     /// <summary>
-    /// 重建後把每列從舊位置滑到新位置（時間比照 Styles/Animations.axaml 的 90–160ms）。
+    /// 重建後把每列從舊位置滑到新位置（Motion.Move）。
     /// 舊位置沒有的節點＝新出現（新增圖層、展開群組）→ 淡入；
     /// 被刪掉/收起的列直接消失，動畫由其他列滑動補位來呈現。
     /// </summary>
@@ -249,52 +249,11 @@ public partial class LayersPanel : UserControl
         }
     }
 
-    /// <summary>從 (dx,dy) 的偏移滑回原位。</summary>
-    private static void SlideIn(ListBoxItem item, double dx, double dy)
-    {
-        item.RenderTransform = Avalonia.Media.Transformation.TransformOperations.Parse(
-            FormattableString.Invariant($"translate({dx}px, {dy}px)"));
-        item.Transitions =
-        [
-            new Avalonia.Animation.TransformOperationsTransition
-            {
-                Property = RenderTransformProperty,
-                Duration = TimeSpan.FromMilliseconds(140),
-                Easing = new Avalonia.Animation.Easings.CubicEaseOut(),
-            },
-        ];
-        // 先讓起始偏移套用一輪 layout，下一輪再設目標值（同 WindowAnimator）
-        Avalonia.Threading.Dispatcher.UIThread.Post(
-            () => item.RenderTransform = Avalonia.Media.Transformation.TransformOperations.Identity,
-            Avalonia.Threading.DispatcherPriority.Loaded);
-    }
+    /// <summary>從 (dx,dy) 的偏移滑回原位（Motion.Move）。</summary>
+    private static void SlideIn(ListBoxItem item, double dx, double dy) => Controls.Motion.Slide(item, dx, dy);
 
-    /// <summary>新列：淡入 + 從上方 6px 滑入。</summary>
-    private static void FadeIn(ListBoxItem item)
-    {
-        item.Opacity = 0;
-        item.RenderTransform = Avalonia.Media.Transformation.TransformOperations.Parse("translateY(-6px)");
-        item.Transitions =
-        [
-            new Avalonia.Animation.DoubleTransition
-            {
-                Property = OpacityProperty,
-                Duration = TimeSpan.FromMilliseconds(160),
-                Easing = new Avalonia.Animation.Easings.CubicEaseOut(),
-            },
-            new Avalonia.Animation.TransformOperationsTransition
-            {
-                Property = RenderTransformProperty,
-                Duration = TimeSpan.FromMilliseconds(160),
-                Easing = new Avalonia.Animation.Easings.CubicEaseOut(),
-            },
-        ];
-        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
-        {
-            item.Opacity = 1;
-            item.RenderTransform = Avalonia.Media.Transformation.TransformOperations.Identity;
-        }, Avalonia.Threading.DispatcherPriority.Loaded);
-    }
+    /// <summary>新列：淡入 + 從上方 6px 滑入（Motion.Base）。</summary>
+    private static void FadeIn(ListBoxItem item) => Controls.Motion.FadeSlideIn(item, "translateY(-6px)");
 
     /// <summary>底部操作列：icon-only 按鈕，尺寸與樣式比照工具面板。</summary>
     private void BuildActionBar()
@@ -354,8 +313,8 @@ public partial class LayersPanel : UserControl
             new Avalonia.Animation.DoubleTransition
             {
                 Property = RotateTransform.AngleProperty,
-                Duration = TimeSpan.FromMilliseconds(120),
-                Easing = new Avalonia.Animation.Easings.CubicEaseOut(),
+                Duration = Controls.Motion.Base,
+                Easing = Controls.Motion.Enter,
             },
         ];
         var chevron = new MaterialIcon

@@ -3,15 +3,16 @@
 
   <!--
     全域微動畫：所有互動元件的狀態切換都帶平滑過渡。
-    時間刻意壓在 90–160ms —— 夠滑順但不拖慢操作節奏。
+    時長跟 Controls/Motion.cs 的 token 對齊：Quick 100ms（按壓／退場）、Base 160ms（hover／進場）、
+    Move 200ms（位移）。程式碼裡的動畫也都從 Motion 拿時長，整個 app 才會是同一種節奏。
   -->
 
   <Style Selector="Button">
     <Setter Property="Transitions">
       <Transitions>
-        <BrushTransition Property="Background" Duration="0:0:0.14" Easing="CubicEaseOut" />
-        <BrushTransition Property="BorderBrush" Duration="0:0:0.14" Easing="CubicEaseOut" />
-        <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.11" Easing="CubicEaseOut" />
+        <BrushTransition Property="Background" Duration="0:0:0.16" Easing="CubicEaseOut" />
+        <BrushTransition Property="BorderBrush" Duration="0:0:0.16" Easing="CubicEaseOut" />
+        <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.1" Easing="CubicEaseOut" />
       </Transitions>
     </Setter>
     <Setter Property="RenderTransform" Value="scale(1)" />
@@ -23,9 +24,9 @@
   <Style Selector="ToggleButton">
     <Setter Property="Transitions">
       <Transitions>
-        <BrushTransition Property="Background" Duration="0:0:0.14" Easing="CubicEaseOut" />
-        <BrushTransition Property="BorderBrush" Duration="0:0:0.14" Easing="CubicEaseOut" />
-        <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.11" Easing="CubicEaseOut" />
+        <BrushTransition Property="Background" Duration="0:0:0.16" Easing="CubicEaseOut" />
+        <BrushTransition Property="BorderBrush" Duration="0:0:0.16" Easing="CubicEaseOut" />
+        <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.1" Easing="CubicEaseOut" />
       </Transitions>
     </Setter>
     <Setter Property="RenderTransform" Value="scale(1)" />
@@ -47,7 +48,7 @@
   <Style Selector="ListBoxItem">
     <Setter Property="Transitions">
       <Transitions>
-        <BrushTransition Property="Background" Duration="0:0:0.13" Easing="CubicEaseOut" />
+        <BrushTransition Property="Background" Duration="0:0:0.16" Easing="CubicEaseOut" />
       </Transitions>
     </Setter>
   </Style>
@@ -55,7 +56,7 @@
   <Style Selector="MenuItem">
     <Setter Property="Transitions">
       <Transitions>
-        <BrushTransition Property="Background" Duration="0:0:0.11" Easing="CubicEaseOut" />
+        <BrushTransition Property="Background" Duration="0:0:0.16" Easing="CubicEaseOut" />
       </Transitions>
     </Setter>
   </Style>
@@ -63,8 +64,8 @@
   <Style Selector="TextBox">
     <Setter Property="Transitions">
       <Transitions>
-        <BrushTransition Property="BorderBrush" Duration="0:0:0.15" Easing="CubicEaseOut" />
-        <BrushTransition Property="Background" Duration="0:0:0.15" Easing="CubicEaseOut" />
+        <BrushTransition Property="BorderBrush" Duration="0:0:0.16" Easing="CubicEaseOut" />
+        <BrushTransition Property="Background" Duration="0:0:0.16" Easing="CubicEaseOut" />
       </Transitions>
     </Setter>
   </Style>
@@ -72,8 +73,8 @@
   <Style Selector="ComboBox">
     <Setter Property="Transitions">
       <Transitions>
-        <BrushTransition Property="Background" Duration="0:0:0.14" Easing="CubicEaseOut" />
-        <BrushTransition Property="BorderBrush" Duration="0:0:0.14" Easing="CubicEaseOut" />
+        <BrushTransition Property="Background" Duration="0:0:0.16" Easing="CubicEaseOut" />
+        <BrushTransition Property="BorderBrush" Duration="0:0:0.16" Easing="CubicEaseOut" />
       </Transitions>
     </Setter>
   </Style>
@@ -81,7 +82,7 @@
   <Style Selector="CheckBox">
     <Setter Property="Transitions">
       <Transitions>
-        <BrushTransition Property="Background" Duration="0:0:0.13" Easing="CubicEaseOut" />
+        <BrushTransition Property="Background" Duration="0:0:0.16" Easing="CubicEaseOut" />
       </Transitions>
     </Setter>
   </Style>
@@ -115,7 +116,7 @@
   </Style>
   <Style Selector="MenuItem:open /template/ Popup#PART_Popup > Border">
     <Style.Animations>
-      <Animation Duration="0:0:0.14" Easing="CubicEaseOut" FillMode="Forward">
+      <Animation Duration="0:0:0.16" Easing="CubicEaseOut" FillMode="Forward">
         <KeyFrame Cue="0%">
           <Setter Property="Opacity" Value="0" />
           <Setter Property="TranslateTransform.Y" Value="-6" />
@@ -130,11 +131,49 @@
     </Style.Animations>
   </Style>
 
-  <!-- 浮動面板內容淡入 -->
-  <Style Selector="Border.panel-body">
+  <!-- 調色盤色票：滑過去微微浮起，點下去縮回（Button 的 pressed 縮放照常） -->
+  <Style Selector="Button.swatch">
+    <Setter Property="RenderTransformOrigin" Value="50%,50%" />
+    <Setter Property="ZIndex" Value="0" />
+  </Style>
+  <Style Selector="Button.swatch:pointerover">
+    <Setter Property="RenderTransform" Value="scale(1.18)" />
+    <Setter Property="ZIndex" Value="1" />
+  </Style>
+  <Style Selector="Button.swatch:pressed">
+    <Setter Property="RenderTransform" Value="scale(1.0)" />
+  </Style>
+
+  <Style Selector="RadioButton">
     <Setter Property="Transitions">
       <Transitions>
-        <DoubleTransition Property="Opacity" Duration="0:0:0.18" Easing="CubicEaseOut" />
+        <BrushTransition Property="Background" Duration="0:0:0.16" Easing="CubicEaseOut" />
+      </Transitions>
+    </Setter>
+  </Style>
+
+  <!-- 工具提示：淡入＋微微上浮，而不是突然蹦出來 -->
+  <Style Selector="ToolTip">
+    <Setter Property="RenderTransformOrigin" Value="50%,100%" />
+    <Style.Animations>
+      <Animation Duration="0:0:0.16" Easing="CubicEaseOut" FillMode="Forward">
+        <KeyFrame Cue="0%">
+          <Setter Property="Opacity" Value="0" />
+          <Setter Property="TranslateTransform.Y" Value="4" />
+        </KeyFrame>
+        <KeyFrame Cue="100%">
+          <Setter Property="Opacity" Value="1" />
+          <Setter Property="TranslateTransform.Y" Value="0" />
+        </KeyFrame>
+      </Animation>
+    </Style.Animations>
+  </Style>
+
+  <!-- 捲軸：滑過去才變粗、顏色淡入 -->
+  <Style Selector="ScrollBar /template/ Thumb">
+    <Setter Property="Transitions">
+      <Transitions>
+        <BrushTransition Property="Background" Duration="0:0:0.16" Easing="CubicEaseOut" />
       </Transitions>
     </Setter>
   </Style>
