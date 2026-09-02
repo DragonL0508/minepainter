@@ -115,6 +115,10 @@
             <MenuItem Header="主題(_T)…" Click="OnThemeClicked" />
             <MenuItem x:Name="StartupSoundMenuItem" Header="啟動音效" ToggleType="CheckBox"
                       Click="OnToggleStartupSoundClicked" />
+            <Separator />
+            <MenuItem Header="檢查更新(_U)…" Click="OnCheckUpdatesClicked" />
+            <MenuItem x:Name="CheckUpdatesMenuItem" Header="啟動時檢查更新" ToggleType="CheckBox"
+                      Click="OnToggleCheckUpdatesClicked" />
           </MenuItem>
         </controls:ClickSubmenuMenu>
       </DockPanel>

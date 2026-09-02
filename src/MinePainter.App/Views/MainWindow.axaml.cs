@@ -77,6 +77,7 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         StartupSoundMenuItem.IsChecked = Services.AppSettings.Instance.StartupSounds;
+        CheckUpdatesMenuItem.IsChecked = Services.AppSettings.Instance.CheckUpdatesOnStartup;
 
         // 預設最大化（使用者上次是視窗模式就沿用）；要在 Show 之前設好，
         // 不然會先閃一下 1360×860 再放大，浮動面板也要跟著重排一次
@@ -143,6 +144,7 @@ public partial class MainWindow : Window
         Opened += (_, _) =>
         {
             Services.StartupSounds.MainWindowShown();
+            _ = CheckUpdatesAsync(silent: true);
             PrepareBeforeShow(); // 正常流程 App 已先呼叫過（啟動畫面期間）；這裡是保險
             ShowPanels();
             StartPerfLabelTimer();
@@ -1303,6 +1305,13 @@ public partial class MainWindow : Window
             SavePanelLayout(withWindowState: true); // 面板還在才問得到位置
             foreach (var (panel, _) in PanelPairs()) panel.AllowClose();
             foreach (var owned in OwnedWindows.ToList()) owned.Close(); // 圖層屬性等臨時視窗
+            if (_pendingUpdaterScript is { } script)
+            {
+                // 更新：程式結束後由 updater 覆蓋 exe 並重啟
+                try { Services.UpdateService.Launch(script); }
+                catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"updater launch failed: {ex.Message}"); }
+                _pendingUpdaterScript = null;
+            }
             return;
         }
 
@@ -2080,6 +2089,77 @@ public partial class MainWindow : Window
     private void OnActualSizeClicked(object? sender, RoutedEventArgs e) => Canvas.SetZoomPercent(100);
 
     private void OnBestFitClicked(object? sender, RoutedEventArgs e) => Canvas.ZoomToFit();
+
+    // ---- 更新 ----
+
+    /// <summary>更新已下載好時的 updater 腳本；程式關閉的最後一步啟動它。</summary>
+    private string? _pendingUpdaterScript;
+    private bool _checkingUpdates;
+
+    private void OnCheckUpdatesClicked(object? sender, RoutedEventArgs e) => _ = CheckUpdatesAsync(silent: false);
+
+    private void OnToggleCheckUpdatesClicked(object? sender, RoutedEventArgs e)
+    {
+        Services.AppSettings.Instance.CheckUpdatesOnStartup = CheckUpdatesMenuItem.IsChecked;
+        Services.AppSettings.Instance.Save();
+        Toasts.Show(CheckUpdatesMenuItem.IsChecked ? "啟動時檢查更新：開" : "啟動時檢查更新：關");
+    }
+
+    /// <summary>
+    /// 查 GitHub 最新版。silent＝啟動時的靜默檢查：沒新版、查不到、開發建置、使用者略過的版本都不出聲；
+    /// 手動檢查則每種結果都回報。
+    /// </summary>
+    private async Task CheckUpdatesAsync(bool silent)
+    {
+        if (_checkingUpdates) return;
+        if (silent)
+        {
+            if (!Services.AppSettings.Instance.CheckUpdatesOnStartup) return;
+            if (Services.UpdateService.IsDevBuild || !Services.UpdateService.IsSupported) return;
+            await Task.Delay(TimeSpan.FromSeconds(3)); // 讓啟動先安靜完成
+        }
+        else if (!Services.UpdateService.IsSupported)
+        {
+            Toasts.Show("這個建置不支援程式內更新，請到下載頁取得新版");
+            return;
+        }
+
+        _checkingUpdates = true;
+        Services.UpdateInfo? info;
+        try
+        {
+            info = await Services.UpdateService.CheckAsync();
+        }
+        catch (Exception ex)
+        {
+            if (!silent) Toasts.Show("檢查更新失敗：" + ex.Message);
+            _checkingUpdates = false;
+            return;
+        }
+        _checkingUpdates = false;
+
+        if (info == null)
+        {
+            if (!silent) Toasts.Show($"已是最新版（{Services.UpdateService.CurrentVersion.ToString(3)}）");
+            return;
+        }
+        if (silent && string.Equals(Services.AppSettings.Instance.SkippedUpdateTag, info.Tag, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        var dialog = new UpdateDialog(info);
+        await dialog.ShowDialog(this);
+        switch (dialog.Result)
+        {
+            case UpdateDialog.Choice.Skip:
+                Services.AppSettings.Instance.SkippedUpdateTag = info.Tag;
+                Services.AppSettings.Instance.Save();
+                break;
+            case UpdateDialog.Choice.Update when dialog.UpdaterScript != null:
+                _pendingUpdaterScript = dialog.UpdaterScript;
+                Close(); // 走正常關閉流程（未儲存會問）；真的關掉時才啟動 updater
+                break;
+        }
+    }
 
     private void OnToggleStartupSoundClicked(object? sender, RoutedEventArgs e)
     {
