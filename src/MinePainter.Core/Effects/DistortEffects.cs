@@ -438,7 +438,10 @@ public sealed record TwistEffect : IEffect
 
 /// <summary>
 /// 傾斜（斜體）：把內容依角度切變。水平傾斜＝每往上一列就往右推一點（正值＝像斜體往右倒）。
-/// 基準線（不動的那條線）可選中心／上緣／下緣 —— 文字要像斜體就用「下緣」（基線不動）。
+///
+/// 基準線（不動的那條線）以「物件本身」（有顏色的那塊）的外框為準，不是整張圖層：
+/// 以圖層中線為基準的話，靠上的物件會整個被往旁邊平移出去 —— 看起來就是「只有上面被硬拉走」，
+/// 完全沒有繞著自己中心倒的感覺。上下緣同理（文字要像斜體就用「下緣」，基線不動）。
 /// </summary>
 public sealed record SkewEffect : IEffect
 {
@@ -459,7 +462,7 @@ public sealed record SkewEffect : IEffect
             (o, v) => ((SkewEffect)o) with { Horizontal = (float)v }, "°", 1),
         new SliderParam("vertical", "垂直傾斜", -80, 80, o => ((SkewEffect)o).Vertical,
             (o, v) => ((SkewEffect)o) with { Vertical = (float)v }, "°", 1),
-        new ChoiceParam("pivot", "基準", ["中心", "上緣", "下緣"],
+        new ChoiceParam("pivot", "基準", ["物件中心", "物件上緣", "物件下緣"],
             o => ((SkewEffect)o).Pivot, (o, v) => ((SkewEffect)o) with { Pivot = v }),
     ];
     public IReadOnlyList<ParamDef> Parameters => Params;
@@ -470,8 +473,9 @@ public sealed record SkewEffect : IEffect
         var shy = MathF.Tan(Math.Clamp(Vertical, -80f, 80f) * MathF.PI / 180f);
         if (shx == 0f && shy == 0f) { ctx.CopySrcToDst(); return; }
 
-        var pivotY = Pivot switch { 1 => 0f, 2 => ctx.Height, _ => ctx.Height / 2f };
-        var pivotX = ctx.Width / 2f;
+        var (left, top, right, bottom) = ContentBounds(ctx);
+        var pivotY = Pivot switch { 1 => top, 2 => bottom, _ => (top + bottom) / 2f };
+        var pivotX = (left + right) / 2f;
 
         ctx.ForRows(y =>
         {
@@ -485,5 +489,32 @@ public sealed record SkewEffect : IEffect
                 ctx.Dst[y * ctx.Width + x] = ctx.SrcBilinear(sx, sy);
             }
         });
+    }
+
+    /// <summary>
+    /// 物件（不透明像素）的外框，目標座標。整層都是透明時退回整個範圍 ——
+    /// 反正沒東西可倒，用哪條線當基準都一樣。
+    /// </summary>
+    private static (float Left, float Top, float Right, float Bottom) ContentBounds(EffectContext ctx)
+    {
+        var minX = int.MaxValue;
+        var minY = int.MaxValue;
+        var maxX = int.MinValue;
+        var maxY = int.MinValue;
+
+        for (var y = 0; y < ctx.Height; y++)
+        {
+            for (var x = 0; x < ctx.Width; x++)
+            {
+                if (A(ctx.SrcOrTransparent(x, y)) == 0) continue;
+                if (x < minX) minX = x;
+                if (x > maxX) maxX = x;
+                if (y < minY) minY = y;
+                if (y > maxY) maxY = y;
+            }
+        }
+
+        if (minX > maxX) return (0f, 0f, ctx.Width, ctx.Height);
+        return (minX, minY, maxX + 1, maxY + 1);
     }
 }

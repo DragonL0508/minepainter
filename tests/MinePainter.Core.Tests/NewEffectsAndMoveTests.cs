@@ -78,6 +78,40 @@ public class NewEffectsAndMoveTests
         Assert.True(BrightestX(ctx.Dst, n, n - 5) < 16, "下方應該往左移");
     }
 
+    [Fact]
+    public void Skew_PivotsOnTheObject_NotTheWholeLayer()
+    {
+        // 物件擺在圖層上半部：以圖層中線為基準的話整塊會被往旁邊平移，
+        // 以物件自己的中心為基準則是「上緣往右、下緣往左」，中心不動。
+        const int n = 64;
+        var src = new uint[n * n];
+        for (var y = 8; y < 24; y++)
+        for (var x = 24; x < 40; x++)
+            src[y * n + x] = Premul(255, 255, 255, 255);
+
+        var ctx = EffectContext.FromPixels(src, n, n);
+        new SkewEffect { Horizontal = 30, Vertical = 0, Pivot = 0 }.Render(ctx);
+
+        var top = BrightestX(ctx.Dst, n, 9);
+        var mid = CenterX(ctx.Dst, n, 15);
+        var bottom = BrightestX(ctx.Dst, n, 22);
+        Assert.InRange(mid, 30, 34);   // 物件中心（原本 24..40 → 中心 32）沒有跑掉
+        Assert.True(top > bottom, "上緣應該比下緣更右邊");
+    }
+
+    /// <summary>該列不透明像素的中心。</summary>
+    private static double CenterX(uint[] pixels, int width, int row)
+    {
+        double sum = 0, weight = 0;
+        for (var x = 0; x < width; x++)
+        {
+            var a = A(pixels[row * width + x]);
+            sum += a * (x + 0.5);
+            weight += a;
+        }
+        return weight <= 0 ? -1 : sum / weight;
+    }
+
     private static int BrightestX(uint[] pixels, int width, int row)
     {
         var best = 0;
