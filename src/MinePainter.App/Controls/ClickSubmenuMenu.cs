@@ -8,7 +8,7 @@ namespace MinePainter.App.Controls;
 
 /// <summary>
 /// 主選單：子選單「必須點擊才展開」（使用者明示），不像 Avalonia 預設滑過就延遲彈出；
-/// 點開之後滑鼠移出去也不會自動關（使用者明示），只有滑到兄弟項目、點別處或 Esc 才收。
+/// 點開之後滑鼠移出去、或滑過兄弟項目都不會自動關（使用者明示），只有點別的項目、點別處或 Esc 才收。
 /// 頂層項目維持慣例：選單已打開時滑過即切換。
 /// </summary>
 public sealed class ClickSubmenuMenu : Menu
@@ -63,24 +63,38 @@ internal sealed class ClickSubmenuInteractionHandler(bool isContextMenu, bool cl
 
     private bool Managed(MenuItem item) => item.HasSubMenu && (clickOnlyAtTopLevel || !item.IsTopLevel);
 
+    /// <summary>同層有兄弟的子清單已經打開（滑過任何項目都只高亮，不能把它關掉）。</summary>
+    private static bool SiblingOpen(MenuItem item) =>
+        item.Parent is ItemsControl parent &&
+        parent.Items.OfType<MenuItem>().Any(s => !ReferenceEquals(s, item) && s.IsSubMenuOpen);
+
+    private static void HighlightOnly(MenuItem item)
+    {
+        if (item.Parent is ItemsControl parent)
+        {
+            foreach (var sibling in parent.Items.OfType<MenuItem>())
+            {
+                if (!ReferenceEquals(sibling, item)) sibling.IsSelected = false;
+            }
+        }
+        item.IsSelected = true;
+    }
+
     protected override void PointerEntered(object? sender, RoutedEventArgs e)
     {
         var item = FindItem(e.Source);
-        if (item != null && Managed(item))
+        if (item != null)
         {
-            // 只高亮、關掉兄弟已開的子選單，不自動展開
-            if (item.Parent is ItemsControl parent)
+            // 有子清單的項目：只高亮，不自動展開。
+            // 兄弟的子清單已打開：不小心滑過其他項目也不能把它關掉（使用者明示），要點擊才切換。
+            var managed = Managed(item);
+            var keepOpen = (clickOnlyAtTopLevel || !item.IsTopLevel) && SiblingOpen(item);
+            if (managed || keepOpen)
             {
-                foreach (var sibling in parent.Items.OfType<MenuItem>())
-                {
-                    if (ReferenceEquals(sibling, item)) continue;
-                    if (sibling.IsSubMenuOpen) sibling.Close();
-                    sibling.IsSelected = false;
-                }
+                HighlightOnly(item);
+                e.Handled = true;
+                return;
             }
-            item.IsSelected = true;
-            e.Handled = true;
-            return;
         }
         base.PointerEntered(sender, e);
     }
@@ -104,6 +118,14 @@ internal sealed class ClickSubmenuInteractionHandler(bool isContextMenu, bool cl
         if (item != null && Managed(item) && !item.IsSubMenuOpen &&
             e.GetCurrentPoint(item).Properties.IsLeftButtonPressed)
         {
+            // 點擊才切換：先收掉兄弟已開的子清單，再展開這個
+            if (item.Parent is ItemsControl parent)
+            {
+                foreach (var sibling in parent.Items.OfType<MenuItem>())
+                {
+                    if (!ReferenceEquals(sibling, item) && sibling.IsSubMenuOpen) sibling.Close();
+                }
+            }
             item.Open();
             e.Handled = true;
             return;

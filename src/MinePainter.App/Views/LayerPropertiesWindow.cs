@@ -3,6 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.VisualTree;
 using MinePainter.App.Controls;
 using MinePainter.App.Services;
 using MinePainter.Core.Adjustments;
@@ -345,7 +346,7 @@ public sealed class LayerPropertiesWindow : Window
 
         // 標題列：名稱＋數量膠囊；右側三顆主要動作
         var title = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center };
-        title.Children.Add(new MaterialIcon { Kind = MaterialIconKind.AutoFix, Width = 15, Height = 15, Foreground = AppTheme.AccentBrush, VerticalAlignment = VerticalAlignment.Center });
+        title.Children.Add(new MaterialIcon { Kind = MaterialIconKind.AutoFix, Width = 15, Height = 15, Foreground = AppTheme.TextBrush, VerticalAlignment = VerticalAlignment.Center });
         title.Children.Add(new TextBlock { Text = "效果堆疊", FontSize = 12, FontWeight = FontWeight.Bold, VerticalAlignment = VerticalAlignment.Center });
         if (effects.Count > 0)
         {
@@ -359,7 +360,7 @@ public sealed class LayerPropertiesWindow : Window
             });
         }
 
-        var addButton = ActionButton(MaterialIconKind.Plus, "新增", "從效果／調整清單加一道（點分類展開）", accent: true);
+        var addButton = ActionButton(MaterialIconKind.Plus, "新增", "從效果／調整清單加一道（點分類展開）");
         addButton.Flyout = BuildAddFlyout(layer);
         var presetButton = ActionButton(MaterialIconKind.BookmarkOutline, "預設集", "套用／儲存整個堆疊");
         presetButton.Flyout = BuildPresetFlyout(layer, effects);
@@ -383,7 +384,7 @@ public sealed class LayerPropertiesWindow : Window
         if (effects.Count == 0)
         {
             // 空狀態：框＋引導，直接就地新增
-            var emptyAdd = ActionButton(MaterialIconKind.Plus, "新增第一道效果", "從效果／調整清單加一道", accent: true);
+            var emptyAdd = ActionButton(MaterialIconKind.Plus, "新增第一道效果", "從效果／調整清單加一道");
             emptyAdd.Flyout = BuildAddFlyout(layer);
             emptyAdd.HorizontalAlignment = HorizontalAlignment.Center;
             emptyAdd.Margin = new Thickness(0, 6, 0, 0);
@@ -417,11 +418,14 @@ public sealed class LayerPropertiesWindow : Window
             return;
         }
 
-        // 卡片清單（多道效果時內部捲動，視窗不無限長高）
+        // 卡片清單（多道效果時內部捲動，視窗不無限長高）；順序用拖曳卡片調整
         var list = new StackPanel { Spacing = 0 };
+        var drag = new ReorderDrag(this, layer, effects, list);
         for (var i = effects.Count - 1; i >= 0; i--)
         {
-            list.Children.Add(BuildEffectCard(layer, effects, i));
+            var row = BuildEffectCard(layer, effects, i, drag);
+            drag.Rows.Add(row);
+            list.Children.Add(row);
         }
         _effectsPanel.Children.Add(new ScrollViewer
         {
@@ -430,20 +434,130 @@ public sealed class LayerPropertiesWindow : Window
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
         });
-
-        // 閱讀方向提示
-        var hint = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, Margin = new Thickness(2, 4, 0, 0) };
-        hint.Children.Add(new MaterialIcon { Kind = MaterialIconKind.ArrowUp, Width = 11, Height = 11, Foreground = AppTheme.TextMutedBrush, VerticalAlignment = VerticalAlignment.Center });
-        hint.Children.Add(new TextBlock
-        {
-            Text = "上面的最後套用，最下面的先套用；雙擊卡片可重新調整參數",
-            FontSize = 10, Foreground = AppTheme.TextMutedBrush, VerticalAlignment = VerticalAlignment.Center,
-        });
-        _effectsPanel.Children.Add(hint);
     }
 
-    /// <summary>一道效果的卡片：步驟編號（含上下連線）｜開關｜名稱＋參數摘要｜圖示動作。</summary>
-    private Control BuildEffectCard(RasterLayer layer, IReadOnlyList<LayerEffect> effects, int i)
+    /// <summary>
+    /// 卡片拖曳排序：按住卡片空白處往上下拖，白色插入線指出會落在哪一格，放開才套用（一步 undo）。
+    /// 插入位置用拖曳開始時各列中線的快照判定 —— 插入線本身會把下面的列推開，
+    /// 即時量會在邊界來回抖。
+    /// </summary>
+    private sealed class ReorderDrag(LayerPropertiesWindow owner, RasterLayer layer, IReadOnlyList<LayerEffect> effects, StackPanel list)
+    {
+        public List<Control> Rows { get; } = new(); // 視覺順序（0 = 最上面 = 最後套用）
+
+        private readonly Border _indicator = new()
+        {
+            Height = 2, Margin = new Thickness(28, 2, 0, 2), Background = Brushes.White, CornerRadius = new CornerRadius(1),
+        };
+        private Control? _row;
+        private Point _start;         // 按下時在 list 座標的位置
+        private double[] _midlines = [];
+        private bool _dragging;
+        private int _slot = -1;       // 插入位置（視覺順序，0..n）
+
+        private const double Threshold = 4;
+
+        public void Attach(Border card, Control row)
+        {
+            card.PointerPressed += (_, e) =>
+            {
+                if (!e.GetCurrentPoint(card).Properties.IsLeftButtonPressed) return;
+                if (e.Source is Visual src && src.FindAncestorOfType<Button>(true) != null) return;
+                if (e.Source is Visual src2 && src2.FindAncestorOfType<CheckBox>(true) != null) return;
+                _row = row;
+                _start = e.GetPosition(list);
+                _dragging = false;
+                e.Pointer.Capture(card);
+            };
+            card.PointerMoved += (_, e) =>
+            {
+                if (_row != row) return;
+                var pos = e.GetPosition(list);
+                var dy = pos.Y - _start.Y;
+                if (!_dragging)
+                {
+                    if (Math.Abs(dy) < Threshold) return;
+                    _dragging = true;
+                    _midlines = Rows.Select(r => r.Bounds.Y + r.Bounds.Height / 2).ToArray();
+                    card.Opacity = 0.75;
+                    row.ZIndex = 1;
+                    card.Cursor = new Cursor(StandardCursorType.SizeNorthSouth);
+                }
+                row.RenderTransform = new TranslateTransform(0, dy);
+                UpdateSlot(pos.Y);
+            };
+            card.PointerReleased += (_, e) =>
+            {
+                if (_row != row) return;
+                e.Pointer.Capture(null);
+                var wasDragging = _dragging;
+                var slot = _slot;
+                Reset(card, row);
+                if (wasDragging && slot >= 0) Apply(row, slot);
+            };
+            card.PointerCaptureLost += (_, _) =>
+            {
+                if (_row == row) Reset(card, row);
+            };
+        }
+
+        private void UpdateSlot(double y)
+        {
+            var from = Rows.IndexOf(_row!);
+            // 不含被拖的那列：滑鼠在第幾條中線之下，就插在第幾格
+            var slot = 0;
+            for (var v = 0; v < Rows.Count; v++)
+            {
+                if (v == from) continue;
+                if (y > _midlines[v]) slot++;
+            }
+            // 換算回「含自己」的視覺插入位置；落回原位（前後）就不顯示
+            var visual = slot >= from ? slot + 1 : slot;
+            if (visual == from || visual == from + 1) visual = -1;
+            if (visual == _slot) return;
+            _slot = visual;
+
+            list.Children.Remove(_indicator);
+            if (visual >= 0) list.Children.Insert(Math.Min(visual, list.Children.Count), _indicator);
+        }
+
+        private void Reset(Border card, Control row)
+        {
+            _row = null;
+            _dragging = false;
+            _slot = -1;
+            list.Children.Remove(_indicator);
+            row.RenderTransform = null;
+            row.ZIndex = 0;
+            card.Opacity = card.Tag is double o ? o : 1;
+            card.Cursor = Cursor.Default;
+        }
+
+        private void Apply(Control row, int visualSlot)
+        {
+            var from = Rows.IndexOf(row);
+            if (from < 0) return;
+            var order = Rows.ToList();
+            order.RemoveAt(from);
+            var insertAt = visualSlot > from ? visualSlot - 1 : visualSlot;
+            order.Insert(Math.Clamp(insertAt, 0, order.Count), row);
+
+            // 視覺順序 → 堆疊順序（反向）
+            var after = new List<LayerEffect>();
+            for (var v = order.Count - 1; v >= 0; v--)
+            {
+                var i = effects.Count - 1 - Rows.IndexOf(order[v]);
+                after.Add(effects[i]);
+            }
+            if (after.Select(e => e.Id).SequenceEqual(effects.Select(e => e.Id))) return;
+            LayerEffectCommands.SetEffects(owner._session.Document, owner._session.History, layer, effects, after, "調整效果順序");
+            owner.StateChanged?.Invoke();
+            owner.SyncFromModel();
+        }
+    }
+
+    /// <summary>一道效果的卡片：步驟編號（含上下連線）｜開關｜名稱＋參數摘要｜圖示動作。拖曳卡片可排序。</summary>
+    private Control BuildEffectCard(RasterLayer layer, IReadOnlyList<LayerEffect> effects, int i, ReorderDrag drag)
     {
         var doc = _session.Document;
         var fx = effects[i];
@@ -451,8 +565,7 @@ public sealed class LayerPropertiesWindow : Window
         var isBottom = i == 0;
         var canEdit = fx.Effect.Parameters.Count > 0;
 
-        // 左側 gutter：連線＋編號圓點（編號＝套用順序，1 在最下面）
-        // 上下兩半各一段連線（首尾卡片只畫一半），編號圓點蓋在中間 —— 串成一條管線
+        // 左側 gutter：上下兩半各一段連線（首尾卡片只畫一半），編號圓點蓋在中間 —— 串成一條管線
         var gutter = new Grid { Width = 26, RowDefinitions = new RowDefinitions("*,*") };
         var lineBrush = new SolidColorBrush(AppTheme.TextMutedBrush.Color, 0.45);
         var lineUp = new Border
@@ -471,14 +584,14 @@ public sealed class LayerPropertiesWindow : Window
         {
             Width = 20, Height = 20,
             CornerRadius = new CornerRadius(10),
-            Background = fx.Enabled ? AppTheme.AccentBrush : AppTheme.SeparatorBrush,
+            Background = fx.Enabled ? Brushes.White : AppTheme.SeparatorBrush,
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center,
             Child = new TextBlock
             {
                 Text = (i + 1).ToString(),
                 FontSize = 10, FontWeight = FontWeight.Bold,
-                Foreground = Brushes.White,
+                Foreground = fx.Enabled ? Brushes.Black : Brushes.White,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,
             },
@@ -542,7 +655,7 @@ public sealed class LayerPropertiesWindow : Window
             Foreground = AppTheme.TextMutedBrush,
             TextTrimming = TextTrimming.CharacterEllipsis,
         });
-        ToolTip.SetTip(text, DescribeEffect(fx));
+        ToolTip.SetTip(text, DescribeEffect(fx) + "\n拖曳卡片可調整順序；雙擊重新調整參數");
 
         // 圖示動作
         var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 0, VerticalAlignment = VerticalAlignment.Center };
@@ -558,17 +671,9 @@ public sealed class LayerPropertiesWindow : Window
             await main.EditLayerEffectAsync(layer, fx);
             SyncFromModel();
         };
-        var up = IconButton(MaterialIconKind.ChevronUp, "往上（更晚套用）");
-        up.IsEnabled = !isTop;
-        up.Click += (_, _) => { LayerEffectCommands.Move(doc, _session.History, layer, fx.Id, +1); StateChanged?.Invoke(); SyncFromModel(); };
-        var down = IconButton(MaterialIconKind.ChevronDown, "往下（更早套用）");
-        down.IsEnabled = !isBottom;
-        down.Click += (_, _) => { LayerEffectCommands.Move(doc, _session.History, layer, fx.Id, -1); StateChanged?.Invoke(); SyncFromModel(); };
         var remove = IconButton(MaterialIconKind.Close, "移除這道效果");
         remove.Click += (_, _) => { LayerEffectCommands.Remove(doc, _session.History, layer, fx.Id); StateChanged?.Invoke(); SyncFromModel(); };
         actions.Children.Add(edit);
-        actions.Children.Add(up);
-        actions.Children.Add(down);
         actions.Children.Add(remove);
 
         DockPanel.SetDock(enabled, Dock.Left);
@@ -583,6 +688,7 @@ public sealed class LayerPropertiesWindow : Window
             Padding = new Thickness(6, 5),
             Margin = new Thickness(0, 2),
             Opacity = fx.Enabled ? 1 : 0.6,
+            Tag = fx.Enabled ? 1.0 : 0.6, // 拖曳結束還原用
             Child = body,
         };
         card.PointerEntered += (_, _) => card.Background = AppTheme.HeaderBrush;
@@ -593,7 +699,9 @@ public sealed class LayerPropertiesWindow : Window
         };
 
         DockPanel.SetDock(gutter, Dock.Left);
-        return new DockPanel { Children = { gutter, card } };
+        var row = new DockPanel { Children = { gutter, card } };
+        drag.Attach(card, row);
+        return row;
     }
 
     /// <summary>卡片第二行的參數摘要（只列參數，不重複名稱）。</summary>
@@ -613,14 +721,14 @@ public sealed class LayerPropertiesWindow : Window
         return string.Join(" · ", parts);
     }
 
-    /// <summary>標題列的動作鈕：圖示＋文字；accent＝主要動作（新增）。</summary>
-    private static Button ActionButton(MaterialIconKind icon, string text, string tip, bool accent = false)
+    /// <summary>標題列的動作鈕：圖示＋文字。</summary>
+    private static Button ActionButton(MaterialIconKind icon, string text, string tip)
     {
         var content = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
         content.Children.Add(new MaterialIcon
         {
             Kind = icon, Width = 13, Height = 13, VerticalAlignment = VerticalAlignment.Center,
-            Foreground = accent ? AppTheme.AccentBrush : AppTheme.TextBrush,
+            Foreground = AppTheme.TextBrush,
         });
         content.Children.Add(new TextBlock { Text = text, FontSize = 11, VerticalAlignment = VerticalAlignment.Center });
         var b = new Button
