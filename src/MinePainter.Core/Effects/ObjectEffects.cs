@@ -3,7 +3,7 @@ using static MinePainter.Core.Effects.EffectMath;
 
 namespace MinePainter.Core.Effects;
 
-/// <summary>兩趟 chamfer 距離變換（3-4 權重，單位 = 1/3 px）；距離以「到最近不透明像素」計。</summary>
+/// <summary>精確歐氏距離變換（見 <see cref="Propagate"/>）；距離以「到最近不透明像素」計。</summary>
 internal static class DistanceTransform
 {
     public static float[] FromAlpha(EffectContext ctx, int pad)
@@ -46,35 +46,63 @@ internal static class DistanceTransform
         return d;
     }
 
+    /// <summary>
+    /// 精確歐氏距離變換（Meijster 分離式，O(w·h)）：輸入 0 = 特徵像素、其餘任意大；
+    /// 輸出每格到最近特徵像素的直線距離（px）。外框／羽化的邊角因此是真正的圓弧，
+    /// 不像 chamfer 近似會出現八角形稜角。
+    /// </summary>
     private static void Propagate(float[] d, int w, int h)
     {
-
-        // 前向
-        for (var y = 0; y < h; y++)
+        var inf = (float)(w + h + 1);
+        // 第一趟：每欄的垂直距離 g
+        var g = new float[w * h];
         for (var x = 0; x < w; x++)
         {
-            ref var v = ref d[y * w + x];
-            if (v == 0) continue;
-            if (x > 0) v = Math.Min(v, d[y * w + x - 1] + 1f);
-            if (y > 0)
-            {
-                v = Math.Min(v, d[(y - 1) * w + x] + 1f);
-                if (x > 0) v = Math.Min(v, d[(y - 1) * w + x - 1] + 1.4142f);
-                if (x < w - 1) v = Math.Min(v, d[(y - 1) * w + x + 1] + 1.4142f);
-            }
+            g[x] = d[x] == 0 ? 0 : inf;
+            for (var y = 1; y < h; y++)
+                g[y * w + x] = d[y * w + x] == 0 ? 0 : g[(y - 1) * w + x] + 1;
+            for (var y = h - 2; y >= 0; y--)
+                if (g[(y + 1) * w + x] + 1 < g[y * w + x]) g[y * w + x] = g[(y + 1) * w + x] + 1;
         }
-        // 後向
-        for (var y = h - 1; y >= 0; y--)
-        for (var x = w - 1; x >= 0; x--)
+
+        // 第二趟：每列取拋物線下包絡
+        var s = new int[w];
+        var t = new int[w];
+        var gy = new float[w];
+        for (var y = 0; y < h; y++)
         {
-            ref var v = ref d[y * w + x];
-            if (v == 0) continue;
-            if (x < w - 1) v = Math.Min(v, d[y * w + x + 1] + 1f);
-            if (y < h - 1)
+            var row = y * w;
+            for (var x = 0; x < w; x++) gy[x] = g[row + x];
+
+            float F(int x, int i) { var dx = x - i; return dx * dx + gy[i] * gy[i]; }
+            int Sep(int i, int u) => (int)MathF.Floor((u * u - i * i + gy[u] * gy[u] - gy[i] * gy[i]) / (2f * (u - i)));
+
+            var q = 0;
+            s[0] = 0;
+            t[0] = 0;
+            for (var u = 1; u < w; u++)
             {
-                v = Math.Min(v, d[(y + 1) * w + x] + 1f);
-                if (x < w - 1) v = Math.Min(v, d[(y + 1) * w + x + 1] + 1.4142f);
-                if (x > 0) v = Math.Min(v, d[(y + 1) * w + x - 1] + 1.4142f);
+                while (q >= 0 && F(t[q], s[q]) > F(t[q], u)) q--;
+                if (q < 0)
+                {
+                    q = 0;
+                    s[0] = u;
+                }
+                else
+                {
+                    var wv = 1 + Sep(s[q], u);
+                    if (wv < w)
+                    {
+                        q++;
+                        s[q] = u;
+                        t[q] = wv;
+                    }
+                }
+            }
+            for (var u = w - 1; u >= 0; u--)
+            {
+                d[row + u] = MathF.Sqrt(F(u, s[q]));
+                if (u == t[q]) q--;
             }
         }
     }

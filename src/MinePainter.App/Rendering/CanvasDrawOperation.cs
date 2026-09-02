@@ -294,15 +294,11 @@ public sealed class CanvasDrawOperation : ICustomDrawOperation
 
     /// <summary>在 doc 座標系（canvas 已套 viewport 變換）畫螞蟻線與工具預覽。</summary>
     /// <summary>
-    /// 上屏取樣：縮小 → Medium（linear+mipmap）；整數倍放大 → nearest（像素編輯要看到硬邊）；
-    /// 非整數倍放大（133%、150%…）→ Low（bilinear），否則抗鋸齒邊緣會被拉成忽粗忽細的階梯。
+    /// 上屏取樣：縮小 → Medium（linear+mipmap）；放大（含非整數倍）→ nearest。
+    /// 像素創作是核心：64×64 的圖放到 12.3 倍時用 bilinear 會整張糊掉，硬邊比階梯抖動重要（與 paint.net 一致）。
     /// </summary>
-    private static SKFilterQuality QualityFor(double scale)
-    {
-        if (scale < 1) return SKFilterQuality.Medium;
-        var isInteger = Math.Abs(scale - Math.Round(scale)) < 0.001;
-        return isInteger ? SKFilterQuality.None : SKFilterQuality.Low;
-    }
+    private static SKFilterQuality QualityFor(double scale) =>
+        scale < 1 ? SKFilterQuality.Medium : SKFilterQuality.None;
 
     /// <summary>
     /// 像素格線（對像素創作是核心功能）。線寬用 1/zoom 讓螢幕上恆為 1px，
