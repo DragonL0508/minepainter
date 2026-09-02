@@ -62,6 +62,9 @@ public static class ShortcutMap
         new("layer.flipV", "圖層", "垂直翻轉圖層", null),
         new("layer.properties", "圖層", "圖層屬性", new KeyGesture(Key.F4)),
         new("layer.removeBackground", "圖層", "AI 去背", null),
+        new("layer.transformFree", "圖層", "自由變形", new KeyGesture(Key.T, KeyModifiers.Control)),
+        new("layer.transformPerspective", "圖層", "透視變形", null),
+        new("layer.transformDistort", "圖層", "扭曲變形", null),
 
         new("view.zoomIn", "檢視", "放大", new KeyGesture(Key.OemPlus, KeyModifiers.Control)),
         new("view.zoomOut", "檢視", "縮小", new KeyGesture(Key.OemMinus, KeyModifiers.Control)),
@@ -79,6 +82,7 @@ public static class ShortcutMap
         new("tool.fill", "工具", "油漆桶", new KeyGesture(Key.F)),
         new("tool.text", "工具", "文字", new KeyGesture(Key.T)),
         new("tool.shape", "工具", "形狀", new KeyGesture(Key.O)),
+        new("tool.pen", "工具", "鋼筆", new KeyGesture(Key.P)),
 
         // 按住型：壓著進入對齊模式（移動框時吸附畫布四邊與中線），放開即退出
         new("tool.alignHold", "工具", "對齊模式（按住）", new KeyGesture(Key.Tab)),

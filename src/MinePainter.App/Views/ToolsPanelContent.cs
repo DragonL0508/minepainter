@@ -23,6 +23,7 @@ public sealed class ToolsPanelContent : UserControl
         ("eyedropper", MaterialIconKind.Eyedropper, "滴管 (I)"),
         ("text", MaterialIconKind.FormatText, "文字 (T)"),
         ("shape", MaterialIconKind.ShapeOutline, "形狀 (O)"),
+        ("pen", MaterialIconKind.VectorBezier, "鋼筆 (P)：點一下加角點、按住拖曳拉出曲線、點回起點封閉；Enter 轉為選取、Backspace 退一點、Esc 清除"),
     ];
 
     private readonly Dictionary<string, ToggleButton> _buttons = new();
@@ -50,6 +51,9 @@ public sealed class ToolsPanelContent : UserControl
                 VerticalContentAlignment = VerticalAlignment.Center,
             };
             ToolTip.SetTip(button, tip);
+            // 選中底色交給底下的指示器（Animations.axaml 把 .tool 的 checked 底色設成透明）——
+            // 兩者疊在一起時，按鈕自己的不透明底色會把指示器整塊蓋住，只剩邊緣漏出一條藍線
+            button.Classes.Add("tool");
 
             var captured = key;
             button.IsCheckedChanged += (_, _) =>
@@ -77,7 +81,9 @@ public sealed class ToolsPanelContent : UserControl
             Height = 30,
             CornerRadius = new CornerRadius(4),
             Background = AppTheme.AccentBrush,
-            Opacity = 0.35,
+            BorderBrush = AppTheme.AccentBrush,
+            BorderThickness = new Thickness(1),
+            Opacity = 0.45,
             HorizontalAlignment = HorizontalAlignment.Left,
             VerticalAlignment = VerticalAlignment.Top,
             IsHitTestVisible = false,
@@ -94,7 +100,10 @@ public sealed class ToolsPanelContent : UserControl
     {
         if (_activeKey == null || !_buttons.TryGetValue(_activeKey, out var button)) return;
         if (button.Bounds.Width <= 0) return; // 尚未排版
-        if (button.TranslatePoint(new Point(0, 0), _host) is not { } p) return;
+        if (button.TranslatePoint(new Point(0, 0), _host) is not { } raw) return;
+        // 按鈕在 43px 寬的格子裡置中，位置是 x.5 的小數：按鈕本身會貼齊像素，
+        // 指示器走 RenderTransform 平移不會 —— 不取整就會偏半格、邊緣糊成一條線
+        var p = new Point(Math.Round(raw.X), Math.Round(raw.Y));
         if (_indicator.IsVisible && p == _lastIndicatorPos) return; // 每次 layout 都會來，位置沒變就別打斷進行中的滑動
         _lastIndicatorPos = p;
         var target = Controls.Motion.Translate(p.X, p.Y);

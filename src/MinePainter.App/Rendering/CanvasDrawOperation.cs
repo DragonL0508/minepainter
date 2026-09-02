@@ -42,7 +42,12 @@ public sealed class CanvasDrawOperation : ICustomDrawOperation
         _highlightSelection = session.ActiveTool == session.RectSelect ||
                               session.ActiveTool == session.Lasso ||
                               session.ActiveTool == session.Wand;
+        _showPenPath = session.ActiveTool == session.Pen;
+        _quadEdgeHandles = session.Move.TransformMode == TransformMode.Distort;
     }
+
+    private readonly bool _showPenPath;
+    private readonly bool _quadEdgeHandles;
 
     public Rect Bounds { get; }
 
@@ -377,8 +382,35 @@ public sealed class CanvasDrawOperation : ICustomDrawOperation
             canvas.DrawPath(outline, black);
         }
 
+        // 四角模式（透視／扭曲）的把手框：畫四邊形本身，角把手（扭曲另有邊把手）
+        if (_session.SelectionHandlesQuad is { Length: 4 } quad)
+        {
+            using var qframe = new SKPaint
+            {
+                Style = SKPaintStyle.Stroke,
+                StrokeWidth = screenPx,
+                Color = new SKColor(0x2A, 0x9D, 0xF4),
+                IsAntialias = true,
+            };
+            using var qpath = new SKPath();
+            qpath.MoveTo(quad[0]);
+            for (var i = 1; i < 4; i++) qpath.LineTo(quad[i]);
+            qpath.Close();
+            canvas.DrawPath(qpath, qframe);
+
+            using var qfill = new SKPaint { Color = SKColors.White, IsAntialias = true };
+            var qs = 4f * screenPx;
+            var handles = Core.Tools.QuadGeometry.HandlePoints(quad);
+            var count = _quadEdgeHandles ? 8 : 4;
+            for (var i = 0; i < count; i++)
+            {
+                var box = SKRect.Create(handles[i].X - qs, handles[i].Y - qs, qs * 2, qs * 2);
+                canvas.DrawRect(box, qfill);
+                canvas.DrawRect(box, qframe);
+            }
+        }
         // 向量元素選取把手（變形 session 旋轉時整個框跟著轉）
-        if (_session.SelectionHandles is { } hr)
+        else if (_session.SelectionHandles is { } hr)
         {
             var frameRotation = _session.SelectionHandlesRotation;
             var rotated = Math.Abs(frameRotation) > 0.01f;
@@ -460,6 +492,68 @@ public sealed class CanvasDrawOperation : ICustomDrawOperation
                 IsAntialias = true,
             };
             canvas.DrawPath(path, paint);
+        }
+
+        if (_showPenPath && _session.PenPath is { IsEmpty: false } pen)
+            DrawPenPath(canvas, pen, screenPx);
+    }
+
+    /// <summary>
+    /// 鋼筆工作路徑：曲線（白底＋主題藍雙層，任何底色都看得見）、錨點方塊（選中＝實心）、
+    /// 選中錨點的把手（細線＋小圓）。全部維持螢幕固定大小。
+    /// </summary>
+    private static void DrawPenPath(SKCanvas canvas, Core.Vectors.PenPath pen, float screenPx)
+    {
+        var accent = new SKColor(0x2A, 0x9D, 0xF4);
+        using var curve = pen.ToSKPath();
+        using var under = new SKPaint
+        {
+            Style = SKPaintStyle.Stroke, StrokeWidth = 3f * screenPx,
+            Color = new SKColor(0xFF, 0xFF, 0xFF, 0xB0), IsAntialias = true,
+        };
+        using var over = new SKPaint
+        {
+            Style = SKPaintStyle.Stroke, StrokeWidth = screenPx, Color = accent, IsAntialias = true,
+        };
+        canvas.DrawPath(curve, under);
+        canvas.DrawPath(curve, over);
+
+        using var fill = new SKPaint { Color = SKColors.White, IsAntialias = true };
+        using var fillActive = new SKPaint { Color = accent, IsAntialias = true };
+        using var handleLine = new SKPaint
+        {
+            Style = SKPaintStyle.Stroke, StrokeWidth = screenPx,
+            Color = new SKColor(0x2A, 0x9D, 0xF4, 0xC0), IsAntialias = true,
+        };
+        var hs = 3.5f * screenPx;
+        var r = 3f * screenPx;
+
+        // 選中錨點的把手先畫（在錨點底下）
+        if (pen.Active >= 0 && pen.Active < pen.Count)
+        {
+            var a = pen.Anchors[pen.Active];
+            foreach (var h in new[] { (a.HasHandleIn, a.HandleIn), (a.HasHandleOut, a.HandleOut) })
+            {
+                if (!h.Item1) continue;
+                canvas.DrawLine(a.Point, h.Item2, handleLine);
+                canvas.DrawCircle(h.Item2, r, fill);
+                canvas.DrawCircle(h.Item2, r, over);
+            }
+        }
+
+        for (var i = 0; i < pen.Count; i++)
+        {
+            var p = pen.Anchors[i].Point;
+            var box = SKRect.Create(p.X - hs, p.Y - hs, hs * 2, hs * 2);
+            canvas.DrawRect(box, i == pen.Active ? fillActive : fill);
+            canvas.DrawRect(box, over);
+        }
+
+        // 起點可封閉時（接著畫、≥2 點）給一個提示圈
+        if (pen.IsAppendable && pen.Count >= 2)
+        {
+            var p0 = pen.Anchors[0].Point;
+            canvas.DrawCircle(p0, hs * 2f, handleLine);
         }
     }
 

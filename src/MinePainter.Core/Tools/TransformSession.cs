@@ -51,6 +51,65 @@ public sealed class TransformSession : IDisposable
     private bool _preIsIdentity = true;
     private float _baseRotation;     // 續接時開始的角度（IsIdentity / 相對旋轉的基準）
 
+    // ---- 四角模式（透視／扭曲，Photoshop「編輯 → 變形 → 透視／扭曲」）----
+    // 進入四角模式時把矩形模式的狀態凍結：之後的映射 = 單應(起始四角 → 目前四角) × 凍結時的矩陣。
+    // 像素照常以「原始像素 × 單一累積矩陣」重取樣（矩陣含透視項，Skia 直接吃），不變量不變。
+    private SKPoint[]? _quad;         // 目前四角（doc 座標；0 左上 1 右上 2 右下 3 左下）
+    private SKPoint[]? _quadStart;    // 進入時的框四角（＝四角模式的 identity）
+    private SKMatrix _quadBase = SKMatrix.Identity; // 進入時的矩形模式矩陣
+    private SKPoint[]? _stampedQuad;  // 蓋章時的四角（Offset=Base 基準；純平移判斷用）
+
+    /// <summary>四角模式中的四角（null＝矩形模式）。陣列視為 immutable，每次改動換新實例（render thread 直接讀）。</summary>
+    public SKPoint[]? Quad => _quad;
+
+    /// <summary>目前框在畫面上的外接矩形：四角模式取四角外框，矩形模式就是 TargetRect。</summary>
+    public SKRect FrameRect => _quad != null ? QuadGeometry.Bounds(_quad) : TargetRect;
+
+    /// <summary>把手框該畫的旋轉角：四角模式的框本身就是四邊形，不再另外轉。</summary>
+    public float DisplayRotation => _quad != null ? 0f : RotationDeg;
+
+    /// <summary>文字物件沒有透視這回事（PS 也是先柵格化）：有物件的目標不能進四角模式。</summary>
+    public bool CanUseQuad => _items.All(i => i.StartElements.Length == 0);
+
+    /// <summary>
+    /// 進入四角模式：以目前框（含旋轉）的四角為起點。已在四角模式回 true；有文字物件回 false。
+    /// 矩形模式的 TargetRect／RotationDeg 之後凍結不再變（呼叫端一律改四角）。
+    /// </summary>
+    public bool EnterQuadMode()
+    {
+        if (_disposed) return false;
+        if (_quad != null) return true;
+        if (!CanUseQuad) return false;
+
+        _quadBase = Matrix; // 矩形模式的累積矩陣（此時 _quad 仍為 null）
+        var center = new SKPoint(TargetRect.MidX, TargetRect.MidY);
+        _quadStart = QuadGeometry.Rotated(QuadGeometry.Corners(TargetRect), center, RotationDeg);
+        _quad = (SKPoint[])_quadStart.Clone();
+        // 目前蓋章的像素位置 = 現在的框 − 純平移位移（蓋章一律在 Offset=Base 基準）
+        _stampedQuad = QuadGeometry.Translated(_quadStart, -OffsetDelta.X, -OffsetDelta.Y);
+        return true;
+    }
+
+    /// <summary>設定四角（拒絕凹／翻面／退化的四邊形，回 false 表示沒改）。之後要呼叫 Apply。</summary>
+    public bool SetQuad(SKPoint[] quad)
+    {
+        if (_disposed || _quad == null || quad.Length != 4) return false;
+        if (!QuadGeometry.IsConvex(quad)) return false;
+        if (QuadGeometry.NearlyEqual(quad, _quad, 0.001f)) return false;
+        _quad = (SKPoint[])quad.Clone();
+        return true;
+    }
+
+    /// <summary>四角回到進入四角模式時的位置（「重設」鈕）。</summary>
+    public void ResetQuad()
+    {
+        if (_quad == null || _quadStart == null) return;
+        _quad = (SKPoint[])_quadStart.Clone();
+    }
+
+    /// <summary>四角模式且四角已偏離起點。</summary>
+    public bool IsQuadChanged => _quad != null && _quadStart != null && !QuadGeometry.NearlyEqual(_quad, _quadStart);
+
     // 蓋章狀態：目前圖層裡的像素是用哪組參數蓋出來的
     private (float Sx, float Sy, float Rot, float W, float H) _stampedParams;
     private SKPoint _stampedOrigin;  // 蓋章時 TargetRect 的左上（呈現位置 = 這裡 + OffsetDelta）
@@ -106,8 +165,11 @@ public sealed class TransformSession : IDisposable
         }
     }
 
-    public bool IsIdentity =>
-        TargetRect == SourceRect && DeltaRotation == 0f;
+    private bool RectIsIdentity => TargetRect == SourceRect && DeltaRotation == 0f;
+
+    public bool IsIdentity => _quad != null
+        ? RectIsIdentity && !IsQuadChanged
+        : RectIsIdentity;
 
     /// <summary>
     /// 「重設角度與比例」該回到的尺寸：第一輪＝SourceRect；續接時＝最初提起時的原始尺寸
@@ -141,6 +203,8 @@ public sealed class TransformSession : IDisposable
         _stampedHigh = true;
         _pixelsStamped = false;
         OffsetDelta = SKPointI.Empty;
+        // 四角模式：原始像素 = 起始四角（identity 時 _quadBase 也是 identity）
+        _stampedQuad = _quadStart == null ? null : (SKPoint[])_quadStart.Clone();
     }
 
     /// <summary>SourceRect → 目前狀態 的完整映射（縮放平移在前、旋轉在後）。</summary>
@@ -148,6 +212,13 @@ public sealed class TransformSession : IDisposable
     {
         get
         {
+            // 四角模式：單應(起始四角 → 目前四角) 疊在凍結的矩形模式矩陣上
+            if (_quad != null && _quadStart != null)
+            {
+                if (!IsQuadChanged) return _quadBase;
+                return SKMatrix.Concat(QuadGeometry.QuadToQuad(_quadStart, _quad), _quadBase);
+            }
+
             var (sx, sy) = Scales;
             var m = SKMatrix.CreateScaleTranslation(sx, sy,
                 TargetRect.Left - SourceRect.Left * sx,
@@ -169,6 +240,7 @@ public sealed class TransformSession : IDisposable
     private static bool IsIntegerTranslation(SKMatrix m) =>
         Math.Abs(m.ScaleX - 1f) < 0.0001f && Math.Abs(m.ScaleY - 1f) < 0.0001f &&
         Math.Abs(m.SkewX) < 0.0001f && Math.Abs(m.SkewY) < 0.0001f &&
+        Math.Abs(m.Persp0) < 1e-7f && Math.Abs(m.Persp1) < 1e-7f && Math.Abs(m.Persp2 - 1f) < 0.0001f &&
         Math.Abs(m.TransX - MathF.Round(m.TransX)) < 0.001f &&
         Math.Abs(m.TransY - MathF.Round(m.TransY)) < 0.001f;
 
@@ -346,7 +418,10 @@ public sealed class TransformSession : IDisposable
         }
         // 落地後 layer.Offset = BaseOffset + OffsetDelta，而 Matrix 是從（含位移的）TargetRect 算的，
         // 兩者指向同一個 doc 位置 —— 下一輪以 BaseOffset = 目前 Offset 蓋章，Pre 直接用 PixelMatrix 即可。
-        return new TransformResume(target, entry, items.ToArray(), pm, TargetRect, RotationDeg, ResetSize);
+        // 四角模式落地後，下一輪的框是變形結果的外接矩形（PS 也一樣），角度視為 0（已烙進像素矩陣）
+        return _quad != null
+            ? new TransformResume(target, entry, items.ToArray(), pm, FrameRect, 0f, ResetSize)
+            : new TransformResume(target, entry, items.ToArray(), pm, TargetRect, RotationDeg, ResetSize);
     }
 
     private static void Collect(GroupLayer group, List<RasterLayer> into)
@@ -490,6 +565,19 @@ public sealed class TransformSession : IDisposable
         var (sx, sy) = Scales;
         var rot = Math.Abs(RotationDeg) < 0.01f ? 0f : RotationDeg;
 
+        // 四角模式：四角只是整體平移了整數向量 → 純平移；否則全量重蓋章
+        if (_quad != null)
+        {
+            if (_stampedQuad != null && (preview || _stampedHigh) &&
+                QuadGeometry.IsIntegerTranslationOf(_quad, _stampedQuad, out var quadDelta))
+            {
+                TranslateTo(quadDelta, pixelsHandledExternally);
+                return;
+            }
+            StampAll(preview, sx, sy, rot);
+            return;
+        }
+
         // 尺寸與角度沒變 → 純平移：不重蓋章（不重取樣），位移放進各層 Offset
         var s = _stampedParams;
         if (Math.Abs(s.Sx - sx) < 0.0001f && Math.Abs(s.Sy - sy) < 0.0001f &&
@@ -548,6 +636,7 @@ public sealed class TransformSession : IDisposable
         OffsetDelta = SKPointI.Empty;
         _stampedParams = (sx, sy, rot, TargetRect.Width, TargetRect.Height);
         _stampedOrigin = new SKPoint(TargetRect.Left, TargetRect.Top);
+        _stampedQuad = _quad == null ? null : (SKPoint[])_quad.Clone();
         var m = Matrix;
         var pm = PixelMatrix;
         // 無損＝像素矩陣（含續接的前段）是整數平移：None 取樣、逐位元不變。

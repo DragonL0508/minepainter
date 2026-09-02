@@ -283,6 +283,36 @@ public partial class MainWindow : Window
 
         Avalonia.Threading.DispatcherTimer.RunOnce(() =>
         {
+            // =quad：移動工具、扭曲模式、對整層開變形並把右下角拉開（看四角把手框與工具列「變形」群組）
+            if (name == "quad")
+            {
+                SelectTool("move");
+                SetTransformMode(TransformMode.Distort);
+                if (session.BeginTransform() is { } t && t.EnterQuadMode())
+                {
+                    t.SetQuad(Core.Tools.QuadGeometry.DistortDrag(t.Quad!, 2, new SKPoint(-doc.Width * 0.15f, doc.Height * 0.12f), false));
+                    t.SetQuad(Core.Tools.QuadGeometry.PerspectiveDrag(t.Quad!, 0, new SKPoint(doc.Width * 0.1f, 0)));
+                    t.Apply(preview: false);
+                    session.RefreshSelectionHandles();
+                }
+                RefreshUiState();
+                return;
+            }
+            // =pen：鋼筆工具，種一條含平滑點的開放路徑（看路徑／錨點／把手的繪製與工具列群組）
+            if (name == "pen")
+            {
+                SelectTool("pen");
+                var w = doc.Width; var h = doc.Height;
+                session.PenPath = new Core.Vectors.PenPath(
+                [
+                    Core.Vectors.PenAnchor.Corner(new SKPoint(w * 0.15f, h * 0.7f)),
+                    new Core.Vectors.PenAnchor(new SKPoint(w * 0.4f, h * 0.25f), new SKPoint(w * 0.28f, h * 0.25f), new SKPoint(w * 0.52f, h * 0.25f)),
+                    new Core.Vectors.PenAnchor(new SKPoint(w * 0.7f, h * 0.6f), new SKPoint(w * 0.62f, h * 0.45f), new SKPoint(w * 0.78f, h * 0.75f)),
+                    Core.Vectors.PenAnchor.Corner(new SKPoint(w * 0.9f, h * 0.3f)),
+                ], Closed: false, Finished: false, Active: 2);
+                RefreshUiState();
+                return;
+            }
             if (name.StartsWith("layer:"))
             {
                 var key = name[6..];
@@ -665,6 +695,7 @@ public partial class MainWindow : Window
             "fill" => session.Fill,
             "text" => session.Text,
             "shape" => session.Shape,
+            "pen" => session.Pen,
             _ => session.Brush,
         };
 
@@ -679,7 +710,9 @@ public partial class MainWindow : Window
     private void UpdateToolOptions(string key)
     {
         // 新出現的群組從下方 4px 淡入；消失的立刻收掉（淡出中會佔位，單行版面會跳）
-        Motion.Reveal(SizeGroup, key is "brush" or "eraser" or "bgeraser" or "shape");
+        Motion.Reveal(SizeGroup, key is "brush" or "eraser" or "bgeraser" or "shape" or "pen");
+        Motion.Reveal(TransformGroup, key == "move");
+        Motion.Reveal(PenGroup, key == "pen");
         Motion.Reveal(HardnessGroup, key is "brush" or "eraser" or "bgeraser");
         Motion.Reveal(SmoothingGroup, key is "brush" or "eraser");
         Motion.Reveal(OpacityGroup, key is "brush" or "eraser" or "fill");
@@ -742,6 +775,7 @@ public partial class MainWindow : Window
         ApplyBrushOptions();
         ApplyShapeOptions();
         ApplyTextOptions();
+        ApplyMoveOptions();
         SelectTool(_currentToolKey);
         UpdateTitle();
         UpdateViewportStatus();
@@ -2208,11 +2242,14 @@ public partial class MainWindow : Window
             ["view.actualSize"] = () => Canvas.SetZoomPercent(100),
             ["view.bestFit"] = () => Canvas.ZoomToFit(),
         };
-        foreach (var key in new[] { "brush", "eraser", "bgeraser", "eyedropper", "move", "rectselect", "lasso", "wand", "fill", "text", "shape" })
+        foreach (var key in new[] { "brush", "eraser", "bgeraser", "eyedropper", "move", "rectselect", "lasso", "wand", "fill", "text", "shape", "pen" })
         {
             var toolKey = key;
             _shortcutActions[$"tool.{key}"] = () => SelectTool(toolKey);
         }
+        _shortcutActions["layer.transformFree"] = () => BeginTransformFromMenu(TransformMode.Free);
+        _shortcutActions["layer.transformPerspective"] = () => BeginTransformFromMenu(TransformMode.Perspective);
+        _shortcutActions["layer.transformDistort"] = () => BeginTransformFromMenu(TransformMode.Distort);
 
         _shortcutActions["image.resize"] = () => OnResizeImageClicked(null, new RoutedEventArgs());
         _shortcutActions["image.canvasSize"] = () => OnCanvasSizeClicked(null, new RoutedEventArgs());
@@ -2365,6 +2402,28 @@ public partial class MainWindow : Window
             }
         }
 
+        // 鋼筆路徑：Enter 轉為選取、Esc 清除、Backspace 退一個錨點（情境鍵，不參與自訂）
+        if (session.ActiveTool == session.Pen && session.PenPath != null &&
+            e.KeyModifiers == Avalonia.Input.KeyModifiers.None)
+        {
+            switch (e.Key)
+            {
+                case Avalonia.Input.Key.Enter:
+                    PenMakeSelection();
+                    e.Handled = true;
+                    return;
+                case Avalonia.Input.Key.Escape:
+                    PenCommands.Clear(session);
+                    Toasts.Show("已清除路徑");
+                    e.Handled = true;
+                    return;
+                case Avalonia.Input.Key.Back:
+                    PenCommands.RemoveLast(session);
+                    e.Handled = true;
+                    return;
+            }
+        }
+
         // 其餘一律查快捷鍵表（設定 → 快捷鍵 可改綁；CanvasView 也查同一張表）。
         // （選中向量物件時的 Delete 由 CanvasView 先攔下來刪除物件，不會走到這裡）
         var id = Services.ShortcutMap.Match(e.Key, e.KeyModifiers);
@@ -2423,6 +2482,7 @@ public partial class MainWindow : Window
         var hardness = (float)(HardnessBar.Value / 100);
         var opacity = (float)(OpacityBar.Value / 100);
         var smoothing = (float)SmoothingBar.Value;
+        session.Pen.StrokeWidth = (float)SizeBox.Value; // 鋼筆「描邊路徑」的線寬共用「大小」
 
         foreach (var settings in new[] { session.Brush.Settings, session.Eraser.Settings })
         {
@@ -2548,6 +2608,133 @@ public partial class MainWindow : Window
 
         ShapeKindCombo.SelectionChanged += (_, _) => ApplyShapeOptions();
         ShapeFilledCheck.IsCheckedChanged += (_, _) => ApplyShapeOptions();
+
+        WireTransformToggle(TransformFreeToggle, TransformMode.Free);
+        WireTransformToggle(TransformPerspectiveToggle, TransformMode.Perspective);
+        WireTransformToggle(TransformDistortToggle, TransformMode.Distort);
+
+        PenSelectButton.Click += (_, _) => PenMakeSelection();
+        PenStrokeButton.Click += (_, _) => RunPenCommand(s => PenCommands.StrokePath(s, s.Pen.StrokeWidth), "已沿路徑描邊");
+        PenFillButton.Click += (_, _) => RunPenCommand(PenCommands.FillPath, "已填滿路徑");
+        PenClearButton.Click += (_, _) => RunPenCommand(s => { PenCommands.Clear(s); return true; }, "已清除路徑");
+    }
+
+    // ---- 變形模式（移動工具的工具列群組）----
+
+    private bool _suppressTransformToggle;
+
+    /// <summary>三個互斥的變形模式鈕：選一個其餘自動關；點已選中的維持選中。</summary>
+    private void WireTransformToggle(ToggleButton button, TransformMode mode)
+    {
+        button.IsCheckedChanged += (_, _) =>
+        {
+            if (_suppressTransformToggle) return;
+            if (button.IsChecked == true)
+            {
+                SetTransformMode(mode);
+            }
+            else if (CurrentTransformMode() == mode)
+            {
+                _suppressTransformToggle = true;
+                button.IsChecked = true;
+                _suppressTransformToggle = false;
+            }
+        };
+    }
+
+    private TransformMode CurrentTransformMode()
+    {
+        if (TransformPerspectiveToggle.IsChecked == true) return TransformMode.Perspective;
+        if (TransformDistortToggle.IsChecked == true) return TransformMode.Distort;
+        return TransformMode.Free;
+    }
+
+    /// <summary>
+    /// 切換變形模式。變形中切到自由變形時先落地目前的四角變形（四角映射回不到矩形模式；
+    /// 落地後再拖角會從原始像素續接，不糊）；切到透視／扭曲時現有 session 直接進四角模式。
+    /// </summary>
+    private void SetTransformMode(TransformMode mode)
+    {
+        _suppressTransformToggle = true;
+        TransformFreeToggle.IsChecked = mode == TransformMode.Free;
+        TransformPerspectiveToggle.IsChecked = mode == TransformMode.Perspective;
+        TransformDistortToggle.IsChecked = mode == TransformMode.Distort;
+        _suppressTransformToggle = false;
+
+        var session = Canvas.Session;
+        if (session == null) return;
+        session.Move.TransformMode = mode;
+
+        if (session.Transform is { } t)
+        {
+            if (mode == TransformMode.Free && t.Quad != null)
+            {
+                session.CommitTransform();
+            }
+            else if (mode != TransformMode.Free && t.Quad == null && !t.EnterQuadMode())
+            {
+                Toasts.Show("含文字的圖層無法透視／扭曲，請先「圖層文字平面化」");
+            }
+            session.RefreshSelectionHandles();
+        }
+        RefreshUiState();
+    }
+
+    /// <summary>把工具列的變形模式推進 session（每份文件各自的工具實例）。</summary>
+    private void ApplyMoveOptions()
+    {
+        var session = Canvas.Session;
+        if (session == null) return;
+        session.Move.TransformMode = CurrentTransformMode();
+    }
+
+    /// <summary>圖層 → 變形 → …：切到移動工具、設定模式、立刻框住圖層內容開始變形。</summary>
+    private void BeginTransformFromMenu(TransformMode mode)
+    {
+        var session = Canvas.Session;
+        if (session == null) return;
+        session.CommitPendingEdits();
+        SelectTool("move");
+        SetTransformMode(mode);
+        if (session.Transform == null)
+        {
+            var t = session.BeginTransform();
+            if (t == null) return;
+            if (mode != TransformMode.Free && !t.EnterQuadMode())
+                Toasts.Show("含文字的圖層無法透視／扭曲，請先「圖層文字平面化」");
+            session.RefreshSelectionHandles();
+        }
+        Toasts.Show(mode switch
+        {
+            TransformMode.Perspective => "透視：拖四角；Enter 套用、Esc 還原",
+            TransformMode.Distort => "扭曲：拖四角或邊；Enter 套用、Esc 還原",
+            _ => "自由變形：拖角縮放、右鍵旋轉；Enter 套用、Esc 還原",
+        });
+        RefreshUiState();
+    }
+
+    private void OnTransformFreeClicked(object? sender, RoutedEventArgs e) => BeginTransformFromMenu(TransformMode.Free);
+    private void OnTransformPerspectiveClicked(object? sender, RoutedEventArgs e) => BeginTransformFromMenu(TransformMode.Perspective);
+    private void OnTransformDistortClicked(object? sender, RoutedEventArgs e) => BeginTransformFromMenu(TransformMode.Distort);
+
+    // ---- 鋼筆 ----
+
+    private void PenMakeSelection()
+    {
+        var session = Canvas.Session;
+        if (session == null) return;
+        if (PenCommands.MakeSelection(session)) Toasts.Show("路徑已轉為選取範圍");
+        RefreshUiState();
+        Canvas.Focus();
+    }
+
+    private void RunPenCommand(Func<EditorSession, bool> command, string doneMessage)
+    {
+        var session = Canvas.Session;
+        if (session == null) return;
+        if (command(session)) Toasts.Show(doneMessage);
+        RefreshUiState();
+        Canvas.Focus();
     }
 
     // ---- 字重／變種（Noto Sans TC 的 Light/Black 這類命名字重）----

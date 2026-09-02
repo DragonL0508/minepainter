@@ -88,6 +88,21 @@ public sealed class EditorSession : IDisposable
     public float SelectionHandlesRotation { get; private set; }
 
     /// <summary>
+    /// 四角模式（透視／扭曲）的把手框：四個角的實際位置（render thread 直接讀，陣列 immutable）。
+    /// 非 null 時 <see cref="SelectionHandles"/> 是它的外接矩形、旋轉為 0。
+    /// </summary>
+    public SKPoint[]? SelectionHandlesQuad { get; private set; }
+
+    /// <summary>鋼筆工具的工作路徑（render thread 直接讀；immutable，每次改動換新實例）。null＝沒有路徑。</summary>
+    public Vectors.PenPath? PenPath
+    {
+        get => _penPath;
+        set => _penPath = value;
+    }
+
+    private volatile Vectors.PenPath? _penPath;
+
+    /// <summary>
     /// 依目前狀態重算把手框。改變選取／選中物件的路徑會自動呼叫；
     /// 拖曳浮動內容時因為改的是 FloatingSelection 內部的 TargetRect，需要手動呼叫一次。
     /// </summary>
@@ -100,7 +115,8 @@ public sealed class EditorSession : IDisposable
             if (frame is { } f && _elementOverlay is { } overlay && SelectedElement?.ElementId == overlay.ElementId)
                 frame = SKRect.Create(f.Left + overlay.OffsetX, f.Top + overlay.OffsetY, f.Width, f.Height);
             SelectionHandles = frame;
-            SelectionHandlesRotation = Transform?.RotationDeg ?? 0f;
+            SelectionHandlesRotation = Transform?.DisplayRotation ?? 0f;
+            SelectionHandlesQuad = Transform?.Quad;
         }
     }
 
@@ -127,6 +143,7 @@ public sealed class EditorSession : IDisposable
         {
             if (Transform is { } t)
             {
+                if (t.Quad != null) return t.IsQuadChanged;
                 return Math.Abs(t.RotationDeg) > 0.01f ||
                        Math.Abs(t.TargetRect.Width - t.ResetSize.Width) > 0.5f ||
                        Math.Abs(t.TargetRect.Height - t.ResetSize.Height) > 0.5f;
@@ -149,6 +166,13 @@ public sealed class EditorSession : IDisposable
         if (Transform is { } t)
         {
             if (!CanResetTransform) return false;
+            if (t.Quad != null)
+            {
+                t.ResetQuad(); // 四角回到進入四角模式時的位置
+                t.Apply(preview: false);
+                RefreshSelectionHandles();
+                return true;
+            }
             var cx = t.TargetRect.MidX;
             var cy = t.TargetRect.MidY;
             t.RotationDeg = 0f;
@@ -1187,6 +1211,7 @@ public sealed class EditorSession : IDisposable
     public FillTool Fill { get; }
     public TextTool Text { get; }
     public ShapeTool Shape { get; }
+    public PenTool Pen { get; }
 
     private ITool _activeTool = null!;
 
@@ -1235,6 +1260,7 @@ public sealed class EditorSession : IDisposable
         Fill = new FillTool();
         Text = new TextTool();
         Shape = new ShapeTool();
+        Pen = new PenTool();
         ActiveTool = Brush;
     }
 

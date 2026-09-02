@@ -32,6 +32,41 @@ public sealed class HandleDragController
     private SelectionMask? _startSelection;
     private float _transformPad; // 變形框顯示用的效果外擴量（TargetRect 本身不含）
 
+    // 四角模式（透視／扭曲）的拖曳：起始四角＋按下點，每步從起點換算不累積
+    private SKPoint[]? _startQuad;
+    private SKPoint _quadPress;
+    private TransformMode _quadMode;
+
+    /// <summary>
+    /// 變形 session 依工具列模式進入四角模式；有文字物件時做不到（PS 也是先柵格化），
+    /// 提示並留在自由變形。回傳是否處於四角模式。
+    /// </summary>
+    private static bool EnsureQuadMode(EditorSession session, TransformSession transform)
+    {
+        var mode = session.Move.TransformMode;
+        if (mode == TransformMode.Free) return transform.Quad != null;
+        if (transform.Quad != null) return true;
+        if (transform.EnterQuadMode()) return true;
+        session.Notify("含文字的圖層無法透視／扭曲，請先「圖層文字平面化」；改用自由變形");
+        return false;
+    }
+
+    private bool BeginQuadDrag(EditorSession session, TransformSession transform, SKPoint p, float tolerance)
+    {
+        var quad = transform.Quad!;
+        _quadMode = session.Move.TransformMode == TransformMode.Perspective
+            ? TransformMode.Perspective : TransformMode.Distort;
+        var handle = QuadGeometry.HitHandle(quad, p, tolerance, includeEdges: _quadMode == TransformMode.Distort);
+        if (handle < 0) return false;
+        _kind = TargetKind.Transform;
+        _corner = handle;
+        _startQuad = quad;
+        _quadPress = p;
+        _startRect = transform.FrameRect;
+        transform.BeginGesturePreview();
+        return true;
+    }
+
     public bool IsActive => _kind != TargetKind.None;
 
     /// <summary>
@@ -84,7 +119,12 @@ public sealed class HandleDragController
     public static SKRect? GetFrame(EditorSession session)
     {
         // 變形框：TargetRect 是被變形的像素框，使用者看到的框要再包住效果外擴
-        if (session.Transform is { } transform) return Inflated(transform.TargetRect, EffectPad(transform.Target));
+        if (session.Transform is { } transform)
+        {
+            // 四角模式的框就是四角本身（SelectionHandlesQuad），外接矩形只給其他消費者用、不加效果外擴
+            if (transform.Quad != null) return transform.FrameRect;
+            return Inflated(transform.TargetRect, EffectPad(transform.Target));
+        }
         if (session.Floating is { } floating) return floating.TargetRect;
 
         if (session.SelectedElement is { } sel &&
@@ -192,6 +232,9 @@ public sealed class HandleDragController
         // 進行中的變形框（可能已旋轉：把指標反轉回未旋轉空間再測角）
         if (session.Transform is { } transform)
         {
+            _startQuad = null;
+            if (transform.Quad != null) return BeginQuadDrag(session, transform, p, tolerance);
+
             var local = MoveTool.RotatePoint(p,
                 new SKPoint(transform.TargetRect.MidX, transform.TargetRect.MidY),
                 -transform.RotationDeg);
@@ -199,6 +242,11 @@ public sealed class HandleDragController
             var shownRect = Inflated(transform.TargetRect, _transformPad); // 把手畫在含效果外擴的框上
             var tCorner = MoveTool.HitCorner(shownRect, local, tolerance);
             if (tCorner < 0) return false;
+
+            // 工具列切到透視／扭曲後才拖角：此時才進四角模式（同一個 session，不用先落地）
+            if (session.Move.TransformMode != TransformMode.Free && EnsureQuadMode(session, transform))
+                return BeginQuadDrag(session, transform, p, tolerance);
+
             _kind = TargetKind.Transform;
             _corner = tCorner;
             _startRect = shownRect;
@@ -247,6 +295,9 @@ public sealed class HandleDragController
             var corner = MoveTool.HitCorner(content, p, tolerance);
             if (corner < 0) return false;
             if (session.BeginTransform() is not { } begun) return false;
+            _startQuad = null;
+            if (session.Move.TransformMode != TransformMode.Free && EnsureQuadMode(session, begun))
+                return BeginQuadDrag(session, begun, p, tolerance);
             _kind = TargetKind.Transform;
             _corner = corner;
             _transformPad = EffectPad(begun.Target);
@@ -294,6 +345,19 @@ public sealed class HandleDragController
                 break;
             }
 
+            case TargetKind.Transform when session.Transform is { } transform && _startQuad != null:
+            {
+                // 四角模式：從起始四角＋位移換算（透視＝鄰角對稱跟著動；扭曲＝自由）
+                var delta = new SKPoint(p.X - _quadPress.X, p.Y - _quadPress.Y);
+                var quad = _quadMode == TransformMode.Perspective
+                    ? QuadGeometry.PerspectiveDrag(_startQuad, _corner, delta)
+                    : QuadGeometry.DistortDrag(_startQuad, _corner, delta, keepAspect);
+                if (!transform.SetQuad(quad)) break; // 凹／翻面的四邊形不接受，停在上一個合法狀態
+                transform.Apply(preview: true);
+                session.RefreshSelectionHandles();
+                break;
+            }
+
             case TargetKind.Transform when session.Transform is { } transform:
             {
                 // 框可能已旋轉：在未旋轉空間裡算縮放（指標先反轉），角度不變
@@ -320,6 +384,7 @@ public sealed class HandleDragController
         var startSelection = _startSelection;
         _kind = TargetKind.None;
         _startSelection = null;
+        _startQuad = null;
 
         switch (kind)
         {

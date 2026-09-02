@@ -45,6 +45,24 @@
     <Setter Property="RenderTransform" Value="scale(1.12)" />
   </Style>
 
+  <!--
+    工具面板（.tool）：選中底色一律透明 —— 「目前工具」的高亮是底下那塊會滑動的主題色指示器
+    （ToolsPanelContent），按鈕自己的不透明底色會把它蓋住、只剩邊緣漏一條藍線。
+    pointerover / pressed 也要一併透明，不然滑過選中的工具高亮會消失。
+  -->
+  <Style Selector="ToggleButton.tool:checked /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderBrush" Value="Transparent" />
+  </Style>
+  <Style Selector="ToggleButton.tool:checked:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderBrush" Value="Transparent" />
+  </Style>
+  <Style Selector="ToggleButton.tool:checked:pressed /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderBrush" Value="Transparent" />
+  </Style>
+
   <Style Selector="ListBoxItem">
     <Setter Property="Transitions">
       <Transitions>

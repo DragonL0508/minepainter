@@ -84,6 +84,15 @@
             <Separator />
             <MenuItem Header="向下合併(_M)" Click="OnMergeLayerDownClicked" Tag="layer.mergeDown" />
             <Separator />
+            <MenuItem Header="變形(_T)">
+              <MenuItem Header="自由變形(_F)" Click="OnTransformFreeClicked" Tag="layer.transformFree"
+                        ToolTip.Tip="切到移動工具並框住圖層內容：拖角縮放、右鍵旋轉；Enter 套用、Esc 還原" />
+              <MenuItem Header="透視(_P)" Click="OnTransformPerspectiveClicked" Tag="layer.transformPerspective"
+                        ToolTip.Tip="拖一角、同一邊的鄰角對稱跟著動（Photoshop 透視）" />
+              <MenuItem Header="扭曲(_D)" Click="OnTransformDistortClicked" Tag="layer.transformDistort"
+                        ToolTip.Tip="四角各自自由拖曳（Photoshop 扭曲）" />
+            </MenuItem>
+            <Separator />
             <MenuItem Header="圖層文字平面化(_R)" Click="OnFlattenTextClicked" Tag="layer.flattenText"
                       ToolTip.Tip="把本圖層的文字物件烙成像素（之後不能再編輯文字內容）" />
             <Separator />
@@ -240,6 +249,44 @@
           <TextBlock Text="形狀：" FontSize="12" VerticalAlignment="Center" />
           <ComboBox x:Name="ShapeKindCombo" Width="90" FontSize="12" />
           <CheckBox x:Name="ShapeFilledCheck" Content="填滿" IsChecked="True" FontSize="12" />
+        </StackPanel>
+
+        <!-- 移動工具：變形框模式（Photoshop 編輯 → 變形 的三種）；拖角時生效，也可在變形中切換 -->
+        <StackPanel x:Name="TransformGroup" Orientation="Horizontal" Spacing="5" VerticalAlignment="Center" IsVisible="False">
+          <TextBlock Text="變形：" FontSize="12" VerticalAlignment="Center" />
+          <StackPanel Orientation="Horizontal" Spacing="1">
+            <ToggleButton x:Name="TransformFreeToggle" Width="28" Height="24" Padding="0" IsChecked="True"
+                          HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                          ToolTip.Tip="自由變形：拖角縮放（Shift 等比）、右鍵拖曳旋轉">
+              <mi:MaterialIcon Kind="ArrowExpandAll" Width="16" Height="16" />
+            </ToggleButton>
+            <ToggleButton x:Name="TransformPerspectiveToggle" Width="28" Height="24" Padding="0"
+                          HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                          ToolTip.Tip="透視：拖一角，同一邊的鄰角對稱跟著動（Photoshop 透視）">
+              <mi:MaterialIcon Kind="PerspectiveLess" Width="16" Height="16" />
+            </ToggleButton>
+            <ToggleButton x:Name="TransformDistortToggle" Width="28" Height="24" Padding="0"
+                          HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                          ToolTip.Tip="扭曲：四角各自自由拖曳、邊把手平移整條邊（Photoshop 扭曲；Shift 只沿一軸）">
+              <mi:MaterialIcon Kind="VectorSquareEdit" Width="16" Height="16" />
+            </ToggleButton>
+          </StackPanel>
+          <TextBlock Text="Enter 套用、Esc 還原" FontSize="11" VerticalAlignment="Center"
+                     Foreground="{x:Static app:AppTheme.TextMutedBrush}" />
+        </StackPanel>
+
+        <!-- 鋼筆工具：路徑的落地動作 -->
+        <StackPanel x:Name="PenGroup" Orientation="Horizontal" Spacing="5" VerticalAlignment="Center" IsVisible="False">
+          <Button x:Name="PenSelectButton" Content="轉為選取" FontSize="12" Padding="8,2" Height="24"
+                  ToolTip.Tip="把路徑變成選取範圍（Enter；開放路徑以直線封回）" />
+          <Button x:Name="PenStrokeButton" Content="描邊路徑" FontSize="12" Padding="8,2" Height="24"
+                  ToolTip.Tip="以前景色、左邊的「大小」當線寬沿路徑描線到作用中圖層" />
+          <Button x:Name="PenFillButton" Content="填滿路徑" FontSize="12" Padding="8,2" Height="24"
+                  ToolTip.Tip="以前景色填滿路徑到作用中圖層" />
+          <Button x:Name="PenClearButton" Content="清除路徑" FontSize="12" Padding="8,2" Height="24"
+                  ToolTip.Tip="丟棄工作路徑（Esc）；Backspace 只退最後一個錨點" />
+          <TextBlock Text="點＝角點、拖＝曲線、點回起點＝封閉" FontSize="11" VerticalAlignment="Center"
+                     Foreground="{x:Static app:AppTheme.TextMutedBrush}" />
         </StackPanel>
 
         <Separator Width="1" Height="24" Background="{x:Static app:AppTheme.SeparatorBrush}" />
