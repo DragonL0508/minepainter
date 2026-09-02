@@ -108,6 +108,7 @@ public sealed class UpdateDialog : ModalDialog
             });
             UpdaterScript = await UpdateService.PrepareAsync(_info, progress);
             Result = Choice.Update;
+            _busy = false; // 不復位的話 OnClosing 會把這次 Close 取消掉，視窗就卡在「準備完成」
             Close();
         }
         catch (Exception ex)
@@ -123,7 +124,8 @@ public sealed class UpdateDialog : ModalDialog
 
     protected override void OnClosing(WindowClosingEventArgs e)
     {
-        if (_busy && !Controls.WindowAnimator.IsShuttingDown) { e.Cancel = true; return; } // 下載中不讓關
+        // 下載中不讓關；準備好腳本後一定放行（否則更新流程走不下去）
+        if (_busy && UpdaterScript == null && !Controls.WindowAnimator.IsShuttingDown) { e.Cancel = true; return; }
         base.OnClosing(e);
     }
 }
