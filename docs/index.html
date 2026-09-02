@@ -3,109 +3,122 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>MinePainter — 下載</title>
-<meta name="description" content="MinePainter：paint.net 風格的繪圖程式，Windows 版下載。" />
+<title>MinePainter</title>
+<meta name="description" content="MinePainter：paint.net 風格的 Windows 繪圖程式，解壓縮就能用。" />
+<link rel="icon" href="icon.png" />
 <style>
+  /* 標題字型只切出 ASCII 子集（標題是英文），檔案 2 KB */
+  @font-face {
+    font-family: "Nightgazer";
+    src: url(nightgazer.woff2) format("woff2");
+    font-display: block;
+  }
   :root {
     color-scheme: dark;
-    --bg: #16161a;
-    --panel: #1e1e24;
-    --line: #2e2e38;
+    --bg: #131316;
     --text: #e8e8ee;
     --muted: #9a9aa8;
+    --faint: #55555f;
     --accent: #f4c22a;
     --accent-ink: #1a1a1f;
+    --ease: cubic-bezier(.2, .7, .2, 1);
   }
   * { box-sizing: border-box; }
+  html, body { height: 100%; }
   body {
     margin: 0;
-    padding: 48px 20px 64px;
     background: var(--bg);
     color: var(--text);
-    font: 16px/1.7 "Segoe UI", "Microsoft JhengHei", system-ui, sans-serif;
+    font: 16px/1.6 "Segoe UI", "Microsoft JhengHei", system-ui, sans-serif;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    overflow-x: hidden;
   }
-  main { max-width: 720px; margin: 0 auto; }
-  header { display: flex; align-items: center; gap: 14px; }
-  .logo {
-    width: 44px; height: 44px; border-radius: 10px; flex: none;
-    background: linear-gradient(135deg, #2a9df4, #f4c22a 55%, #e04060);
+  main {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    width: 100%;
+    max-width: 520px;
   }
-  h1 { font-size: 30px; margin: 0; letter-spacing: .5px; }
-  .tagline { color: var(--muted); margin: 6px 0 32px; }
-  .card {
-    background: var(--panel); border: 1px solid var(--line);
-    border-radius: 12px; padding: 22px; margin-bottom: 18px;
+  .halo {
+    position: absolute;
+    width: 520px; height: 520px;
+    top: 50%; left: 50%;
+    margin: -300px 0 0 -260px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(244,194,42,.22) 0%, rgba(244,194,42,0) 65%);
+    pointer-events: none;
+    animation: glow 5s ease-in-out infinite 1s;
   }
-  .row { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; }
+  .icon-wrap { animation: float 5s ease-in-out infinite 1s; margin-bottom: 40px; }
+  .icon { width: 128px; height: 128px; image-rendering: pixelated; display: block; }
+  h1 {
+    margin: 0 0 18px;
+    font: 400 48px/1.1 "Nightgazer", "Segoe UI", system-ui, sans-serif;
+    letter-spacing: 1px;
+  }
+  .tagline { margin: 0 0 48px; font-size: 19px; color: var(--muted); }
   .btn {
-    display: inline-block; background: var(--accent); color: var(--accent-ink);
-    font-weight: 700; text-decoration: none; padding: 12px 22px; border-radius: 8px;
+    display: inline-flex; align-items: center; gap: 12px;
+    background: var(--accent); color: var(--accent-ink);
+    font-size: 17px; font-weight: 700; text-decoration: none;
+    padding: 16px 30px; border-radius: 999px;
+    transition: transform .35s var(--ease), box-shadow .35s ease;
   }
-  .btn:hover { filter: brightness(1.08); }
-  .btn.ghost {
-    background: transparent; color: var(--text); border: 1px solid var(--line); font-weight: 400;
+  .btn:hover { transform: translateY(-2px); box-shadow: 0 14px 40px -10px rgba(244,194,42,.55); }
+  .btn:active { transform: translateY(0) scale(.98); }
+  .btn svg { transition: transform .35s var(--ease); }
+  .btn:hover svg { transform: translateY(3px); }
+  .meta { margin-top: 22px; font-size: 13px; color: var(--faint); letter-spacing: .2px; min-height: 1.6em; }
+  .links { margin-top: 56px; font-size: 13px; color: var(--faint); }
+  .links a { color: var(--faint); text-decoration: none; transition: color .3s ease; }
+  .links a:hover { color: var(--text); }
+
+  /* 依序淡入上浮 */
+  .rise { animation: rise .9s var(--ease) both; }
+  .d1 { animation-delay: .15s; } .d2 { animation-delay: .3s; }
+  .d3 { animation-delay: .45s; } .d4 { animation-delay: .6s; } .d5 { animation-delay: .9s; }
+  @keyframes rise { from { opacity: 0; transform: translateY(18px); } to { opacity: 1; transform: translateY(0); } }
+  @keyframes float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
+  @keyframes glow { 0%, 100% { opacity: .35; transform: scale(1); } 50% { opacity: .6; transform: scale(1.12); } }
+
+  @media (max-width: 480px) {
+    .icon { width: 104px; height: 104px; }
+    .icon-wrap { margin-bottom: 32px; }
+    h1 { font-size: 36px; }
+    .tagline { font-size: 16px; margin-bottom: 40px; }
+    .btn { width: 100%; justify-content: center; }
+    .halo { width: 360px; height: 360px; margin: -220px 0 0 -180px; }
   }
-  .meta { color: var(--muted); font-size: 14px; }
-  h2 { font-size: 17px; margin: 26px 0 8px; }
-  ul { margin: 0; padding-left: 20px; color: var(--muted); }
-  li { margin: 4px 0; }
-  code {
-    background: #26262e; border-radius: 4px; padding: 1px 6px; font-size: 14px;
-    font-family: Consolas, "Cascadia Mono", monospace;
+  @media (prefers-reduced-motion: reduce) {
+    .rise, .icon-wrap, .halo { animation: none; }
+    .btn, .btn svg { transition: none; }
   }
-  footer { color: var(--muted); font-size: 14px; margin-top: 34px; }
-  a { color: var(--accent); }
 </style>
 </head>
 <body>
 <main>
-  <header>
-    <div class="logo" aria-hidden="true"></div>
-    <div>
-      <h1>MinePainter</h1>
-      <div class="meta">paint.net 風格的繪圖程式 · Windows</div>
-    </div>
-  </header>
+  <div class="halo" aria-hidden="true"></div>
 
-  <p class="tagline">圖層、選取、文字、非破壞性效果堆疊、AI 去背 —— 解壓縮就能用。</p>
+  <div class="rise"><div class="icon-wrap"><img class="icon" src="icon.png" alt="" width="128" height="128" /></div></div>
+  <h1 class="rise d1">MinePainter</h1>
+  <p class="tagline rise d2">paint.net 風格的 Windows 繪圖程式，解壓縮就能用。</p>
 
-  <div class="card">
-    <div class="row">
-      <a class="btn" id="download" href="https://github.com/DragonL0508/minepainter/releases/latest">下載 Windows 版</a>
-      <span class="meta" id="meta">正在查最新版本…</span>
-    </div>
-    <p class="meta" style="margin-bottom:0">
-      解壓縮後執行 <code>MinePainter.exe</code>，不必安裝任何東西。
-      檔案比較大的話請耐心等一下（自包含版把 .NET 執行階段一起帶著）。
-    </p>
-  </div>
+  <a class="btn rise d3" id="download" href="https://github.com/DragonL0508/minepainter/releases/latest">
+    <span>下載 Windows 版</span>
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v13"/><path d="m6 11 6 6 6-6"/><path d="M5 20h14"/></svg>
+  </a>
+  <div class="meta rise d4" id="meta"></div>
 
-  <div class="card">
-    <div class="row">
-      <a class="btn ghost" id="download-fd" href="https://github.com/DragonL0508/minepainter/releases/latest">小顆版（需要 .NET 8）</a>
-      <span class="meta" id="meta-fd"></span>
-    </div>
-    <p class="meta" style="margin-bottom:0">
-      電腦已經有 <a href="https://dotnet.microsoft.com/download/dotnet/8.0">.NET 8 桌面執行階段</a> 的話下載這個就好。
-    </p>
-  </div>
-
-  <h2>第一次開啟被 Windows 攔下來？</h2>
-  <ul>
-    <li>這個 exe 沒有買程式碼簽章憑證，SmartScreen 會跳「已保護您的電腦」。</li>
-    <li>點「其他資訊」→「仍要執行」即可。</li>
-  </ul>
-
-  <h2>系統需求</h2>
-  <ul>
-    <li>Windows 10 / 11（64 位元）</li>
-    <li>AI 去背功能需要另外下載模型（程式裡有引導）</li>
-  </ul>
-
-  <footer>
-    原始碼與問題回報：<a href="https://github.com/DragonL0508/minepainter">github.com/DragonL0508/minepainter</a> ·
+  <div class="links rise d5">
+    <a href="https://github.com/DragonL0508/minepainter">GitHub</a> ·
     <a href="https://github.com/DragonL0508/minepainter/releases">所有版本</a>
-  </footer>
+  </div>
 </main>
 
 <script>
@@ -117,25 +130,11 @@
     const res = await fetch(`https://api.github.com/repos/${repo}/releases/latest`);
     if (!res.ok) throw new Error(res.status);
     const rel = await res.json();
-    const find = re => (rel.assets || []).find(a => re.test(a.name));
-    const date = new Date(rel.published_at).toLocaleDateString('zh-TW');
-
-    const sc = find(/win-x64\.zip$/i);
-    if (sc) {
-      document.getElementById('download').href = sc.browser_download_url;
-      document.getElementById('meta').textContent = `${rel.tag_name} · ${size(sc.size)} · ${date}`;
-    } else {
-      document.getElementById('meta').textContent = `${rel.tag_name} · ${date}`;
-    }
-
-    const fd = find(/framework-dependent\.zip$/i);
-    if (fd) {
-      document.getElementById('download-fd').href = fd.browser_download_url;
-      document.getElementById('meta-fd').textContent = size(fd.size);
-    }
+    const sc = (rel.assets || []).find(a => /win-x64\.zip$/i.test(a.name));
+    if (sc) document.getElementById('download').href = sc.browser_download_url;
+    document.getElementById('meta').textContent = sc ? `${rel.tag_name} · ${size(sc.size)}` : rel.tag_name;
   } catch {
     // 查不到（沒發過 Release、API 額度用完、離線…）就維持指向 releases/latest 的保底連結
-    document.getElementById('meta').textContent = '前往 GitHub 下載最新版';
   }
 })();
 </script>
