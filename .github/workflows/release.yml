@@ -1,0 +1,75 @@
+# 打一個 v* 標籤（或在 Actions 頁面手動觸發）就自動建置 exe、發一版 Release。
+# 下載頁（docs/index.html，GitHub Pages）是靠 GitHub API 讀「最新的 Release」，
+# 所以這裡不需要再去改網頁，發完 Release 網頁自己就更新了。
+name: 發佈版本
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 版本號（例如 1.2.0，不用加 v）
+        required: true
+
+permissions:
+  contents: write # 建立 Release、上傳附件
+
+jobs:
+  release:
+    runs-on: windows-latest # 產物是 Windows exe，publish.bat 也是 .bat
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: 決定版本號
+        id: ver
+        shell: pwsh
+        run: |
+          $v = if ('${{ github.event_name }}' -eq 'workflow_dispatch') {
+            '${{ inputs.version }}'.Trim()
+          } else {
+            '${{ github.ref_name }}' -replace '^v', ''
+          }
+          if ($v -notmatch '^\d+\.\d+\.\d+$') { throw "版本號要像 1.2.0，收到的是：$v" }
+          "version=$v" >> $env:GITHUB_OUTPUT
+          "tag=v$v" >> $env:GITHUB_OUTPUT
+
+      - name: 跑測試
+        run: dotnet test tests/MinePainter.Core.Tests -c Release --nologo
+
+      # 沿用本機那支 publish.bat：發佈參數只有一份，CI 產出的 exe 與本機一模一樣
+      - name: 建置自包含版（對方不必裝 .NET）
+        shell: cmd
+        run: publish.bat sc ${{ steps.ver.outputs.version }}
+
+      - name: 建置依賴框架版（小顆，需要 .NET 8 桌面執行階段）
+        shell: cmd
+        run: publish.bat fd ${{ steps.ver.outputs.version }}
+
+      - name: 發一版 Release（附上兩個 zip）
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $tag = '${{ steps.ver.outputs.tag }}'
+          $ver = '${{ steps.ver.outputs.version }}'
+
+          $notes = @(
+            '### 下載哪一個？'
+            ''
+            "- **MinePainter-$ver-win-x64.zip** —— 自包含版，解壓縮就能跑，對方電腦不必裝任何東西。"
+            "- **MinePainter-$ver-framework-dependent.zip** —— 小顆版，需要先裝 [.NET 8 桌面執行階段](https://dotnet.microsoft.com/download/dotnet/8.0)。"
+          ) -join "`n"
+          Set-Content -Path release-notes.md -Value $notes -Encoding utf8
+
+          # 同一版重跑時先砍掉舊的 Release（標籤留著），免得附件重複
+          gh release view $tag 2>&1 | Out-Null
+          if ($LASTEXITCODE -eq 0) { gh release delete $tag --yes --cleanup-tag=false }
+          $global:LASTEXITCODE = 0
+
+          $assets = (Get-ChildItem dist/*.zip).FullName
+          gh release create $tag $assets --title "MinePainter $ver" --notes-file release-notes.md --target $env:GITHUB_SHA

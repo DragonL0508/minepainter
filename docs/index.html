@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MinePainter — 下載</title>
+<meta name="description" content="MinePainter：paint.net 風格的繪圖程式，Windows 版下載。" />
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #16161a;
+    --panel: #1e1e24;
+    --line: #2e2e38;
+    --text: #e8e8ee;
+    --muted: #9a9aa8;
+    --accent: #f4c22a;
+    --accent-ink: #1a1a1f;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 48px 20px 64px;
+    background: var(--bg);
+    color: var(--text);
+    font: 16px/1.7 "Segoe UI", "Microsoft JhengHei", system-ui, sans-serif;
+  }
+  main { max-width: 720px; margin: 0 auto; }
+  header { display: flex; align-items: center; gap: 14px; }
+  .logo {
+    width: 44px; height: 44px; border-radius: 10px; flex: none;
+    background: linear-gradient(135deg, #2a9df4, #f4c22a 55%, #e04060);
+  }
+  h1 { font-size: 30px; margin: 0; letter-spacing: .5px; }
+  .tagline { color: var(--muted); margin: 6px 0 32px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 12px; padding: 22px; margin-bottom: 18px;
+  }
+  .row { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; }
+  .btn {
+    display: inline-block; background: var(--accent); color: var(--accent-ink);
+    font-weight: 700; text-decoration: none; padding: 12px 22px; border-radius: 8px;
+  }
+  .btn:hover { filter: brightness(1.08); }
+  .btn.ghost {
+    background: transparent; color: var(--text); border: 1px solid var(--line); font-weight: 400;
+  }
+  .meta { color: var(--muted); font-size: 14px; }
+  h2 { font-size: 17px; margin: 26px 0 8px; }
+  ul { margin: 0; padding-left: 20px; color: var(--muted); }
+  li { margin: 4px 0; }
+  code {
+    background: #26262e; border-radius: 4px; padding: 1px 6px; font-size: 14px;
+    font-family: Consolas, "Cascadia Mono", monospace;
+  }
+  footer { color: var(--muted); font-size: 14px; margin-top: 34px; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="logo" aria-hidden="true"></div>
+    <div>
+      <h1>MinePainter</h1>
+      <div class="meta">paint.net 風格的繪圖程式 · Windows</div>
+    </div>
+  </header>
+
+  <p class="tagline">圖層、選取、文字、非破壞性效果堆疊、AI 去背 —— 解壓縮就能用。</p>
+
+  <div class="card">
+    <div class="row">
+      <a class="btn" id="download" href="https://github.com/DragonL0508/minepainter/releases/latest">下載 Windows 版</a>
+      <span class="meta" id="meta">正在查最新版本…</span>
+    </div>
+    <p class="meta" style="margin-bottom:0">
+      解壓縮後執行 <code>MinePainter.exe</code>，不必安裝任何東西。
+      檔案比較大的話請耐心等一下（自包含版把 .NET 執行階段一起帶著）。
+    </p>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <a class="btn ghost" id="download-fd" href="https://github.com/DragonL0508/minepainter/releases/latest">小顆版（需要 .NET 8）</a>
+      <span class="meta" id="meta-fd"></span>
+    </div>
+    <p class="meta" style="margin-bottom:0">
+      電腦已經有 <a href="https://dotnet.microsoft.com/download/dotnet/8.0">.NET 8 桌面執行階段</a> 的話下載這個就好。
+    </p>
+  </div>
+
+  <h2>第一次開啟被 Windows 攔下來？</h2>
+  <ul>
+    <li>這個 exe 沒有買程式碼簽章憑證，SmartScreen 會跳「已保護您的電腦」。</li>
+    <li>點「其他資訊」→「仍要執行」即可。</li>
+  </ul>
+
+  <h2>系統需求</h2>
+  <ul>
+    <li>Windows 10 / 11（64 位元）</li>
+    <li>AI 去背功能需要另外下載模型（程式裡有引導）</li>
+  </ul>
+
+  <footer>
+    原始碼與問題回報：<a href="https://github.com/DragonL0508/minepainter">github.com/DragonL0508/minepainter</a> ·
+    <a href="https://github.com/DragonL0508/minepainter/releases">所有版本</a>
+  </footer>
+</main>
+
+<script>
+// 下載連結直接指向「最新的 Release」附件：發一版 Release 這頁就跟著更新，不必改網頁。
+(async () => {
+  const repo = 'DragonL0508/minepainter';
+  const size = b => (b / 1048576).toFixed(0) + ' MB';
+  try {
+    const res = await fetch(`https://api.github.com/repos/${repo}/releases/latest`);
+    if (!res.ok) throw new Error(res.status);
+    const rel = await res.json();
+    const find = re => (rel.assets || []).find(a => re.test(a.name));
+    const date = new Date(rel.published_at).toLocaleDateString('zh-TW');
+
+    const sc = find(/win-x64\.zip$/i);
+    if (sc) {
+      document.getElementById('download').href = sc.browser_download_url;
+      document.getElementById('meta').textContent = `${rel.tag_name} · ${size(sc.size)} · ${date}`;
+    } else {
+      document.getElementById('meta').textContent = `${rel.tag_name} · ${date}`;
+    }
+
+    const fd = find(/framework-dependent\.zip$/i);
+    if (fd) {
+      document.getElementById('download-fd').href = fd.browser_download_url;
+      document.getElementById('meta-fd').textContent = size(fd.size);
+    }
+  } catch {
+    // 查不到（沒發過 Release、API 額度用完、離線…）就維持指向 releases/latest 的保底連結
+    document.getElementById('meta').textContent = '前往 GitHub 下載最新版';
+  }
+})();
+</script>
+</body>
+</html>

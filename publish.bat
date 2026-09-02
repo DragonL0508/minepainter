@@ -11,6 +11,9 @@ rem Single-file compression is OFF on purpose: decompressing assemblies at start
 rem delayed the splash from ~80ms to ~320ms after launch. The exe is bigger on disk
 rem (~135MB vs ~60MB) but the zip you send is about the same size either way.
 rem Output: dist\MinePainter-<version>-<suffix>\MinePainter.exe and a .zip next to it
+rem
+rem CI note: GitHub Actions sets CI=true, and every "pause" below is skipped in that case
+rem (a pause on a runner just hangs the job until it times out).
 setlocal
 cd /d "%~dp0"
 
@@ -56,7 +59,7 @@ dotnet publish "%PROJ%" -c Release -r %RID% --self-contained %SELF% ^
 if errorlevel 1 (
     echo.
     echo Publish FAILED.
-    pause
+    if not defined CI pause
     exit /b 1
 )
 
@@ -66,7 +69,7 @@ mkdir "%DEST%"
 copy /y "%STAGE%\MinePainter.App.exe" "%DEST%\MinePainter.exe" >nul
 if errorlevel 1 (
     echo Could not find the published exe in %STAGE%
-    pause
+    if not defined CI pause
     exit /b 1
 )
 rmdir /s /q "%STAGE%"
@@ -82,5 +85,5 @@ if errorlevel 1 (
 )
 echo   exe: %DEST%\MinePainter.exe
 echo.
-pause
+if not defined CI pause
 endlocal
