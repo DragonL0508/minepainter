@@ -45,6 +45,12 @@ public sealed class TransformSession : IDisposable
     private readonly List<Item> _items;
     private bool _disposed;
 
+    // 續接（見 TransformResume）：原始像素 → 上一輪落地結果 的映射（doc 座標）。
+    // 像素一律以「原始像素 × Pre × 本輪矩陣」重取樣；文字物件與框只吃本輪矩陣（它們本來就在落地結果上）。
+    private SKMatrix _preMatrix = SKMatrix.Identity;
+    private bool _preIsIdentity = true;
+    private float _baseRotation;     // 續接時開始的角度（IsIdentity / 相對旋轉的基準）
+
     // 蓋章狀態：目前圖層裡的像素是用哪組參數蓋出來的
     private (float Sx, float Sy, float Rot, float W, float H) _stampedParams;
     private SKPoint _stampedOrigin;  // 蓋章時 TargetRect 的左上（呈現位置 = 這裡 + OffsetDelta）
@@ -90,16 +96,40 @@ public sealed class TransformSession : IDisposable
     /// <summary>render thread 每幀讀。</summary>
     public GestureOverlay? Overlay => _overlay;
 
-    public bool IsIdentity =>
-        TargetRect == SourceRect && Math.Abs(RotationDeg) < 0.01f;
+    /// <summary>本輪相對於開始時的旋轉（續接時以上一輪落地的角度為 0）。</summary>
+    private float DeltaRotation
+    {
+        get
+        {
+            var d = RotationDeg - _baseRotation;
+            return Math.Abs(d) < 0.01f ? 0f : d;
+        }
+    }
 
-    private TransformSession(Document doc, List<Item> items, SKRect sourceRect, bool isGroup)
+    public bool IsIdentity =>
+        TargetRect == SourceRect && DeltaRotation == 0f;
+
+    /// <summary>
+    /// 「重設角度與比例」該回到的尺寸：第一輪＝SourceRect；續接時＝最初提起時的原始尺寸
+    /// （不是上一輪落地的尺寸，重設才真的是重設）。
+    /// </summary>
+    public SKSize ResetSize { get; private set; }
+
+    /// <summary>本 session 是從上一輪落地結果續接的（像素仍以最初的原始像素重取樣）。</summary>
+    public bool IsResumed => !_preIsIdentity;
+
+    /// <summary>變形的目標（作用中圖層或群組；續接點要對得上同一個）。</summary>
+    public LayerNode Target { get; }
+
+    private TransformSession(Document doc, LayerNode target, List<Item> items, SKRect sourceRect)
     {
         _doc = doc;
+        Target = target;
         _items = items;
         SourceRect = sourceRect;
         TargetRect = sourceRect;
-        IsGroup = isGroup;
+        ResetSize = sourceRect.Size;
+        IsGroup = target is GroupLayer;
         ResetStampStateToOriginal();
     }
 
@@ -122,14 +152,25 @@ public sealed class TransformSession : IDisposable
             var m = SKMatrix.CreateScaleTranslation(sx, sy,
                 TargetRect.Left - SourceRect.Left * sx,
                 TargetRect.Top - SourceRect.Top * sy);
-            if (Math.Abs(RotationDeg) > 0.01f)
+            var rot = DeltaRotation;
+            if (rot != 0f)
             {
                 m = SKMatrix.Concat(
-                    SKMatrix.CreateRotationDegrees(RotationDeg, TargetRect.MidX, TargetRect.MidY), m);
+                    SKMatrix.CreateRotationDegrees(rot, TargetRect.MidX, TargetRect.MidY), m);
             }
             return m;
         }
     }
+
+    /// <summary>原始像素（Item.SrcBounds）→ 目前狀態 的映射：續接時多乘一段上一輪的結果。</summary>
+    private SKMatrix PixelMatrix => _preIsIdentity ? Matrix : SKMatrix.Concat(Matrix, _preMatrix);
+
+    /// <summary>像素矩陣是不是整數平移（蓋章可用 None 取樣，逐位元無損）。</summary>
+    private static bool IsIntegerTranslation(SKMatrix m) =>
+        Math.Abs(m.ScaleX - 1f) < 0.0001f && Math.Abs(m.ScaleY - 1f) < 0.0001f &&
+        Math.Abs(m.SkewX) < 0.0001f && Math.Abs(m.SkewY) < 0.0001f &&
+        Math.Abs(m.TransX - MathF.Round(m.TransX)) < 0.001f &&
+        Math.Abs(m.TransY - MathF.Round(m.TransY)) < 0.001f;
 
     private (float Sx, float Sy) Scales => (
         SourceRect.Width > 0.5f ? TargetRect.Width / SourceRect.Width : 1f,
@@ -221,7 +262,91 @@ public sealed class TransformSession : IDisposable
             DisposeItems(items);
             return null;
         }
-        return new TransformSession(doc, items, src, target is GroupLayer);
+        return new TransformSession(doc, target, items, src);
+    }
+
+    /// <summary>
+    /// 從上一輪落地結果續接（使用者縮小、落地、之後又把它拉大 —— 不能糊）：
+    /// 像素改以 <paramref name="resume"/> 保留的最初原始像素重取樣，框與文字物件則從目前狀態出發，
+    /// 所以 identity（沒動）＝上一輪結果、undo 也只退回上一輪結果。
+    /// 目標圖層集合對不上（結構變了）時回傳 null，呼叫端退回 <see cref="Begin"/>。
+    /// 成功時接手 resume 內像素的擁有權。
+    /// </summary>
+    public static TransformSession? Resume(Document doc, LayerNode target, TransformResume resume)
+    {
+        if (!ReferenceEquals(resume.Target, target)) return null;
+        var layers = new List<RasterLayer>();
+        switch (target)
+        {
+            case RasterLayer r: layers.Add(r); break;
+            case GroupLayer g: Collect(g, layers); break;
+            default: return null;
+        }
+        if (layers.Count != resume.Items.Length) return null;
+        for (var i = 0; i < layers.Count; i++)
+        {
+            if (!ReferenceEquals(layers[i], resume.Items[i].Layer)) return null;
+        }
+
+        var items = new List<Item>();
+        lock (doc.SyncRoot)
+        {
+            foreach (var (layer, pixels, srcBounds) in resume.Items)
+            {
+                if (layer.Document == null) { DisposeItems(items); return null; }
+                var content = layer.Surface.ExactContentBounds();
+                var current = content.Width > 0 && content.Height > 0
+                    ? new SKRectI(
+                        content.Left + layer.Offset.X, content.Top + layer.Offset.Y,
+                        content.Right + layer.Offset.X, content.Bottom + layer.Offset.Y)
+                    : SKRectI.Empty;
+                items.Add(new Item
+                {
+                    Layer = layer,
+                    Pixels = pixels,
+                    SrcBounds = srcBounds,
+                    BaseOffset = layer.Offset,
+                    Before = layer.Surface.Snapshot(),
+                    StartElements = layer.HasElements ? layer.Elements.ToArray() : Array.Empty<VectorElement>(),
+                    LastStamp = current,
+                });
+            }
+        }
+
+        var session = new TransformSession(doc, target, items, resume.TargetRect)
+        {
+            _preMatrix = resume.PreMatrix,
+            _preIsIdentity = false,
+            _baseRotation = resume.RotationDeg,
+            RotationDeg = resume.RotationDeg,
+            ResetSize = resume.OriginalSize,
+        };
+        resume.Detach(); // 像素已交給 session
+        return session;
+    }
+
+    /// <summary>
+    /// 落地後把「最初的原始像素 × 到目前為止的累積映射」打包起來，讓下一輪對同一目標的變形
+    /// 能從原始像素續接。只有像素真的被重取樣過才值得保留（純平移沒有）。
+    /// 須在 <see cref="BuildCommit"/> 之後呼叫；成功時接手各層像素的擁有權（session 之後不再釋放它們）。
+    /// </summary>
+    internal TransformResume? BuildResume(IHistoryEntry entry)
+    {
+        var target = Target;
+        if (_disposed || !_pixelsStamped) return null;
+        var pm = PixelMatrix;
+        if (IsIntegerTranslation(pm)) return null; // 像素還是無損的，下一輪從圖層重新提起即可
+
+        var items = new List<(RasterLayer, SKImage, SKRectI)>();
+        foreach (var item in _items)
+        {
+            if (item.Pixels == null) continue;
+            items.Add((item.Layer, item.Pixels, item.SrcBounds));
+            item.Pixels = null; // 擁有權移交
+        }
+        // 落地後 layer.Offset = BaseOffset + OffsetDelta，而 Matrix 是從（含位移的）TargetRect 算的，
+        // 兩者指向同一個 doc 位置 —— 下一輪以 BaseOffset = 目前 Offset 蓋章，Pre 直接用 PixelMatrix 即可。
+        return new TransformResume(target, entry, items.ToArray(), pm, TargetRect, RotationDeg, ResetSize);
     }
 
     private static void Collect(GroupLayer group, List<RasterLayer> into)
@@ -289,7 +414,7 @@ public sealed class TransformSession : IDisposable
         else
         {
             var (sx, sy) = Scales;
-            var rot = Math.Abs(RotationDeg) < 0.01f ? 0f : RotationDeg;
+            var rot = DeltaRotation;
             StampAll(preview: false, sx, sy, rot);
         }
         PublishOverlay(handingOver: true);
@@ -320,7 +445,7 @@ public sealed class TransformSession : IDisposable
         _overlay = new GestureOverlay
         {
             Items = items,
-            Matrix = Matrix,
+            Matrix = PixelMatrix,
             HandingOver = handingOver,
             HandoverRegion = region,
         };
@@ -401,7 +526,7 @@ public sealed class TransformSession : IDisposable
                 foreach (var start in item.StartElements)
                 {
                     if (item.Layer.FindElement(start.Id) != null)
-                        item.Layer.ReplaceElement(start.TransformedBy(m, sx, sy, RotationDeg));
+                        item.Layer.ReplaceElement(start.TransformedBy(m, sx, sy, DeltaRotation));
                 }
             }
 
@@ -420,11 +545,14 @@ public sealed class TransformSession : IDisposable
         OffsetDelta = SKPointI.Empty;
         _stampedParams = (sx, sy, rot, TargetRect.Width, TargetRect.Height);
         _stampedOrigin = new SKPoint(TargetRect.Left, TargetRect.Top);
-        var pureTranslate = Math.Abs(sx - 1f) < 0.0001f && Math.Abs(sy - 1f) < 0.0001f && rot == 0f;
-        _stampedHigh = pureTranslate || !preview;
+        var m = Matrix;
+        var pm = PixelMatrix;
+        // 無損＝像素矩陣（含續接的前段）是整數平移：None 取樣、逐位元不變。
+        // 續接時本輪就算是純平移，前段仍帶縮放/旋轉，得照常重取樣。
+        var lossless = IsIntegerTranslation(pm);
+        _stampedHigh = lossless || !preview;
         _pixelsStamped = true;
 
-        var m = Matrix;
         foreach (var item in _items)
         {
             var newStamp = SKRectI.Empty;
@@ -435,18 +563,18 @@ public sealed class TransformSession : IDisposable
 
                 if (item.Pixels != null)
                 {
-                    var mapped = m.MapRect(new SKRect(
+                    var mapped = pm.MapRect(new SKRect(
                         item.SrcBounds.Left, item.SrcBounds.Top,
                         item.SrcBounds.Right, item.SrcBounds.Bottom));
                     newStamp = SKRectI.Ceiling(mapped);
                     newStamp.Inflate(2, 2); // 重取樣的邊緣餘裕
-                    Stamp(item, m, newStamp, pureTranslate, preview);
+                    Stamp(item, pm, newStamp, lossless, preview);
                 }
 
                 foreach (var start in item.StartElements)
                 {
                     if (item.Layer.FindElement(start.Id) != null)
-                        item.Layer.ReplaceElement(start.TransformedBy(m, sx, sy, RotationDeg));
+                        item.Layer.ReplaceElement(start.TransformedBy(m, sx, sy, DeltaRotation));
                 }
             }
 
@@ -473,13 +601,13 @@ public sealed class TransformSession : IDisposable
                 foreach (var start in item.StartElements)
                 {
                     if (item.Layer.FindElement(start.Id) != null)
-                        item.Layer.ReplaceElement(start.TransformedBy(m, sx, sy, RotationDeg));
+                        item.Layer.ReplaceElement(start.TransformedBy(m, sx, sy, DeltaRotation));
                 }
             }
         }
     }
 
-    private void Stamp(Item item, SKMatrix m, SKRectI docStamp, bool pureTranslate, bool preview)
+    private void Stamp(Item item, SKMatrix m, SKRectI docStamp, bool lossless, bool preview)
     {
         var layer = item.Layer;
         var layerRect = new SKRectI(
@@ -488,10 +616,10 @@ public sealed class TransformSession : IDisposable
 
         using var paint = new SKPaint
         {
-            FilterQuality = pureTranslate ? SKFilterQuality.None
+            FilterQuality = lossless ? SKFilterQuality.None
                 : preview ? SKFilterQuality.Low
                 : SKFilterQuality.High,
-            IsAntialias = !pureTranslate,
+            IsAntialias = !lossless,
         };
 
         foreach (var idx in TileIndex.CoveringRect(layerRect))
@@ -668,5 +796,50 @@ public sealed class TransformSession : IDisposable
             item.Before.Dispose();
         }
         items.Clear();
+    }
+}
+
+/// <summary>
+/// 變形落地後留下的「續接點」：最初的原始像素＋累積映射＋落地那步的 history entry。
+/// 只要 history 頂端還是那一步（中間沒有別的編輯、也沒 undo 走掉），對同一目標再開變形
+/// 就從原始像素續接 —— 縮小落地後再拉大也不糊。由 <see cref="EditorSession"/> 持有與驗證。
+/// </summary>
+public sealed class TransformResume
+{
+    internal LayerNode Target { get; }
+    internal IHistoryEntry Entry { get; }
+    internal (RasterLayer Layer, SKImage Pixels, SKRectI SrcBounds)[] Items { get; }
+    internal SKMatrix PreMatrix { get; }
+    internal SKRect TargetRect { get; }
+    internal float RotationDeg { get; }
+    internal SKSize OriginalSize { get; }
+    private bool _detached;
+
+    internal TransformResume(LayerNode target, IHistoryEntry entry,
+        (RasterLayer Layer, SKImage Pixels, SKRectI SrcBounds)[] items,
+        SKMatrix preMatrix, SKRect targetRect, float rotationDeg, SKSize originalSize)
+    {
+        Target = target;
+        Entry = entry;
+        Items = items;
+        PreMatrix = preMatrix;
+        TargetRect = targetRect;
+        RotationDeg = rotationDeg;
+        OriginalSize = originalSize;
+    }
+
+    /// <summary>還有效＝落地那步仍在 history 頂端（狀態就是落地當時的樣子）。</summary>
+    internal bool IsValid(HistoryManager history) =>
+        history.UndoStack.Count > 0 && ReferenceEquals(history.UndoStack[^1], Entry);
+
+    /// <summary>像素已交給新的 session（不再由本物件釋放）。</summary>
+    internal void Detach() => _detached = true;
+
+    /// <summary>釋放保留的像素（render thread 可能還在畫上一輪的覆疊殘影，走退役佇列）。</summary>
+    internal void Release(Compositor compositor)
+    {
+        if (_detached) return;
+        _detached = true;
+        foreach (var (_, pixels, _) in Items) compositor.Retire(pixels);
     }
 }

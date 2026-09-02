@@ -93,10 +93,31 @@ public static class FontCatalog
             FontFamily = SafeFontFamily(name),
             FontSize = 13,
             Width = width,
+            // 定寬比可用空間寬時，Stretch 會把它置中 → 兩端都被裁、名稱開頭消失；靠左只裁尾端
+            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Left,
             TextTrimming = TextTrimming.CharacterEllipsis,
             VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
         };
         ToolTip.SetTip(tb, name); // 被截掉時懸停看全名
+        return tb;
+    });
+
+    /// <summary>
+    /// 下拉「收起時」選取框的樣板：不定寬、吃滿可用空間、尾端截字 ——
+    /// 清單項目的定寬版放進比它窄的選取框會被置中裁切，字型名稱的開頭就看不到了。
+    /// </summary>
+    public static IDataTemplate SelectionBoxTemplate() => new FuncDataTemplate<string>((name, _) =>
+    {
+        var tb = new TextBlock
+        {
+            Text = name,
+            FontFamily = SafeFontFamily(name),
+            FontSize = 13,
+            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+        };
+        ToolTip.SetTip(tb, name);
         return tb;
     });
 }

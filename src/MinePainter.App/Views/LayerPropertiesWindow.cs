@@ -12,6 +12,9 @@ using MinePainter.Core.History;
 using MinePainter.Core.Layers;
 using MinePainter.Core.Tiles;
 using MinePainter.Core.Tools;
+using Material.Icons;
+using Material.Icons.Avalonia;
+using Avalonia.Controls.Primitives;
 
 namespace MinePainter.App.Views;
 
@@ -45,7 +48,7 @@ public sealed class LayerPropertiesWindow : Window
     private readonly ComboBox _blendCombo = new() { FontSize = 12, HorizontalAlignment = HorizontalAlignment.Stretch };
     private readonly BarSlider _opacityBar = new() { Minimum = 0, Maximum = 100, Suffix = "%", Height = 26 };
     private readonly StackPanel _adjustmentParams = new() { Spacing = 4 };
-    private readonly StackPanel _effectsPanel = new() { Spacing = 4 };
+    private readonly StackPanel _effectsPanel = new() { Spacing = 0 };
     private readonly StackPanel _detailRows = new() { Spacing = 3 };
     private Border _root = null!;
 
@@ -62,14 +65,14 @@ public sealed class LayerPropertiesWindow : Window
         _node = node;
 
         Title = "圖層屬性";
-        Width = 380;
+        Width = 440;
         SizeToContent = SizeToContent.Height;
         SystemDecorations = SystemDecorations.None;
         ShowInTaskbar = false;
         CanResize = false;
         Background = Brushes.Transparent;
         TransparencyLevelHint = [WindowTransparencyLevel.Transparent];
-        WindowStartupLocation = WindowStartupLocation.CenterScreen;
+        WindowStartupLocation = WindowStartupLocation.CenterOwner; // 跟著主視窗，不跳到別的螢幕
 
         _opacityBar.Label = node is AdjustmentLayer ? "強度" : "不透明度";
         foreach (var (_, label) in BlendItems)
@@ -328,6 +331,9 @@ public sealed class LayerPropertiesWindow : Window
     }
 
     // ---- 圖層效果堆疊（非破壞性；可重新調整／排序／開關／烙印／預設集） ----
+    //
+    // 這是核心功能，UI 走「管線卡片」：每一道效果一張卡（名稱＋參數摘要＋圖示動作），
+    // 左側步驟編號用一條連線串起來 —— 由上而下＝最後套用 → 最先套用（與圖層堆疊同向）。
 
     private void BuildEffectsSection()
     {
@@ -337,110 +343,313 @@ public sealed class LayerPropertiesWindow : Window
         IReadOnlyList<LayerEffect> effects;
         lock (doc.SyncRoot) effects = layer.Effects;
 
-        var title = new TextBlock
+        // 標題列：名稱＋數量膠囊；右側三顆主要動作
+        var title = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center };
+        title.Children.Add(new MaterialIcon { Kind = MaterialIconKind.AutoFix, Width = 15, Height = 15, Foreground = AppTheme.AccentBrush, VerticalAlignment = VerticalAlignment.Center });
+        title.Children.Add(new TextBlock { Text = "效果堆疊", FontSize = 12, FontWeight = FontWeight.Bold, VerticalAlignment = VerticalAlignment.Center });
+        if (effects.Count > 0)
         {
-            Text = effects.Count == 0 ? "效果堆疊" : $"效果堆疊（{effects.Count}）",
-            FontSize = 12,
-            FontWeight = FontWeight.Bold,
-            VerticalAlignment = VerticalAlignment.Center,
-        };
-        var addButton = SmallButton("＋ 新增", "從效果／調整清單加一筆");
+            title.Children.Add(new Border
+            {
+                Background = AppTheme.HeaderBrush,
+                CornerRadius = new CornerRadius(8),
+                Padding = new Thickness(6, 1),
+                VerticalAlignment = VerticalAlignment.Center,
+                Child = new TextBlock { Text = effects.Count.ToString(), FontSize = 10, Foreground = AppTheme.TextMutedBrush },
+            });
+        }
+
+        var addButton = ActionButton(MaterialIconKind.Plus, "新增", "從效果／調整清單加一道（點分類展開）", accent: true);
         addButton.Flyout = BuildAddFlyout(layer);
-        var presetButton = SmallButton("預設集", "套用／儲存整個堆疊");
+        var presetButton = ActionButton(MaterialIconKind.BookmarkOutline, "預設集", "套用／儲存整個堆疊");
         presetButton.Flyout = BuildPresetFlyout(layer, effects);
-        var bakeButton = SmallButton("烙印", "把堆疊結果寫進像素並清空堆疊（可復原）");
+        var bakeButton = ActionButton(MaterialIconKind.Stamper, "烙印", "把堆疊結果寫進像素並清空堆疊（可復原）");
         bakeButton.IsEnabled = effects.Count > 0;
         bakeButton.Click += (_, _) =>
         {
             if (LayerEffectCommands.Bake(_session, layer)) StateChanged?.Invoke();
             SyncFromModel();
         };
-        var header = new DockPanel();
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
         buttons.Children.Add(addButton);
         buttons.Children.Add(presetButton);
         buttons.Children.Add(bakeButton);
         DockPanel.SetDock(buttons, Dock.Right);
+        var header = new DockPanel { Margin = new Thickness(0, 0, 0, 6) };
         header.Children.Add(buttons);
         header.Children.Add(title);
         _effectsPanel.Children.Add(header);
 
         if (effects.Count == 0)
         {
-            _effectsPanel.Children.Add(new TextBlock
+            // 空狀態：框＋引導，直接就地新增
+            var emptyAdd = ActionButton(MaterialIconKind.Plus, "新增第一道效果", "從效果／調整清單加一道", accent: true);
+            emptyAdd.Flyout = BuildAddFlyout(layer);
+            emptyAdd.HorizontalAlignment = HorizontalAlignment.Center;
+            emptyAdd.Margin = new Thickness(0, 6, 0, 0);
+            var empty = new StackPanel { Spacing = 4 };
+            empty.Children.Add(new MaterialIcon
             {
-                Text = "尚無效果。從「調整」「效果」選單套用的會記錄在這裡，之後可以回頭改參數、排序或關掉。",
-                FontSize = 11,
-                Foreground = AppTheme.TextMutedBrush,
-                TextWrapping = TextWrapping.Wrap,
+                Kind = MaterialIconKind.LayersOutline, Width = 26, Height = 26,
+                Foreground = AppTheme.TextMutedBrush, HorizontalAlignment = HorizontalAlignment.Center,
+            });
+            empty.Children.Add(new TextBlock
+            {
+                Text = "這一層還沒有效果",
+                FontSize = 12, FontWeight = FontWeight.Bold,
+                HorizontalAlignment = HorizontalAlignment.Center,
+            });
+            empty.Children.Add(new TextBlock
+            {
+                Text = "從「調整」「效果」選單套用的會記錄在這裡，之後隨時可以回頭改參數、調順序或暫時關掉，像素不會被動到。",
+                FontSize = 11, Foreground = AppTheme.TextMutedBrush,
+                TextWrapping = TextWrapping.Wrap, TextAlignment = TextAlignment.Center,
+            });
+            empty.Children.Add(emptyAdd);
+            _effectsPanel.Children.Add(new Border
+            {
+                BorderBrush = AppTheme.SeparatorBrush,
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(4),
+                Padding = new Thickness(12, 12),
+                Child = empty,
             });
             return;
         }
 
-        // 由上而下 = 由後套到先套（最上面是最後一道，和圖層堆疊的閱讀方向一致）
+        // 卡片清單（多道效果時內部捲動，視窗不無限長高）
+        var list = new StackPanel { Spacing = 0 };
         for (var i = effects.Count - 1; i >= 0; i--)
         {
-            var fx = effects[i];
-            var row = new DockPanel { Height = 26 };
-
-            var enabled = new CheckBox
-            {
-                IsChecked = fx.Enabled,
-                VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(0, 0, 4, 0),
-            };
-            ToolTip.SetTip(enabled, "啟用／停用");
-            enabled.IsCheckedChanged += (_, _) =>
-            {
-                LayerEffectCommands.SetEnabled(doc, _session.History, layer, fx.Id, enabled.IsChecked == true);
-                StateChanged?.Invoke();
-            };
-            DockPanel.SetDock(enabled, Dock.Left);
-
-            var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 2 };
-            var canEdit = fx.Effect.Parameters.Count > 0;
-            var edit = SmallButton("編輯", "重新調整參數（即時預覽）");
-            edit.IsEnabled = canEdit;
-            edit.Click += async (_, _) =>
-            {
-                var main = Owner as MainWindow;
-                if (main == null && Avalonia.Application.Current?.ApplicationLifetime is
-                    Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime { MainWindow: MainWindow mw })
-                    main = mw;
-                if (main == null) return;
-                await main.EditLayerEffectAsync(layer, fx);
-                SyncFromModel();
-            };
-            var up = SmallButton("▲", "往上（更晚套用）");
-            up.IsEnabled = i < effects.Count - 1;
-            up.Click += (_, _) => { LayerEffectCommands.Move(doc, _session.History, layer, fx.Id, +1); StateChanged?.Invoke(); SyncFromModel(); };
-            var down = SmallButton("▼", "往下（更早套用）");
-            down.IsEnabled = i > 0;
-            down.Click += (_, _) => { LayerEffectCommands.Move(doc, _session.History, layer, fx.Id, -1); StateChanged?.Invoke(); SyncFromModel(); };
-            var remove = SmallButton("✕", "移除");
-            remove.Click += (_, _) => { LayerEffectCommands.Remove(doc, _session.History, layer, fx.Id); StateChanged?.Invoke(); SyncFromModel(); };
-            actions.Children.Add(edit);
-            actions.Children.Add(up);
-            actions.Children.Add(down);
-            actions.Children.Add(remove);
-            DockPanel.SetDock(actions, Dock.Right);
-
-            var name = new TextBlock
-            {
-                Text = (fx.Mask != null ? "◪ " : "") + fx.Name,
-                FontSize = 12,
-                VerticalAlignment = VerticalAlignment.Center,
-                Foreground = fx.Enabled ? AppTheme.TextBrush : AppTheme.TextMutedBrush,
-                TextTrimming = TextTrimming.CharacterEllipsis,
-            };
-            ToolTip.SetTip(name, DescribeEffect(fx));
-            name.DoubleTapped += (_, _) => { if (canEdit) edit.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent)); };
-
-            row.Children.Add(enabled);
-            row.Children.Add(actions);
-            row.Children.Add(name);
-            _effectsPanel.Children.Add(row);
+            list.Children.Add(BuildEffectCard(layer, effects, i));
         }
+        _effectsPanel.Children.Add(new ScrollViewer
+        {
+            Content = list,
+            MaxHeight = 270,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+        });
+
+        // 閱讀方向提示
+        var hint = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, Margin = new Thickness(2, 4, 0, 0) };
+        hint.Children.Add(new MaterialIcon { Kind = MaterialIconKind.ArrowUp, Width = 11, Height = 11, Foreground = AppTheme.TextMutedBrush, VerticalAlignment = VerticalAlignment.Center });
+        hint.Children.Add(new TextBlock
+        {
+            Text = "上面的最後套用，最下面的先套用；雙擊卡片可重新調整參數",
+            FontSize = 10, Foreground = AppTheme.TextMutedBrush, VerticalAlignment = VerticalAlignment.Center,
+        });
+        _effectsPanel.Children.Add(hint);
+    }
+
+    /// <summary>一道效果的卡片：步驟編號（含上下連線）｜開關｜名稱＋參數摘要｜圖示動作。</summary>
+    private Control BuildEffectCard(RasterLayer layer, IReadOnlyList<LayerEffect> effects, int i)
+    {
+        var doc = _session.Document;
+        var fx = effects[i];
+        var isTop = i == effects.Count - 1;
+        var isBottom = i == 0;
+        var canEdit = fx.Effect.Parameters.Count > 0;
+
+        // 左側 gutter：連線＋編號圓點（編號＝套用順序，1 在最下面）
+        // 上下兩半各一段連線（首尾卡片只畫一半），編號圓點蓋在中間 —— 串成一條管線
+        var gutter = new Grid { Width = 26, RowDefinitions = new RowDefinitions("*,*") };
+        var lineBrush = new SolidColorBrush(AppTheme.TextMutedBrush.Color, 0.45);
+        var lineUp = new Border
+        {
+            Width = 2, Background = lineBrush,
+            HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Stretch, IsVisible = !isTop,
+        };
+        var lineDown = new Border
+        {
+            Width = 2, Background = lineBrush,
+            HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Stretch, IsVisible = !isBottom,
+        };
+        Grid.SetRow(lineUp, 0);
+        Grid.SetRow(lineDown, 1);
+        var badge = new Border
+        {
+            Width = 20, Height = 20,
+            CornerRadius = new CornerRadius(10),
+            Background = fx.Enabled ? AppTheme.AccentBrush : AppTheme.SeparatorBrush,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            Child = new TextBlock
+            {
+                Text = (i + 1).ToString(),
+                FontSize = 10, FontWeight = FontWeight.Bold,
+                Foreground = Brushes.White,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+            },
+        };
+        Grid.SetRowSpan(badge, 2);
+        gutter.Children.Add(lineUp);
+        gutter.Children.Add(lineDown);
+        gutter.Children.Add(badge);
+
+        // 開關
+        var enabled = new CheckBox
+        {
+            IsChecked = fx.Enabled,
+            MinWidth = 0,
+            Padding = new Thickness(0),
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(6, 0, 4, 0),
+        };
+        ToolTip.SetTip(enabled, fx.Enabled ? "暫時關掉這道效果" : "重新啟用");
+        enabled.IsCheckedChanged += (_, _) =>
+        {
+            LayerEffectCommands.SetEnabled(doc, _session.History, layer, fx.Id, enabled.IsChecked == true);
+            StateChanged?.Invoke();
+            SyncFromModel();
+        };
+
+        // 名稱＋摘要
+        var nameRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
+        nameRow.Children.Add(new TextBlock
+        {
+            Text = fx.Name,
+            FontSize = 12, FontWeight = FontWeight.Bold,
+            Foreground = fx.Enabled ? AppTheme.TextBrush : AppTheme.TextMutedBrush,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            VerticalAlignment = VerticalAlignment.Center,
+        });
+        if (fx.Mask != null)
+        {
+            var maskIcon = new MaterialIcon
+            {
+                Kind = MaterialIconKind.Selection, Width = 12, Height = 12,
+                Foreground = AppTheme.TextMutedBrush, VerticalAlignment = VerticalAlignment.Center,
+            };
+            ToolTip.SetTip(maskIcon, "只套用在當時的選取範圍內");
+            nameRow.Children.Add(maskIcon);
+        }
+        if (!fx.Enabled)
+        {
+            nameRow.Children.Add(new TextBlock
+            {
+                Text = "已停用", FontSize = 10, Foreground = AppTheme.TextMutedBrush, VerticalAlignment = VerticalAlignment.Center,
+            });
+        }
+        var summary = SummarizeParams(fx);
+        var text = new StackPanel { Spacing = 1, VerticalAlignment = VerticalAlignment.Center };
+        text.Children.Add(nameRow);
+        text.Children.Add(new TextBlock
+        {
+            Text = summary.Length > 0 ? summary : (canEdit ? "預設參數" : "沒有可調參數"),
+            FontSize = 10.5,
+            Foreground = AppTheme.TextMutedBrush,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+        });
+        ToolTip.SetTip(text, DescribeEffect(fx));
+
+        // 圖示動作
+        var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 0, VerticalAlignment = VerticalAlignment.Center };
+        var edit = IconButton(MaterialIconKind.TuneVariant, "重新調整參數（即時預覽）");
+        edit.IsEnabled = canEdit;
+        edit.Click += async (_, _) =>
+        {
+            var main = Owner as MainWindow;
+            if (main == null && Avalonia.Application.Current?.ApplicationLifetime is
+                Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime { MainWindow: MainWindow mw })
+                main = mw;
+            if (main == null) return;
+            await main.EditLayerEffectAsync(layer, fx);
+            SyncFromModel();
+        };
+        var up = IconButton(MaterialIconKind.ChevronUp, "往上（更晚套用）");
+        up.IsEnabled = !isTop;
+        up.Click += (_, _) => { LayerEffectCommands.Move(doc, _session.History, layer, fx.Id, +1); StateChanged?.Invoke(); SyncFromModel(); };
+        var down = IconButton(MaterialIconKind.ChevronDown, "往下（更早套用）");
+        down.IsEnabled = !isBottom;
+        down.Click += (_, _) => { LayerEffectCommands.Move(doc, _session.History, layer, fx.Id, -1); StateChanged?.Invoke(); SyncFromModel(); };
+        var remove = IconButton(MaterialIconKind.Close, "移除這道效果");
+        remove.Click += (_, _) => { LayerEffectCommands.Remove(doc, _session.History, layer, fx.Id); StateChanged?.Invoke(); SyncFromModel(); };
+        actions.Children.Add(edit);
+        actions.Children.Add(up);
+        actions.Children.Add(down);
+        actions.Children.Add(remove);
+
+        DockPanel.SetDock(enabled, Dock.Left);
+        DockPanel.SetDock(actions, Dock.Right);
+        var body = new DockPanel { Children = { enabled, actions, text } };
+        var card = new Border
+        {
+            Background = AppTheme.InnerBrush,
+            BorderBrush = AppTheme.BorderBrush,
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(4),
+            Padding = new Thickness(6, 5),
+            Margin = new Thickness(0, 2),
+            Opacity = fx.Enabled ? 1 : 0.6,
+            Child = body,
+        };
+        card.PointerEntered += (_, _) => card.Background = AppTheme.HeaderBrush;
+        card.PointerExited += (_, _) => card.Background = AppTheme.InnerBrush;
+        card.DoubleTapped += (_, _) =>
+        {
+            if (canEdit) edit.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+        };
+
+        DockPanel.SetDock(gutter, Dock.Left);
+        return new DockPanel { Children = { gutter, card } };
+    }
+
+    /// <summary>卡片第二行的參數摘要（只列參數，不重複名稱）。</summary>
+    private static string SummarizeParams(LayerEffect fx)
+    {
+        var parts = new List<string>();
+        foreach (var def in fx.Effect.Parameters)
+        {
+            switch (def)
+            {
+                case SliderParam s: parts.Add($"{s.Label} {s.Get(fx.Effect).ToString(s.Decimals > 0 ? "F" + s.Decimals : "0")}{s.Suffix}"); break;
+                case AngleParam a: parts.Add($"{a.Label} {a.Get(fx.Effect):0}°"); break;
+                case BoolParam b: if (b.Get(fx.Effect)) parts.Add(b.Label); break;
+                case ChoiceParam c: parts.Add(c.Options[Math.Clamp(c.Get(fx.Effect), 0, c.Options.Length - 1)]); break;
+            }
+        }
+        return string.Join(" · ", parts);
+    }
+
+    /// <summary>標題列的動作鈕：圖示＋文字；accent＝主要動作（新增）。</summary>
+    private static Button ActionButton(MaterialIconKind icon, string text, string tip, bool accent = false)
+    {
+        var content = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
+        content.Children.Add(new MaterialIcon
+        {
+            Kind = icon, Width = 13, Height = 13, VerticalAlignment = VerticalAlignment.Center,
+            Foreground = accent ? AppTheme.AccentBrush : AppTheme.TextBrush,
+        });
+        content.Children.Add(new TextBlock { Text = text, FontSize = 11, VerticalAlignment = VerticalAlignment.Center });
+        var b = new Button
+        {
+            Content = content,
+            Padding = new Thickness(7, 3),
+            MinWidth = 0,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        ToolTip.SetTip(b, tip);
+        return b;
+    }
+
+    /// <summary>卡片上的小圖示鈕（透明底，hover 才有底色）。</summary>
+    private static Button IconButton(MaterialIconKind icon, string tip)
+    {
+        var b = new Button
+        {
+            Content = new MaterialIcon { Kind = icon, Width = 15, Height = 15 },
+            Width = 24, Height = 24,
+            Padding = new Thickness(0),
+            MinWidth = 0,
+            Background = Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+            HorizontalContentAlignment = HorizontalAlignment.Center,
+            VerticalContentAlignment = VerticalAlignment.Center,
+        };
+        ToolTip.SetTip(b, tip);
+        return b;
     }
 
     private static string DescribeEffect(LayerEffect fx)
@@ -461,23 +670,9 @@ public sealed class LayerPropertiesWindow : Window
         return text;
     }
 
-    private static Button SmallButton(string text, string tip)
+    private Controls.ClickSubmenuMenuFlyout BuildAddFlyout(RasterLayer layer)
     {
-        var b = new Button
-        {
-            Content = text,
-            FontSize = 11,
-            Padding = new Thickness(6, 2),
-            MinWidth = 0,
-            VerticalAlignment = VerticalAlignment.Center,
-        };
-        ToolTip.SetTip(b, tip);
-        return b;
-    }
-
-    private Controls.AnimatedMenuFlyout BuildAddFlyout(RasterLayer layer)
-    {
-        var flyout = new Controls.AnimatedMenuFlyout();
+        var flyout = new Controls.ClickSubmenuMenuFlyout();
         var adjust = new MenuItem { Header = "調整" };
         foreach (var entry in AdjustmentRegistry.All)
         {
@@ -524,9 +719,9 @@ public sealed class LayerPropertiesWindow : Window
         SyncFromModel();
     }
 
-    private Controls.AnimatedMenuFlyout BuildPresetFlyout(RasterLayer layer, IReadOnlyList<LayerEffect> current)
+    private Controls.ClickSubmenuMenuFlyout BuildPresetFlyout(RasterLayer layer, IReadOnlyList<LayerEffect> current)
     {
-        var flyout = new Controls.AnimatedMenuFlyout();
+        var flyout = new Controls.ClickSubmenuMenuFlyout();
         var presets = EffectPresetStore.LoadAll();
         if (presets.Count == 0)
         {

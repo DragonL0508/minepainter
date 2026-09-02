@@ -156,7 +156,8 @@
 
         <StackPanel x:Name="TextGroup" Orientation="Horizontal" Spacing="5" VerticalAlignment="Center" IsVisible="False">
           <TextBlock Text="字型：" FontSize="12" VerticalAlignment="Center" />
-          <ComboBox x:Name="FontFamilyCombo" Width="170" FontSize="12" MaxDropDownHeight="420" />
+          <ComboBox x:Name="FontFamilyCombo" Width="190" FontSize="12" MaxDropDownHeight="420"
+                    HorizontalContentAlignment="Stretch" />
           <ComboBox x:Name="FontStyleCombo" Width="104" FontSize="12" MaxDropDownHeight="300"
                     ToolTip.Tip="字重／變種（如 Light、Black）" />
           <TextBlock Text="字級：" FontSize="12" VerticalAlignment="Center" />

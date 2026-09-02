@@ -111,11 +111,26 @@ public sealed class HandleDragController
     public static SKRect? LayerContentFrame(EditorSession session)
     {
         if (session.Document.ActiveLayer is not RasterLayer layer) return null;
+        SKRect? acc = null;
+        void Add(SKRect r) => acc = acc is { } a
+            ? new SKRect(Math.Min(a.Left, r.Left), Math.Min(a.Top, r.Top),
+                Math.Max(a.Right, r.Right), Math.Max(a.Bottom, r.Bottom))
+            : r;
+
         var b = layer.Surface.ExactContentBounds(); // 內容沒變時是 O(1)（按寫入版本快取）
-        if (b.Width <= 0 || b.Height <= 0) return null;
-        return new SKRect(
-            b.Left + layer.Offset.X, b.Top + layer.Offset.Y,
-            b.Right + layer.Offset.X, b.Bottom + layer.Offset.Y);
+        if (b.Width > 0 && b.Height > 0)
+        {
+            Add(new SKRect(
+                b.Left + layer.Offset.X, b.Top + layer.Offset.Y,
+                b.Right + layer.Offset.X, b.Bottom + layer.Offset.Y));
+        }
+        // 拖角走變形 session（像素與本層文字一起縮放），框也要把文字算進去才對得上
+        foreach (var el in layer.Elements)
+        {
+            var eb = el.FrameBounds;
+            if (!eb.IsEmpty) Add(eb);
+        }
+        return acc is { Width: > 0, Height: > 0 } ? acc : null;
     }
 
     /// <summary>試著從四角把手開始拖曳。tolerance 為 doc 像素。</summary>
@@ -168,31 +183,19 @@ public sealed class HandleDragController
             return true;
         }
 
-        // 群組內容框（僅移動工具）：拖角＝開始群組變形 session（像素與文字一起縮放）。
-        if (session.ActiveTool == session.Move &&
-            session.Document.ActiveLayer is GroupLayer &&
-            session.SelectionHandles is { } groupFrame)
+        // 圖層／群組內容框（僅移動工具；走到這裡表示 SelectionHandles 就是它）：
+        // 拖角＝開始變形 session（像素與文字一起縮放；含畫布外像素）。
+        // 單層以前走「整層提起成浮動內容」，改走變形 session 的原因：
+        // 落地後再拉回來能從原始像素續接（EditorSession.BeginTransform），縮小再放大不糊。
+        if (session.ActiveTool == session.Move && session.SelectionHandles is { } content)
         {
-            var corner = MoveTool.HitCorner(groupFrame, p, tolerance);
+            var corner = MoveTool.HitCorner(content, p, tolerance);
             if (corner < 0) return false;
             if (session.BeginTransform() is not { } begun) return false;
             _kind = TargetKind.Transform;
             _corner = corner;
             _startRect = begun.TargetRect;
             begun.BeginGesturePreview();
-            return true;
-        }
-
-        // 圖層內容框（僅移動工具；走到這裡表示 SelectionHandles 就是它）：
-        // 拖角＝提起整個圖層內容（含畫布外像素）縮放，之後照浮動內容處理。
-        if (session.ActiveTool == session.Move && session.SelectionHandles is { } content)
-        {
-            var corner = MoveTool.HitCorner(content, p, tolerance);
-            if (corner < 0) return false;
-            if (session.LiftLayerContent() is not { } lifted) return false;
-            _kind = TargetKind.Floating;
-            _corner = corner;
-            _startRect = lifted.TargetRect;
             return true;
         }
 

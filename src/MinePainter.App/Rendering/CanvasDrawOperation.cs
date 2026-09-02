@@ -279,8 +279,8 @@ public sealed class CanvasDrawOperation : ICustomDrawOperation
 
         if (_session.FloatingOverlay is not { } floating) return;
         var rect = floating.TargetRect; // 只讀一次：UI thread 正在改它
-        var scaled = rect.Width != floating.SourceBounds.Width ||
-                     rect.Height != floating.SourceBounds.Height;
+        var scaled = rect.Width != floating.PixelSize.Width ||
+                     rect.Height != floating.PixelSize.Height; // 續接時像素是原始那份，比像素不比 SourceBounds
         using (var paint = new SKPaint
                {
                    // 縮放中的預覽用 Low：High+AA 每格要 1.5ms，落地時才用得起

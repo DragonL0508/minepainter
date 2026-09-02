@@ -19,6 +19,13 @@ public sealed class FloatingSelection : IDisposable
     /// <summary>提起的像素（左上角對齊 SourceBounds）。</summary>
     public SKImage Pixels { get; }
 
+    /// <summary>
+    /// 像素本身的尺寸（續接時與 SourceBounds 不同）。建構時快取：render/合成執行緒可能在
+    /// 本物件已釋放後還走到 DrawInto —— 讀已釋放的 SKImage 屬性會直接 AV，
+    /// 傳給 DrawImage 則被 Skia 靜默略過（原本就是這樣活下來的）。
+    /// </summary>
+    public SKSizeI PixelSize { get; }
+
     /// <summary>原始位置（doc 座標）。</summary>
     public SKRectI SourceBounds { get; }
 
@@ -56,6 +63,7 @@ public sealed class FloatingSelection : IDisposable
     {
         LayerId = layerId;
         Pixels = pixels;
+        PixelSize = new SKSizeI(pixels.Width, pixels.Height);
         SourceBounds = sourceBounds;
         TargetRect = new SKRect(sourceBounds.Left, sourceBounds.Top, sourceBounds.Right, sourceBounds.Bottom);
         BeforeSnapshot = before;
@@ -94,7 +102,8 @@ public sealed class FloatingSelection : IDisposable
     /// 須在 Document.SyncRoot 內呼叫。
     /// <paramref name="wholeContent"/>：這是「整個圖層內容」的提起而非選取（見 <see cref="IsWholeContent"/>）。
     /// </summary>
-    public static FloatingSelection? Lift(RasterLayer layer, SelectionMask selection, bool wholeContent = false)
+    public static FloatingSelection? Lift(RasterLayer layer, SelectionMask selection, bool wholeContent = false,
+        SKImage? originalPixels = null)
     {
         var docBounds = selection.Bounds;
         if (docBounds.Width <= 0 || docBounds.Height <= 0) return null;
@@ -117,6 +126,15 @@ public sealed class FloatingSelection : IDisposable
 
         var lifted = surface.Snapshot();
         if (lifted == null) return null;
+
+        // 續接：呼叫端手上有「落地前的原始像素」（上一輪縮放落地、中間沒動別的）——
+        // 洞照挖、框照選取範圍，只有像素換成原始那份（DrawInto 是整張圖填進 TargetRect，
+        // 尺寸不必與 SourceBounds 相同），之後怎麼縮放都從原始重取樣。
+        if (originalPixels != null)
+        {
+            lifted.Dispose();
+            lifted = originalPixels;
+        }
 
         // 3) 從原圖層挖掉這塊（DstOut）
         var before = layer.Surface.Snapshot();
@@ -144,10 +162,20 @@ public sealed class FloatingSelection : IDisposable
     /// High+AA 約 1.5ms、Low 約 0.15ms，純平移（None）約 0.02ms。
     /// 純平移時兩者都用 None：沒有縮放就沒有重取樣的必要，還能避免子像素糊化。
     /// </summary>
+    /// <summary>目前尺寸與像素本身的尺寸不同（要重取樣）。續接時像素是原始那份，所以比的是像素而非 SourceBounds。</summary>
+    public bool IsScaled
+    {
+        get
+        {
+            var rect = TargetRect;
+            return rect.Width != PixelSize.Width || rect.Height != PixelSize.Height;
+        }
+    }
+
     public void DrawInto(SKCanvas canvas, bool preview = false)
     {
         var rect = TargetRect; // 只讀一次：render thread 也會走這裡，UI thread 可能同時在改
-        var scaled = rect.Width != SourceBounds.Width || rect.Height != SourceBounds.Height;
+        var scaled = rect.Width != PixelSize.Width || rect.Height != PixelSize.Height;
         using var paint = new SKPaint
         {
             FilterQuality = !scaled ? SKFilterQuality.None

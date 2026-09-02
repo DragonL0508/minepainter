@@ -127,8 +127,8 @@ public sealed class EditorSession : IDisposable
             if (Transform is { } t)
             {
                 return Math.Abs(t.RotationDeg) > 0.01f ||
-                       Math.Abs(t.TargetRect.Width - t.SourceRect.Width) > 0.5f ||
-                       Math.Abs(t.TargetRect.Height - t.SourceRect.Height) > 0.5f;
+                       Math.Abs(t.TargetRect.Width - t.ResetSize.Width) > 0.5f ||
+                       Math.Abs(t.TargetRect.Height - t.ResetSize.Height) > 0.5f;
             }
             lock (Document.SyncRoot)
             {
@@ -152,8 +152,8 @@ public sealed class EditorSession : IDisposable
             var cy = t.TargetRect.MidY;
             t.RotationDeg = 0f;
             t.TargetRect = SKRect.Create(
-                cx - t.SourceRect.Width / 2f, cy - t.SourceRect.Height / 2f,
-                t.SourceRect.Width, t.SourceRect.Height);
+                cx - t.ResetSize.Width / 2f, cy - t.ResetSize.Height / 2f,
+                t.ResetSize.Width, t.ResetSize.Height);
             t.Apply(preview: false);
             RefreshSelectionHandles();
             return true;
@@ -219,14 +219,93 @@ public sealed class EditorSession : IDisposable
         CommitFloating();
         if (Document.ActiveLayer is not { } target) return null;
 
-        var session = TransformSession.Begin(Document, target, out var reason);
+        // 上一輪剛落地、中間沒別的編輯 → 從最初的原始像素續接（縮小落地後再拉大不糊）
+        TransformSession? session = null;
+        if (TakeTransformResume(target) is { } resume)
+        {
+            session = TransformSession.Resume(Document, target, resume);
+            if (session == null) resume.Release(Compositor);
+        }
         if (session == null)
         {
-            if (reason != null) Notify(reason);
-            return null;
+            session = TransformSession.Begin(Document, target, out var reason);
+            if (session == null)
+            {
+                if (reason != null) Notify(reason);
+                return null;
+            }
         }
         Transform = session;
         return session;
+    }
+
+    // ---- 變形／浮動內容落地後的續接點（「縮小落地再拉大不能糊」）----
+
+    private TransformResume? _transformResume;
+    private FloatingResume? _floatingResume;
+
+    /// <summary>取出對 <paramref name="target"/> 有效的變形續接點（一次性；無效的順手釋放）。</summary>
+    private TransformResume? TakeTransformResume(LayerNode target)
+    {
+        var r = _transformResume;
+        if (r == null) return null;
+        _transformResume = null;
+        if (r.IsValid(History) && ReferenceEquals(r.Target, target)) return r;
+        r.Release(Compositor);
+        return null;
+    }
+
+    /// <summary>
+    /// 浮動內容落地後保留的原始像素：只要 history 頂端還是落地那步、選取還是落地時的那一個，
+    /// 再次提起同一塊就改用它（而不是已經重取樣過的圖層像素）。
+    /// </summary>
+    private sealed class FloatingResume(Guid layerId, IHistoryEntry entry, SelectionMask selection, SKImage pixels)
+    {
+        public Guid LayerId { get; } = layerId;
+        public IHistoryEntry Entry { get; } = entry;
+        public SelectionMask Selection { get; } = selection;
+        public SKImage Pixels { get; } = pixels;
+    }
+
+    private SKImage? TakeFloatingResume(RasterLayer layer, SelectionMask selection)
+    {
+        var r = _floatingResume;
+        if (r == null) return null;
+        _floatingResume = null;
+        if (r.LayerId == layer.Id && ReferenceEquals(r.Selection, selection) &&
+            History.UndoStack.Count > 0 && ReferenceEquals(History.UndoStack[^1], r.Entry))
+        {
+            return r.Pixels;
+        }
+        Compositor.Retire(r.Pixels);
+        return null;
+    }
+
+    /// <summary>history 一動就檢查續接點還有沒有效，沒效就立刻釋放（原始像素可能不小）。</summary>
+    private void ReleaseStaleResumes()
+    {
+        if (_transformResume is { } t && !t.IsValid(History))
+        {
+            _transformResume = null;
+            t.Release(Compositor);
+        }
+        if (_floatingResume is { } f &&
+            !(History.UndoStack.Count > 0 && ReferenceEquals(History.UndoStack[^1], f.Entry)))
+        {
+            _floatingResume = null;
+            Compositor.Retire(f.Pixels);
+        }
+    }
+
+    /// <summary>續接點保留的像素上限（單邊 ≤ 16384 已在提起時擋掉；這裡再限總量，約 128MB）。</summary>
+    private const long MaxResumePixels = 32L * 1024 * 1024;
+
+    private static SKImage? CopyImage(SKImage source)
+    {
+        using var pixmap = source.PeekPixels();
+        if (pixmap != null) return SKImage.FromPixelCopy(pixmap);
+        using var bitmap = SKBitmap.FromImage(source);
+        return bitmap == null ? null : SKImage.FromBitmap(bitmap);
     }
 
     /// <summary>把變形結果烙進圖層並記單一步 undo；恰好回到原狀時無損還原、不記步驟。</summary>
@@ -243,7 +322,14 @@ public sealed class EditorSession : IDisposable
         else
         {
             var entry = t.BuildCommit(t.IsGroup ? "變形群組" : "變形圖層");
-            if (entry != null) History.Push(entry);
+            if (entry != null)
+            {
+                History.Push(entry);
+                // 留下續接點：之後對同一目標再變形就從原始像素重取樣（要在 Push 之後，
+                // Push 會觸發 ReleaseStaleResumes）
+                _transformResume?.Release(Compositor);
+                _transformResume = t.BuildResume(entry);
+            }
         }
         t.DisposeDeferred(Compositor); // render thread 可能還在畫覆疊影像
         RefreshSelectionHandles();
@@ -631,10 +717,13 @@ public sealed class EditorSession : IDisposable
         if (Selection is not { IsEmpty: false } selection) return null;
         if (Document.ActiveLayer is not RasterLayer layer) return null;
 
+        // 剛落地過縮放且中間沒動別的 → 以落地前的原始像素續接（縮小落地再拉大不糊）
+        var original = TakeFloatingResume(layer, selection);
         lock (Document.SyncRoot)
         {
-            Floating = FloatingSelection.Lift(layer, selection);
+            Floating = FloatingSelection.Lift(layer, selection, originalPixels: original);
         }
+        if (Floating == null && original != null) Compositor.Retire(original);
         if (Floating != null) layer.Invalidate(Floating.AffectedBounds);
         return Floating;
     }
@@ -748,9 +837,18 @@ public sealed class EditorSession : IDisposable
                 undo: _ => ApplySelection(restoredSelection),
                 redo: _ => ApplySelection(newSelection));
 
-            History.Push(pixelEntry != null
+            IHistoryEntry entry = pixelEntry != null
                 ? new CompositeHistoryEntry(label, pixelEntry, selectionEntry)
-                : selectionEntry);
+                : selectionEntry;
+            History.Push(entry);
+
+            // 縮放過才留續接點（純平移的像素本來就無損）；要在 Push 之後（Push 會清掉舊的）
+            if (floating.IsScaled && (long)floating.Pixels.Width * floating.Pixels.Height <= MaxResumePixels &&
+                CopyImage(floating.Pixels) is { } copy)
+            {
+                if (_floatingResume is { } old) Compositor.Retire(old.Pixels);
+                _floatingResume = new FloatingResume(layer.Id, entry, newSelection, copy);
+            }
         }
 
         layer.Invalidate(affected);
@@ -974,6 +1072,7 @@ public sealed class EditorSession : IDisposable
         History = new HistoryManager(document);
         RegisterPendingEdit(new FloatingPendingEdit(this));
         RegisterPendingEdit(new TransformPendingEdit(this));
+        History.Changed += ReleaseStaleResumes; // 續接點只在「落地那步仍是最後一步」時有效
 
         Brush = new BrushTool();
         Eraser = new EraserTool();
@@ -994,6 +1093,10 @@ public sealed class EditorSession : IDisposable
         Transform = null;
         Floating?.Dispose();
         Floating = null;
+        _transformResume?.Release(Compositor);
+        _transformResume = null;
+        if (_floatingResume is { } fr) Compositor.Retire(fr.Pixels);
+        _floatingResume = null;
         if (_ghost is { } ghost) Compositor.Retire(ghost.Image); // Compositor.Dispose 會清掉退役佇列
         _ghost = null;
         _layerOverlay?.Retire(Compositor);

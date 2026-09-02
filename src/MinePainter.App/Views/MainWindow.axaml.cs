@@ -2093,6 +2093,7 @@ public partial class MainWindow : Window
         // 讀取本機安裝字體；下拉清單以各字型自己的字面顯示（paint.net 式預覽）
         _fontFamilies = Services.FontCatalog.Families;
         FontFamilyCombo.ItemTemplate = Services.FontCatalog.FamilyItemTemplate(150);
+        FontFamilyCombo.SelectionBoxItemTemplate = Services.FontCatalog.SelectionBoxTemplate();
         foreach (var f in _fontFamilies) FontFamilyCombo.Items.Add(f);
 
         var defaultIdx = Array.IndexOf(_fontFamilies, "Microsoft JhengHei");
