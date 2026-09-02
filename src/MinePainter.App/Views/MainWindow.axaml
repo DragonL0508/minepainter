@@ -160,7 +160,7 @@
 
         <StackPanel x:Name="ToleranceGroup" Orientation="Horizontal" Spacing="5" VerticalAlignment="Center">
           <TextBlock Text="容許度：" FontSize="12" VerticalAlignment="Center" />
-          <controls:BarSlider x:Name="ToleranceBar" Minimum="0" Maximum="255" Value="32" Width="120" />
+          <controls:BarSlider x:Name="ToleranceBar" Minimum="0" Maximum="100" Value="13" Width="120" Suffix="%" />
         </StackPanel>
 
         <StackPanel x:Name="TextGroup" Orientation="Horizontal" Spacing="5" VerticalAlignment="Center" IsVisible="False">

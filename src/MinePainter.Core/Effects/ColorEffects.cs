@@ -52,10 +52,11 @@ public sealed record ColorToAlphaEffect : IEffect
     [
         ColorDef,
         ModeDef,
-        new SliderParam("tolerance", "容許度", 0, 255, o => ((ColorToAlphaEffect)o).Tolerance,
-            (o, v) => ((ColorToAlphaEffect)o) with { Tolerance = (int)v }),
-        new SliderParam("softness", "柔邊", 0, 255, o => ((ColorToAlphaEffect)o).Softness,
-            (o, v) => ((ColorToAlphaEffect)o) with { Softness = (int)v }),
+        // 滑桿以 0..100% 呈現，內部仍存 0..255（存檔相容）
+        new SliderParam("tolerance", "容許度", 0, 100, o => Math.Round(((ColorToAlphaEffect)o).Tolerance / 2.55),
+            (o, v) => ((ColorToAlphaEffect)o) with { Tolerance = (int)Math.Round(v * 2.55) }, "%"),
+        new SliderParam("softness", "柔邊", 0, 100, o => Math.Round(((ColorToAlphaEffect)o).Softness / 2.55),
+            (o, v) => ((ColorToAlphaEffect)o) with { Softness = (int)Math.Round(v * 2.55) }, "%"),
         new BoolParam("invert", "反轉（只保留這個顏色）", o => ((ColorToAlphaEffect)o).Invert,
             (o, v) => ((ColorToAlphaEffect)o) with { Invert = v }),
     ];

@@ -2362,7 +2362,7 @@ public partial class MainWindow : Window
         }
 
         session.Shape.StrokeWidth = Math.Max(1f, (float)SizeBox.Value / 4);
-        session.Tolerance = (byte)ToleranceBar.Value;
+        session.Tolerance = (byte)Math.Round(ToleranceBar.Value * 2.55); // 滑桿 0..100%，工具吃 0..255
 
         var bg = session.BackgroundEraser.Settings;
         bg.Radius = radius;
