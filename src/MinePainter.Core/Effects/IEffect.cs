@@ -66,7 +66,9 @@ public static class EffectRegistry
         new("objectShadow", "物件", "物件陰影", () => new ObjectShadowEffect()),
         new("objectGlow", "物件", "物件光暈", () => new ObjectGlowEffect()),
         new("objectGradient", "物件", "物件漸層", () => new ObjectGradientEffect()),
+        new("objectFeather", "物件", "羽化物件", () => new ObjectFeatherEffect()),
 
+        new("aiBackgroundRemoval", "相片", "AI 去背", () => new BackgroundRemovalEffect()),
         new("glow", "相片", "光暈", () => new GlowEffect()),
         new("redEye", "相片", "紅眼移除", () => new RedEyeRemovalEffect()),
         new("sharpen", "相片", "銳利化", () => new SharpenEffect()),

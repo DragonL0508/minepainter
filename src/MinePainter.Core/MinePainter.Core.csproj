@@ -3,6 +3,8 @@
   <ItemGroup>
     <!-- 版本必須與 Avalonia.Skia 相依的 SkiaSharp 完全一致，否則 ISkiaSharpApiLease 型別衝突 -->
     <PackageReference Include="SkiaSharp" Version="2.88.9" />
+    <!-- AI 去背：ONNX Runtime（DirectML 版含 CPU provider，GPU 可選）；模型不隨 app 附帶 -->
+    <PackageReference Include="Microsoft.ML.OnnxRuntime.DirectML" Version="1.24.4" />
   </ItemGroup>
 
   <ItemGroup>

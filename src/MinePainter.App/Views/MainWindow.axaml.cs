@@ -68,9 +68,19 @@ public partial class MainWindow : Window
     {
     }
 
+    /// <summary>AI 去背模型資料夾（使用者放 .onnx 的地方）；app 旁的 models 資料夾也會掃。</summary>
+    public static string ModelFolder => System.IO.Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MinePainter", "models");
+
     public MainWindow(string? initialFile)
     {
         InitializeComponent();
+
+        OnnxModels.ModelDirectories.Clear();
+        OnnxModels.ModelDirectories.Add(ModelFolder);
+        OnnxModels.ModelDirectories.Add(System.IO.Path.Combine(AppContext.BaseDirectory, "models"));
+        var envModels = Environment.GetEnvironmentVariable("MINEPAINTER_MODELS");
+        if (!string.IsNullOrEmpty(envModels)) OnnxModels.ModelDirectories.Add(envModels);
 
         // 影像檔拖進視窗：問要「開啟」還是「加入圖層」
         DragDrop.SetAllowDrop(this, true);
@@ -1662,6 +1672,15 @@ public partial class MainWindow : Window
                 : "移動時只顯示基底像素，放開後才套用效果（較省效能）");
         };
         EffectsMenu.Items.Add(fxWhileDrag);
+
+        var modelFolder = new MenuItem { Header = "AI 去背模型資料夾…" };
+        ToolTip.SetTip(modelFolder, "把去背模型（.onnx：u2net、isnet、RMBG、BiRefNet…）放進這個資料夾，「相片 → AI 去背」就能選到");
+        modelFolder.Click += (_, _) =>
+        {
+            System.IO.Directory.CreateDirectory(ModelFolder);
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(ModelFolder) { UseShellExecute = true });
+        };
+        EffectsMenu.Items.Add(modelFolder);
         EffectsMenu.Items.Add(new Separator());
 
         foreach (var category in EffectRegistry.Categories)
@@ -1715,6 +1734,13 @@ public partial class MainWindow : Window
     {
         var session = CommitPending();
         if (session == null) return;
+        if (effect is BackgroundRemovalEffect { SelectedModel: null })
+        {
+            Toasts.Show("找不到去背模型：請用「效果 → AI 去背模型資料夾…」放入 .onnx（例如 rembg 的 isnet-general-use.onnx）");
+            System.IO.Directory.CreateDirectory(ModelFolder);
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(ModelFolder) { UseShellExecute = true });
+            return;
+        }
         if (session.Document.ActiveLayer is not RasterLayer layer)
         {
             Toasts.Show("請先選擇一個點陣圖層");

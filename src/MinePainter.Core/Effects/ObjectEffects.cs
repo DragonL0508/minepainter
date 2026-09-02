@@ -15,6 +15,39 @@ internal static class DistanceTransform
         for (var y = 0; y < h; y++)
         for (var x = 0; x < w; x++)
             d[y * w + x] = A(ctx.SrcOrTransparent(x - pad, y - pad)) >= 128 ? 0f : big;
+        Propagate(d, w, h);
+        return d;
+    }
+
+    /// <summary>
+    /// 反向：到最近「透明像素」的距離（羽化用）。canvasEdge = 畫布外也算透明；
+    /// 否則畫布外視為與邊緣像素相同（貼齊畫布邊的物件不會被羽化）。
+    /// </summary>
+    public static float[] ToTransparent(EffectContext ctx, int pad, bool canvasEdge)
+    {
+        var w = ctx.Width + pad * 2;
+        var h = ctx.Height + pad * 2;
+        var big = 1e9f;
+        var d = new float[w * h];
+        var docLeft = ctx.Region.Left - pad;
+        var docTop = ctx.Region.Top - pad;
+        for (var y = 0; y < h; y++)
+        for (var x = 0; x < w; x++)
+        {
+            var dx = docLeft + x;
+            var dy = docTop + y;
+            var outside = dx < 0 || dy < 0 || dx >= ctx.DocSize.Width || dy >= ctx.DocSize.Height;
+            var p = outside
+                ? (canvasEdge ? 0u : ctx.SrcAt(x - pad, y - pad))
+                : ctx.SrcOrTransparent(x - pad, y - pad);
+            d[y * w + x] = A(p) < 128 ? 0f : big;
+        }
+        Propagate(d, w, h);
+        return d;
+    }
+
+    private static void Propagate(float[] d, int w, int h)
+    {
 
         // 前向
         for (var y = 0; y < h; y++)
@@ -44,7 +77,6 @@ internal static class DistanceTransform
                 if (x > 0) v = Math.Min(v, d[(y + 1) * w + x - 1] + 1.4142f);
             }
         }
-        return d;
     }
 }
 
@@ -411,5 +443,69 @@ public sealed record ObjectGradientEffect : IEffect
                 ctx.Dst[y * ctx.Width + x] = Premul(B(c), G(c), R(c), ca);
             }
         });
+    }
+}
+
+/// <summary>
+/// 羽化物件（paint.net 的 Feather Object 外掛）：物件邊緣往內漸淡到透明。
+/// 以「到最近透明像素的距離」為準：距離 ≥ 半徑 → 原 alpha；越靠邊越透明。
+/// 用來柔化去背後的硬邊，或做出淡出的貼圖邊緣。
+/// </summary>
+public sealed record ObjectFeatherEffect : IEffect
+{
+    public int Radius { get; init; } = 10;     // 1..100
+    /// <summary>強度 0..100：邊緣最外圈剩下多少 alpha（0 = 完全透明）。</summary>
+    public int Strength { get; init; } = 100;
+    /// <summary>畫布邊界也視為物件邊（貼齊畫布邊的物件是否也羽化）。</summary>
+    public bool FeatherCanvasEdge { get; init; }
+
+    public string Name => "羽化物件";
+    public string Category => "物件";
+    public int SourceMargin => Math.Min(Radius, 100) + 2;
+
+    private static readonly ParamDef[] Params =
+    [
+        new SliderParam("radius", "半徑", 1, 100, o => ((ObjectFeatherEffect)o).Radius,
+            (o, v) => ((ObjectFeatherEffect)o) with { Radius = (int)v }, "px"),
+        new SliderParam("strength", "強度", 0, 100, o => ((ObjectFeatherEffect)o).Strength,
+            (o, v) => ((ObjectFeatherEffect)o) with { Strength = (int)v }, "%"),
+        new BoolParam("canvasEdge", "畫布邊緣也羽化", o => ((ObjectFeatherEffect)o).FeatherCanvasEdge,
+            (o, v) => ((ObjectFeatherEffect)o) with { FeatherCanvasEdge = v }),
+    ];
+    public IReadOnlyList<ParamDef> Parameters => Params;
+
+    public void Render(EffectContext ctx)
+    {
+        var radius = Math.Min(Radius, 100);
+        var pad = radius + 2;
+        var dist = DistanceTransform.ToTransparent(ctx, pad, FeatherCanvasEdge);
+        var dw = ctx.Width + pad * 2;
+        var floor = 1f - Strength / 100f;
+
+        ctx.ForRows(y =>
+        {
+            for (var x = 0; x < ctx.Width; x++)
+            {
+                var src = ctx.SrcAt(x, y);
+                if (A(src) == 0) { ctx.Dst[y * ctx.Width + x] = 0; continue; }
+                var d = dist[(y + pad) * dw + (x + pad)];
+                if (d >= radius) { ctx.Dst[y * ctx.Width + x] = src; continue; }
+                // 距離 0.5（邊緣像素中心）→ 幾乎透明；smoothstep 讓過渡沒有折角
+                var t = Math.Clamp((d - 0.5f) / radius, 0f, 1f);
+                var s = t * t * (3f - 2f * t);
+                var keep = floor + (1f - floor) * s;
+                var mul = (int)(keep * 256f + 0.5f);
+                ctx.Dst[y * ctx.Width + x] = mul >= 256 ? src : mul <= 0 ? 0 : ScalePremul(src, mul);
+            }
+        });
+    }
+
+    private static uint ScalePremul(uint p, int mul)
+    {
+        var b = (int)(p & 0xFF) * mul >> 8;
+        var g = (int)((p >> 8) & 0xFF) * mul >> 8;
+        var r = (int)((p >> 16) & 0xFF) * mul >> 8;
+        var a = (int)(p >> 24) * mul >> 8;
+        return (uint)b | ((uint)g << 8) | ((uint)r << 16) | ((uint)a << 24);
     }
 }
