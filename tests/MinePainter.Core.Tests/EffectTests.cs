@@ -328,6 +328,7 @@ public class BrushRenderingTests
         engine.BeginStroke(new SKPoint(fromX, y), buffer, settings);
         for (var x = fromX + 1; x <= toX; x++)
             engine.ContinueStroke(new SKPoint(x + xJitter, y), buffer, settings);
+        engine.EndStroke(new SKPoint(toX + xJitter, y), buffer, settings);
         return buffer.Mask.GetForRead(new Tiles.TileIndex(0, 0))!;
     }
 
@@ -380,6 +381,90 @@ public class BrushRenderingTests
         Assert.Equal(255, tile.Alpha[30 * Tiles.MaskTile.Size + 20]); // 起點中心
         Assert.Equal(0, tile.Alpha[30 * Tiles.MaskTile.Size + 12]);   // 起點外 8px
         Assert.Equal(0, tile.Alpha[23 * Tiles.MaskTile.Size + 14]);   // 圓頭的角落是空的
+    }
+
+    /// <summary>
+    /// 模擬縮小到 25% 慢慢畫斜線：滑鼠每動 1 螢幕像素就是 4 個文件像素，
+    /// 原始輸入是 4px 一階的樓梯（每 xPerY 步 x 才一步 y）。
+    /// 回傳筆劃上緣對最佳擬合直線的最大偏差（doc px）。
+    /// </summary>
+    private static float StaircaseEdgeWobble(float smoothingWindow, int xPerY)
+    {
+        var buffer = new StrokeBuffer();
+        buffer.Begin(Guid.NewGuid(), SKColors.Black, 1f, false);
+        var engine = new BrushEngine { SmoothingWindow = smoothingWindow };
+        var settings = new BrushSettings { Radius = 3f, Hardness = 1f };
+        float x = 8, y = 8;
+        engine.BeginStroke(new SKPoint(x, y), buffer, settings);
+        for (var i = 0; i < 60; i++)
+        {
+            for (var j = 0; j < xPerY; j++) { x += 4; engine.ContinueStroke(new SKPoint(x, y), buffer, settings); }
+            y += 4;
+            engine.ContinueStroke(new SKPoint(x, y), buffer, settings);
+        }
+        engine.EndStroke(new SKPoint(x, y), buffer, settings);
+        var tile = buffer.Mask.GetForRead(new Tiles.TileIndex(0, 0))!;
+
+        // 每欄上緣 = 由上往下第一次跨過 128 的位置（線性內插）
+        var xs = new List<float>();
+        var ys = new List<float>();
+        for (var col = 40; col <= 200; col++)
+        {
+            for (var row = 1; row < Tiles.MaskTile.Size; row++)
+            {
+                int a0 = tile.Alpha[(row - 1) * Tiles.MaskTile.Size + col];
+                int a1 = tile.Alpha[row * Tiles.MaskTile.Size + col];
+                if (a1 >= 128 && a0 < 128)
+                {
+                    xs.Add(col);
+                    ys.Add(row - 1 + (128f - a0) / (a1 - a0));
+                    break;
+                }
+            }
+        }
+        var mx = xs.Average();
+        var my = ys.Average();
+        float sxy = 0, sxx = 0;
+        for (var i = 0; i < xs.Count; i++)
+        {
+            sxy += (xs[i] - mx) * (ys[i] - my);
+            sxx += (xs[i] - mx) * (xs[i] - mx);
+        }
+        var slope = sxy / sxx;
+        var intercept = my - slope * mx;
+        var worst = 0f;
+        for (var i = 0; i < xs.Count; i++)
+            worst = Math.Max(worst, Math.Abs(ys[i] - (intercept + slope * xs[i])));
+        return worst;
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(3)]
+    public void Stroke_SmoothingRemovesZoomedOutStaircase(int xPerY)
+    {
+        var raw = StaircaseEdgeWobble(0f, xPerY);
+        var smoothed = StaircaseEdgeWobble(12f, xPerY); // 三個螢幕像素 = 12 doc px
+        Assert.True(raw > 0.8f, $"raw={raw}");
+        Assert.True(smoothed < 0.25f, $"smoothed={smoothed}");
+    }
+
+    [Fact]
+    public void Stroke_SmoothingKeepsUpWithFastStrokes()
+    {
+        // 快速揮筆：每個採樣相距 40px，遠大於平滑窗，控制點應直接等於原始點（不滯後）
+        var buffer = new StrokeBuffer();
+        buffer.Begin(Guid.NewGuid(), SKColors.Black, 1f, false);
+        var engine = new BrushEngine { SmoothingWindow = 12f };
+        var settings = new BrushSettings { Radius = 3f, Hardness = 1f };
+        engine.BeginStroke(new SKPoint(8, 8), buffer, settings);
+        for (var i = 1; i <= 5; i++)
+            engine.ContinueStroke(new SKPoint(8 + 40 * i, 8), buffer, settings);
+        // 已進來 6 個點，曲線落後一段：最後定形的段落結束在倒數第二點 (168, 8)
+        var bounds = buffer.DirtyBounds;
+        Assert.InRange(bounds.Right, 168 + 3, 168 + 5);
+        engine.EndStroke(new SKPoint(208, 8), buffer, settings);
+        Assert.InRange(buffer.DirtyBounds.Right, 208 + 3, 208 + 5);
     }
 
     [Fact]

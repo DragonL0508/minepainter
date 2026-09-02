@@ -489,7 +489,8 @@ public sealed class CanvasView : Control
             new SKPoint((float)doc.X, (float)doc.Y),
             pressure <= 0 ? 1f : pressure,
             ToModifiers(_currentModifiers),
-            _currentClickCount);
+            _currentClickCount,
+            (float)_viewport.Scale);
     }
 
     private KeyModifiers _currentModifiers;

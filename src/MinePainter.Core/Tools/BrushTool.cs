@@ -36,6 +36,8 @@ public class BrushTool : ITool
         {
             _beforeSnapshot = layer.Surface.Snapshot();
             session.StrokeBuffer.Begin(layer.Id, session.Foreground, Settings.Opacity, IsEraser);
+            // 平滑窗 = 三個螢幕像素：縮小檢視時吃掉整數滑鼠座標造成的樓梯，滯後不到一個螢幕像素
+            _engine.SmoothingWindow = 3f / Math.Max(e.ViewScale, 1e-3f);
             dirty = _engine.BeginStroke(e.DocPosition, session.StrokeBuffer, Settings,
                 session.Selection?.Mask, doc.Bounds);
         }
@@ -72,6 +74,7 @@ public class BrushTool : ITool
         SKRectI dirtyDoc;
         lock (doc.SyncRoot)
         {
+            _engine.EndStroke(e.DocPosition, buffer, Settings, session.Selection?.Mask, doc.Bounds);
             dirtyDoc = buffer.DirtyBounds;
             if (target != null && target.Document == doc && !dirtyDoc.IsEmpty)
             {

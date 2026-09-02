@@ -14,12 +14,14 @@ public enum ToolModifiers
 /// <summary>
 /// UI 框架無關的 pointer 事件（座標已轉為 doc 空間）。
 /// ClickCount 為此次按下的連擊數（1 = 單擊、2 = 雙擊），move/up 沿用該次按下的值。
+/// ViewScale 為當時的檢視倍率（view px / doc px），讓筆刷知道「一個螢幕像素」等於幾個文件像素。
 /// </summary>
 public readonly record struct ToolPointerEvent(
     SKPoint DocPosition,
     float Pressure,
     ToolModifiers Modifiers = ToolModifiers.None,
-    int ClickCount = 1);
+    int ClickCount = 1,
+    float ViewScale = 1f);
 
 /// <summary>工具進行中的幾何預覽（doc 座標折線；immutable，render thread 直接讀）。</summary>
 /// <summary>
