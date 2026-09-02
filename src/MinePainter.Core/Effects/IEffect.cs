@@ -66,6 +66,7 @@ public static class EffectRegistry
         new("objectOutline", "物件", "物件外框", () => new ObjectOutlineEffect()),
         new("objectShadow", "物件", "物件陰影", () => new ObjectShadowEffect()),
         new("objectGlow", "物件", "物件光暈", () => new ObjectGlowEffect()),
+        new("innerGlow", "物件", "物件內光暈", () => new InnerGlowEffect()),
         new("objectGradient", "物件", "物件漸層", () => new ObjectGradientEffect()),
         new("objectFeather", "物件", "羽化物件", () => new ObjectFeatherEffect()),
         new("colorToAlpha", "物件", "顏色透明化", () => new ColorToAlphaEffect()),

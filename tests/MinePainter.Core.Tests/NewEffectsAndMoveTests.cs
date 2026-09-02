@@ -88,6 +88,49 @@ public class NewEffectsAndMoveTests
         Assert.Equal(src[0], ctx.Dst[0]);
     }
 
+    // ---- 物件內光暈 ----
+
+    [Fact]
+    public void InnerGlow_TintsEdgeInwardAndKeepsSilhouette()
+    {
+        // 32×32 的畫布中央一塊 20×20 的黑色方塊，其餘透明
+        const int n = 32;
+        var src = new uint[n * n];
+        for (var y = 6; y < 26; y++)
+        for (var x = 6; x < 26; x++)
+            src[y * n + x] = Premul(0, 0, 0, 255);
+
+        var ctx = EffectContext.FromPixels(src, n, n, margin: 16);
+        new InnerGlowEffect { Size = 6, Spread = 0, Opacity = 100, Color = SKColors.Red }.Render(ctx);
+
+        // 剪影不變：物件外仍透明、物件內仍不透明
+        for (var i = 0; i < ctx.Dst.Length; i++) Assert.Equal(A(src[i]), A(ctx.Dst[i]));
+
+        // 邊緣被染紅，愈往內愈淡，正中央完全沒被碰到
+        var edge = Red(ctx.Dst[16 * n + 6]);
+        var inner = Red(ctx.Dst[16 * n + 9]);
+        var center = Red(ctx.Dst[16 * n + 16]);
+        Assert.True(edge > 200, $"邊緣應該幾乎是光暈色，實際 {edge}");
+        Assert.InRange(inner, 1, edge - 1);
+        Assert.Equal(0, center);
+    }
+
+    [Fact]
+    public void InnerGlow_ZeroOpacityIsIdentity()
+    {
+        var src = new uint[8 * 8];
+        Array.Fill(src, Premul(10, 20, 30, 255));
+        var ctx = EffectContext.FromPixels(src, 8, 8, margin: 4);
+        new InnerGlowEffect { Opacity = 0 }.Render(ctx);
+        Assert.Equal(src, ctx.Dst);
+    }
+
+    private static int Red(uint p)
+    {
+        Unpremul(p, out _, out _, out var r, out _);
+        return r;
+    }
+
     // ---- 傾斜 ----
 
     [Fact]

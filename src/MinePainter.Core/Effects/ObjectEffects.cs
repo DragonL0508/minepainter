@@ -511,6 +511,83 @@ public sealed record ObjectFeatherEffect : IEffect
 }
 
 /// <summary>
+/// 物件內光暈：光從物件的邊緣往內亮，形狀不變（只染色，不動 alpha）——
+/// 外光暈是把光畫在物件外面，內光暈是畫在自己身上，所以剪影一模一樣。
+/// 距離＝到最近透明像素的距離：邊緣 <c>擴散</c> px 內是滿的，再往內 <c>大小</c> px 淡出。
+/// </summary>
+public sealed record InnerGlowEffect : IEffect
+{
+    public int Size { get; init; } = 12;      // 1..100（往內淡出幾 px）
+    public int Spread { get; init; } = 0;     // 0..30（貼著邊緣全滿的厚度）
+    public int Opacity { get; init; } = 85;   // 0..100
+    public SKColor Color { get; init; } = new(0xFF, 0xD3, 0x4A);
+
+    /// <summary>畫布邊界也算物件邊（貼齊畫布邊的物件那一側要不要也發光）。</summary>
+    public bool GlowCanvasEdge { get; init; }
+
+    public string Name => "物件內光暈";
+    public string Category => "物件";
+    public int SourceMargin => Pad;
+
+    private int Pad => Math.Min(Size, 100) + Math.Min(Spread, 30) + 2;
+
+    private static readonly ParamDef[] Params =
+    [
+        new SliderParam("size", "大小", 1, 100, o => ((InnerGlowEffect)o).Size,
+            (o, v) => ((InnerGlowEffect)o) with { Size = (int)v }, "px"),
+        new SliderParam("spread", "擴散", 0, 30, o => ((InnerGlowEffect)o).Spread,
+            (o, v) => ((InnerGlowEffect)o) with { Spread = (int)v }, "px"),
+        new SliderParam("opacity", "不透明度", 0, 100, o => ((InnerGlowEffect)o).Opacity,
+            (o, v) => ((InnerGlowEffect)o) with { Opacity = (int)v }, "%"),
+        new ColorParam("color", "顏色", o => ((InnerGlowEffect)o).Color,
+            (o, v) => ((InnerGlowEffect)o) with { Color = v }),
+        new BoolParam("canvasEdge", "畫布邊緣也發光", o => ((InnerGlowEffect)o).GlowCanvasEdge,
+            (o, v) => ((InnerGlowEffect)o) with { GlowCanvasEdge = v }),
+    ];
+    public IReadOnlyList<ParamDef> Parameters => Params;
+
+    public void Render(EffectContext ctx)
+    {
+        var size = Math.Min(Size, 100);
+        var spread = Math.Min(Spread, 30);
+        var opacity = Math.Clamp(Opacity, 0, 100) / 100f;
+        if (opacity <= 0f) { ctx.CopySrcToDst(); return; }
+
+        var pad = Pad;
+        var dist = DistanceTransform.ToTransparent(ctx, pad, GlowCanvasEdge);
+        var dw = ctx.Width + pad * 2;
+        int cr = Color.Red, cg = Color.Green, cb = Color.Blue;
+
+        ctx.ForRows(y =>
+        {
+            for (var x = 0; x < ctx.Width; x++)
+            {
+                var src = ctx.SrcAt(x, y);
+                var i = y * ctx.Width + x;
+                if (A(src) == 0) { ctx.Dst[i] = src; continue; } // 物件外不畫
+
+                var d = dist[(y + pad) * dw + (x + pad)];
+                if (d >= spread + size) { ctx.Dst[i] = src; continue; }
+
+                // 邊緣 spread px 內全滿，再往內 size px 用 smoothstep 淡出
+                var t = Math.Clamp((d - spread) / size, 0f, 1f);
+                var k = 1f - t * t * (3f - 2f * t);
+                var f = opacity * k;
+                if (f <= 0f) { ctx.Dst[i] = src; continue; }
+
+                // 只把顏色往光暈色推，alpha 原封不動 —— 剪影不會變胖也不會變糊
+                Unpremul(src, out var b, out var g, out var r, out var a);
+                ctx.Dst[i] = Premul(
+                    Clamp255(b + (cb - b) * f),
+                    Clamp255(g + (cg - g) * f),
+                    Clamp255(r + (cr - r) * f),
+                    a);
+            }
+        });
+    }
+}
+
+/// <summary>
 /// 顏色透明化：把指定顏色變成透明。兩種模式 ——
 ///
 /// 　「漸進（抽離這個顏色）」（預設，GIMP Color to Alpha 的作法）：每個像素都問
