@@ -41,6 +41,8 @@ public sealed class ElementDragHelper
     private SKPoint _dragStart;
     private SKPoint _moveDelta;   // move 模式：目前位移（覆疊圖在挪，原件還沒動）
     private SKPoint _anchor;      // resize 時固定不動的對角
+    private enum ResizeAxis { Both, Vertical, Horizontal }
+    private ResizeAxis _resizeAxis; // 邊把手只動一軸
     private float _origHeight;
     private float _origWidth;
     private SKPoint _rotateCenter;   // rotate 時的軸心（起始框中心，整趟固定）
@@ -63,25 +65,20 @@ public sealed class ElementDragHelper
             if (layer.FindElement(sel.ElementId) is not { } element) return false;
 
             var b = element.FrameBounds; // 把手畫在使用者看到的框上，命中也要對同一個框
-            Span<SKPoint> corners =
-            [
-                new(b.Left, b.Top), new(b.Right, b.Top),
-                new(b.Right, b.Bottom), new(b.Left, b.Bottom),
-            ];
-            for (var i = 0; i < 4; i++)
+            var handles = MoveTool.HandlePoints(b);
+            var hit = MoveTool.HitCorner(b, p, handleTolerance);
+            if (hit >= 0)
             {
-                if (Math.Abs(p.X - corners[i].X) <= handleTolerance &&
-                    Math.Abs(p.Y - corners[i].Y) <= handleTolerance)
-                {
-                    _mode = Mode.Resize;
-                    _layer = layer;
-                    _original = element;
-                    _dragStart = p;
-                    _anchor = corners[(i + 2) % 4]; // 對角固定
-                    _origHeight = Math.Max(1, b.Height);
-                    _origWidth = Math.Max(1, b.Width);
-                    return true;
-                }
+                _mode = Mode.Resize;
+                _layer = layer;
+                _original = element;
+                _dragStart = p;
+                // 角：對角固定；邊：對邊中點固定、只動一軸
+                _anchor = MoveTool.IsEdgeHandle(hit) ? handles[4 + (hit - 4 + 2) % 4] : handles[(hit + 2) % 4];
+                _resizeAxis = hit switch { 4 or 6 => ResizeAxis.Vertical, 5 or 7 => ResizeAxis.Horizontal, _ => ResizeAxis.Both };
+                _origHeight = Math.Max(1, b.Height);
+                _origWidth = Math.Max(1, b.Width);
+                return true;
             }
 
             if (allowInsideMove && element.HitTest(p))
@@ -199,6 +196,9 @@ public sealed class ElementDragHelper
                 var keepAspect = modifiers.HasFlag(ToolModifiers.Shift);
                 var newHeight = Math.Abs(p.Y - _anchor.Y);
                 var newWidth = Math.Abs(p.X - _anchor.X);
+                // 邊把手：另一軸不跟指標走。上下邊維持目前 ScaleX（寬隨字級等比）；左右邊字級不動
+                if (_resizeAxis == ResizeAxis.Vertical) newWidth = _origWidth * (newHeight / _origHeight);
+                else if (_resizeAxis == ResizeAxis.Horizontal) newHeight = _origHeight;
 
                 var vScale = _origHeight > 0 ? newHeight / _origHeight : 1f;
                 var hScale = _origWidth > 0 ? newWidth / _origWidth : 1f;
@@ -237,6 +237,9 @@ public sealed class ElementDragHelper
                 var anchorIsTop = Math.Abs(_anchor.Y - b0.Top) < Math.Abs(_anchor.Y - b0.Bottom);
                 var dx = anchorIsLeft ? b0.Left - b1.Left : b0.Right - b1.Right;
                 var dy = anchorIsTop ? b0.Top - b1.Top : b0.Bottom - b1.Bottom;
+                // 邊把手：沒被拉的那一軸以中心對齊（錨點在邊的中點）
+                if (_resizeAxis == ResizeAxis.Vertical) dx = b0.MidX - b1.MidX;
+                else if (_resizeAxis == ResizeAxis.Horizontal) dy = b0.MidY - b1.MidY;
                 updated = resized.Translated(dx, dy);
                 break;
             }

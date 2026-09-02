@@ -410,12 +410,8 @@ public sealed class CanvasDrawOperation : ICustomDrawOperation
                 IsAntialias = true,
             };
             var hs = 4f * screenPx;
-            Span<SKPoint> corners =
-            [
-                new(hr.Left, hr.Top), new(hr.Right, hr.Top),
-                new(hr.Right, hr.Bottom), new(hr.Left, hr.Bottom),
-            ];
-            foreach (var c in corners)
+            // 四角＋四邊中點（與 MoveTool.HitCorner 同一份位置）
+            foreach (var c in Core.Tools.MoveTool.HandlePoints(hr))
             {
                 var box = SKRect.Create(c.X - hs, c.Y - hs, hs * 2, hs * 2);
                 canvas.DrawRect(box, handleFill);

@@ -559,17 +559,28 @@ public sealed class MoveTool : ITool
         return transform.TargetRect.Contains(local.X, local.Y);
     }
 
-    /// <summary>四角把手命中測試；回傳 0=左上 1=右上 2=右下 3=左下，未命中為 -1。</summary>
+    /// <summary>
+    /// 八個把手的位置：0=左上 1=右上 2=右下 3=左下（角），4=上中 5=右中 6=下中 7=左中（邊）。
+    /// 畫把手與命中測試共用同一份，才不會畫在一處、點在另一處。
+    /// </summary>
+    public static SKPoint[] HandlePoints(SKRect rect) =>
+    [
+        new(rect.Left, rect.Top), new(rect.Right, rect.Top),
+        new(rect.Right, rect.Bottom), new(rect.Left, rect.Bottom),
+        new(rect.MidX, rect.Top), new(rect.Right, rect.MidY),
+        new(rect.MidX, rect.Bottom), new(rect.Left, rect.MidY),
+    ];
+
+    /// <summary>邊把手（4..7）只動一軸。</summary>
+    public static bool IsEdgeHandle(int handle) => handle >= 4;
+
+    /// <summary>把手命中測試；回傳 <see cref="HandlePoints"/> 的索引（角優先），未命中為 -1。</summary>
     public static int HitCorner(SKRect rect, SKPoint p, float tolerance)
     {
-        Span<SKPoint> corners =
-        [
-            new(rect.Left, rect.Top), new(rect.Right, rect.Top),
-            new(rect.Right, rect.Bottom), new(rect.Left, rect.Bottom),
-        ];
-        for (var i = 0; i < 4; i++)
+        var handles = HandlePoints(rect);
+        for (var i = 0; i < handles.Length; i++)
         {
-            if (Math.Abs(p.X - corners[i].X) <= tolerance && Math.Abs(p.Y - corners[i].Y) <= tolerance)
+            if (Math.Abs(p.X - handles[i].X) <= tolerance && Math.Abs(p.Y - handles[i].Y) <= tolerance)
                 return i;
         }
         return -1;
@@ -578,6 +589,7 @@ public sealed class MoveTool : ITool
     /// <summary>
     /// 拖角縮放：對角固定；keepAspect 時維持長寬比 —— 給了 <paramref name="aspect"/>（寬/高）就用它
     /// （＝物件「最原始」的比例，不是變形後的），否則用起始框的比例。
+    /// 邊把手（4..7）只動那一軸、對邊固定；keepAspect 時另一軸以中心為準等比跟著變。
     /// </summary>
     public static SKRect ResizeRect(SKRect start, int corner, SKPoint p, bool keepAspect, float? aspect = null)
     {
@@ -585,6 +597,36 @@ public sealed class MoveTool : ITool
         var t = Math.Min(start.Top, start.Bottom);
         var r = Math.Max(start.Left, start.Right);
         var b = Math.Max(start.Top, start.Bottom);
+
+        if (IsEdgeHandle(corner))
+        {
+            var nl = l; var nt = t; var nr = r; var nb = b;
+            switch (corner)
+            {
+                case 4: nt = p.Y; break;
+                case 5: nr = p.X; break;
+                case 6: nb = p.Y; break;
+                default: nl = p.X; break;
+            }
+            if (keepAspect && (aspect is > 0 || (start.Width > 0 && start.Height > 0)))
+            {
+                var ratio = aspect is > 0 ? aspect.Value : start.Width / start.Height;
+                if (corner is 4 or 6)
+                {
+                    // 上下邊：高度跟指標，寬度依比例、左右對稱
+                    var cx = (l + r) / 2f;
+                    var ew = Math.Abs(nb - nt) * ratio;
+                    nl = cx - ew / 2f; nr = cx + ew / 2f;
+                }
+                else
+                {
+                    var cy = (t + b) / 2f;
+                    var eh = Math.Abs(nr - nl) / ratio;
+                    nt = cy - eh / 2f; nb = cy + eh / 2f;
+                }
+            }
+            return new SKRect(Math.Min(nl, nr), Math.Min(nt, nb), Math.Max(nl, nr), Math.Max(nt, nb));
+        }
 
         // 對角（固定點）
         var anchor = corner switch
