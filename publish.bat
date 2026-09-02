@@ -7,6 +7,9 @@ rem   publish.bat fd           framework-dependent (~10MB, target PC needs .NET 
 rem   publish.bat sc 1.2.0     also set the version (written into exe properties and zip name)
 rem
 rem ReadyToRun pre-compiles IL to native code: noticeably faster startup (less JIT).
+rem Single-file compression is OFF on purpose: decompressing assemblies at startup
+rem delayed the splash from ~80ms to ~320ms after launch. The exe is bigger on disk
+rem (~135MB vs ~60MB) but the zip you send is about the same size either way.
 rem Output: dist\MinePainter-<version>-<suffix>\MinePainter.exe and a .zip next to it
 setlocal
 cd /d "%~dp0"
@@ -21,12 +24,9 @@ set PROJ=src\MinePainter.App
 if /i "%MODE%"=="fd" (
     set SELF=false
     set SUFFIX=framework-dependent
-    rem single-file compression is only supported for self-contained builds
-    set COMPRESS=false
 ) else (
     set SELF=true
     set SUFFIX=%RID%
-    set COMPRESS=true
 )
 
 rem NOTE: variable names avoid MSBuild property names (OutDir, Version...):
@@ -47,7 +47,7 @@ dotnet publish "%PROJ%" -c Release -r %RID% --self-contained %SELF% ^
     "-p:PublishDir=%STAGE%" ^
     -p:PublishSingleFile=true ^
     -p:IncludeNativeLibrariesForSelfExtract=true ^
-    -p:EnableCompressionInSingleFile=%COMPRESS% ^
+    -p:EnableCompressionInSingleFile=false ^
     -p:PublishReadyToRun=true ^
     -p:DebugType=none ^
     -p:Version=%APPVER% ^
