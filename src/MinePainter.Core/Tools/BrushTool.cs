@@ -36,8 +36,12 @@ public class BrushTool : ITool
         {
             _beforeSnapshot = layer.Surface.Snapshot();
             session.StrokeBuffer.Begin(layer.Id, session.Foreground, Settings.Opacity, IsEraser);
-            // 平滑窗 = 三個螢幕像素：縮小檢視時吃掉整數滑鼠座標造成的樓梯，滯後不到一個螢幕像素
-            _engine.SmoothingWindow = 3f / Math.Max(e.ViewScale, 1e-3f);
+            // 平滑都以螢幕像素定義（縮小檢視時手抖與整數座標樓梯都被放大同樣倍數）
+            var docPerScreenPx = 1f / Math.Max(e.ViewScale, 1e-3f);
+            // 樓梯窗 = 三個螢幕像素，滯後不到一個螢幕像素
+            _engine.SmoothingWindow = 3f * docPerScreenPx;
+            // 手抖穩定：100% = 16 螢幕像素的繩長/平滑距離
+            _engine.Stabilize = Math.Clamp(Settings.Smoothing, 0f, 100f) / 100f * 16f * docPerScreenPx;
             dirty = _engine.BeginStroke(e.DocPosition, session.StrokeBuffer, Settings,
                 session.Selection?.Mask, doc.Bounds);
         }

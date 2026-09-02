@@ -449,6 +449,52 @@ public class BrushRenderingTests
         Assert.True(smoothed < 0.25f, $"smoothed={smoothed}");
     }
 
+    /// <summary>
+    /// 模擬 25% 縮放慢畫水平線並帶手抖：每採樣前進 1 螢幕像素，垂直方向正弦晃動
+    /// （振幅 1.5 螢幕像素、週期 14 個採樣），再取整數螢幕像素。回傳上緣的最高最低差（doc px）。
+    /// </summary>
+    private static float TremorEdgeRange(float stabilize)
+    {
+        var buffer = new StrokeBuffer();
+        buffer.Begin(Guid.NewGuid(), SKColors.Black, 1f, false);
+        var engine = new BrushEngine { SmoothingWindow = 12f, Stabilize = stabilize };
+        var settings = new BrushSettings { Radius = 3f, Hardness = 1f };
+        SKPoint At(int i) => new(
+            (4 + i) * 4,
+            MathF.Round(30 + 1.5f * MathF.Sin(2 * MathF.PI * i / 14)) * 4);
+        engine.BeginStroke(At(0), buffer, settings);
+        for (var i = 1; i < 200; i++) engine.ContinueStroke(At(i), buffer, settings);
+        engine.EndStroke(At(199), buffer, settings);
+        var tile = buffer.Mask.GetForRead(new Tiles.TileIndex(0, 0))!;
+
+        float lo = float.MaxValue, hi = float.MinValue;
+        for (var col = 60; col <= 200; col++)
+        {
+            for (var row = 1; row < Tiles.MaskTile.Size; row++)
+            {
+                int a0 = tile.Alpha[(row - 1) * Tiles.MaskTile.Size + col];
+                int a1 = tile.Alpha[row * Tiles.MaskTile.Size + col];
+                if (a1 >= 128 && a0 < 128)
+                {
+                    var edge = row - 1 + (128f - a0) / (a1 - a0);
+                    lo = Math.Min(lo, edge);
+                    hi = Math.Max(hi, edge);
+                    break;
+                }
+            }
+        }
+        return hi - lo;
+    }
+
+    [Fact]
+    public void Stroke_StabilizerSuppressesHandTremor()
+    {
+        var raw = TremorEdgeRange(0f);
+        var stabilized = TremorEdgeRange(32f); // 50% 強度 × 16 螢幕像素 × 4 doc px
+        Assert.True(raw > 6f, $"raw={raw}");
+        Assert.True(stabilized < 1f, $"stabilized={stabilized}");
+    }
+
     [Fact]
     public void Stroke_SmoothingKeepsUpWithFastStrokes()
     {

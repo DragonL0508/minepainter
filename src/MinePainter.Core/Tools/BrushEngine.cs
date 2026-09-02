@@ -9,6 +9,7 @@ public sealed record BrushSettings
     public float Radius { get; set; } = 4f;        // doc px（直徑 8）
     public float Hardness { get; set; } = 0.8f;    // 0..1
     public float Opacity { get; set; } = 1f;       // 0..1（整劃）
+    public float Smoothing { get; set; } = 50f;    // 0..100 手抖穩定強度（螢幕空間，見 BrushEngine）
 }
 
 /// <summary>
@@ -19,20 +20,32 @@ public sealed record BrushSettings
 ///
 /// 輸入端另做兩層平滑，解決「畫布縮小時畫的線放大看是樓梯」的問題
 /// （滑鼠是整數螢幕像素，縮到 25% 時每一步就是 4 個文件像素）：
-/// 1. 路徑窗移動平均：控制點 = 最近 <see cref="SmoothingWindow"/> 路徑長度內所有原始採樣的平均。
-///    慢速細畫時窗內有好幾個採樣，整數座標的樓梯被平掉；快速揮筆時窗內只剩一兩個點，
-///    幾乎不平滑也幾乎不滯後。呼叫端把窗設成「三個螢幕像素」，滯後上限約一個螢幕像素。
-/// 2. 向心 Catmull-Rom 曲線：筆劃沿通過控制點的平滑曲線蓋章，而不是直線折線。
+/// 1. 手抖穩定（<see cref="Stabilize"/>，可調強度）：兩段式濾波，
+///    先拉繩（lazy brush：筆尖被長度 L 的繩子拉著走，繩長內的晃動不落筆），
+///    再距離域指數平滑（每前進一步以 1−e^(−step/L) 的比例追上）。
+///    兩段各自只有 L 的固定滯後、與速度無關；對垂直行進方向的手抖衰減遠強於單段或方框平均
+///    （方框平均會共振：窗長剛好等於手抖週期才有效）。
+/// 2. 路徑窗移動平均（<see cref="SmoothingWindow"/>）：控制點 = 最近一小段路徑內採樣的平均，
+///    專門吃掉整數螢幕座標造成的樓梯；窗只有三個螢幕像素，快速揮筆時自然退化成不平滑。
+/// 3. 向心 Catmull-Rom 曲線：筆劃沿通過控制點的平滑曲線蓋章，而不是直線折線。
 ///    曲線段要等下一個點進來才能定形，所以落筆比游標晚一個採樣；PointerUp 用 EndStroke 補完。
 /// </summary>
 public sealed class BrushEngine
 {
     private readonly List<SKPoint> _points = new(8); // 平滑後的控制點（只留最後幾個）
-    private readonly List<SKPoint> _raw = new(16);   // 路徑窗內的原始採樣
+    private readonly List<SKPoint> _raw = new(16);   // 路徑窗內的（穩定後）採樣
+    private SKPoint _rope;   // 拉繩筆尖
+    private SKPoint _ema;    // 指數平滑輸出
+    private SKPoint _lastInput;
     private bool _active;
 
     /// <summary>
-    /// 輸入平滑的路徑窗長度（doc px）。0 = 關閉（每個採樣直接當控制點）。
+    /// 手抖穩定長度 L（doc px）：拉繩繩長 = 指數平滑距離常數。0 = 關閉。
+    /// </summary>
+    public float Stabilize { get; set; }
+
+    /// <summary>
+    /// 樓梯平滑的路徑窗長度（doc px）。0 = 關閉（每個採樣直接當控制點）。
     /// </summary>
     public float SmoothingWindow { get; set; }
 
@@ -47,6 +60,7 @@ public sealed class BrushEngine
         _raw.Clear();
         _points.Add(p);
         _raw.Add(p);
+        _rope = _ema = _lastInput = p;
         _active = true;
         return StampSegment(p, p, buffer, settings, clip, bounds);
     }
@@ -56,8 +70,36 @@ public sealed class BrushEngine
         MaskSurface? clip = null, SKRectI? bounds = null)
     {
         if (!_active) return SKRectI.Empty;
-        if (_raw[^1] == p) return SKRectI.Empty;
-        return AddControlPoint(Smooth(p), buffer, settings, clip, bounds);
+        if (_lastInput == p) return SKRectI.Empty;
+        var stabilized = StabilizeInput(p);
+        if (_raw[^1] == stabilized) return SKRectI.Empty;
+        return AddControlPoint(Smooth(stabilized), buffer, settings, clip, bounds);
+    }
+
+    /// <summary>兩段式手抖穩定：拉繩 → 距離域指數平滑。</summary>
+    private SKPoint StabilizeInput(SKPoint p)
+    {
+        var step = SKPoint.Distance(p, _lastInput);
+        _lastInput = p;
+        var len = Stabilize;
+        if (len <= 0f)
+        {
+            _rope = _ema = p;
+            return p;
+        }
+
+        var dx = p.X - _rope.X;
+        var dy = p.Y - _rope.Y;
+        var dist = MathF.Sqrt(dx * dx + dy * dy);
+        if (dist > len)
+        {
+            var k = (dist - len) / dist;
+            _rope = new SKPoint(_rope.X + dx * k, _rope.Y + dy * k);
+        }
+
+        var a = 1f - MathF.Exp(-step / len);
+        _ema = new SKPoint(_ema.X + (_rope.X - _ema.X) * a, _ema.Y + (_rope.Y - _ema.Y) * a);
+        return _ema;
     }
 
     /// <summary>把新採樣放進路徑窗，回傳窗內所有採樣的平均。</summary>

@@ -562,6 +562,7 @@ public partial class MainWindow : Window
     {
         SizeGroup.IsVisible = key is "brush" or "eraser" or "shape";
         HardnessGroup.IsVisible = key is "brush" or "eraser";
+        SmoothingGroup.IsVisible = key is "brush" or "eraser";
         OpacityGroup.IsVisible = key is "brush" or "eraser" or "fill";
         ToleranceGroup.IsVisible = key is "fill" or "wand";
         TextGroup.IsVisible = key == "text";
@@ -2014,6 +2015,7 @@ public partial class MainWindow : Window
         SizeBox.Value = 8;
         SizeBox.ValueChanged += _ => ApplyBrushOptions();
         HardnessBar.ValueChanged += _ => ApplyBrushOptions();
+        SmoothingBar.ValueChanged += _ => ApplyBrushOptions();
         OpacityBar.ValueChanged += _ => ApplyBrushOptions();
         ToleranceBar.ValueChanged += _ => ApplyBrushOptions();
 
@@ -2031,12 +2033,14 @@ public partial class MainWindow : Window
         var radius = (float)(SizeBox.Value / 2);
         var hardness = (float)(HardnessBar.Value / 100);
         var opacity = (float)(OpacityBar.Value / 100);
+        var smoothing = (float)SmoothingBar.Value;
 
         foreach (var settings in new[] { session.Brush.Settings, session.Eraser.Settings })
         {
             settings.Radius = radius;
             settings.Hardness = hardness;
             settings.Opacity = opacity;
+            settings.Smoothing = smoothing;
         }
 
         session.Shape.StrokeWidth = Math.Max(1f, (float)SizeBox.Value / 4);

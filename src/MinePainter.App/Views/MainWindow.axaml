@@ -138,6 +138,12 @@
           <controls:BarSlider x:Name="HardnessBar" Minimum="0" Maximum="100" Value="80" Width="120" Suffix="%" />
         </StackPanel>
 
+        <StackPanel x:Name="SmoothingGroup" Orientation="Horizontal" Spacing="5" VerticalAlignment="Center"
+                    ToolTip.Tip="手抖穩定：越高線條越滑、筆尖越落後游標">
+          <TextBlock Text="平滑：" FontSize="12" VerticalAlignment="Center" />
+          <controls:BarSlider x:Name="SmoothingBar" Minimum="0" Maximum="100" Value="50" Width="120" Suffix="%" />
+        </StackPanel>
+
         <StackPanel x:Name="OpacityGroup" Orientation="Horizontal" Spacing="5" VerticalAlignment="Center">
           <TextBlock Text="不透明度：" FontSize="12" VerticalAlignment="Center" />
           <controls:BarSlider x:Name="OpacityBar" Minimum="1" Maximum="100" Value="100" Width="120" Suffix="%" />
