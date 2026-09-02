@@ -139,7 +139,8 @@
 
         <StackPanel x:Name="SizeGroup" Orientation="Horizontal" Spacing="5" VerticalAlignment="Center">
           <TextBlock Text="大小：" FontSize="12" VerticalAlignment="Center" />
-          <controls:NumberBox x:Name="SizeBox" Minimum="1" Maximum="500" Step="1" Width="46" />
+          <controls:NumberBox x:Name="SizeBox" Minimum="1" Maximum="500" Step="1" Width="64"
+                              Presets="1,2,3,4,5,6,8,10,12,16,20,24,32,40,48,64,80,100,128,160,200,256,320,400,500" />
         </StackPanel>
 
         <StackPanel x:Name="HardnessGroup" Orientation="Horizontal" Spacing="5" VerticalAlignment="Center">
@@ -170,7 +171,8 @@
           <ComboBox x:Name="FontStyleCombo" Width="104" FontSize="12" MaxDropDownHeight="300"
                     ToolTip.Tip="字重／變種（如 Light、Black）" />
           <TextBlock Text="字級：" FontSize="12" VerticalAlignment="Center" />
-          <controls:NumberBox x:Name="FontSizeBox" Minimum="8" Maximum="288" Step="2" Width="46" />
+          <controls:NumberBox x:Name="FontSizeBox" Minimum="8" Maximum="288" Step="2" Width="64"
+                              Presets="8,10,12,14,16,18,20,24,28,32,36,48,64,72,96,128,144,192,288" />
 
           <StackPanel Orientation="Horizontal" Spacing="1" Margin="4,0,0,0">
             <ToggleButton x:Name="BoldToggle" Width="28" Height="24" Padding="0"
