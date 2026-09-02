@@ -194,20 +194,27 @@ public sealed class ElementDragHelper
             case Mode.Resize when _original is TextElement text:
             {
                 // 垂直 → 字級；水平 → ScaleX（自由拉寬窄）。
-                // Shift：維持「目前」的長寬比等比縮放（框怎麼拉都不變形），以拉得比較多的那一軸為準。
+                // Shift：以文字「最原始」的比例（ScaleX = 1，字型本來的寬高）等比縮放，
+                // 之前拉寬拉窄的變形一併歸零；以拉得比較多的那一軸為準。
                 var keepAspect = modifiers.HasFlag(ToolModifiers.Shift);
                 var newHeight = Math.Abs(p.Y - _anchor.Y);
                 var newWidth = Math.Abs(p.X - _anchor.X);
 
                 var vScale = _origHeight > 0 ? newHeight / _origHeight : 1f;
                 var hScale = _origWidth > 0 ? newWidth / _origWidth : 1f;
-                if (keepAspect) vScale = Math.Max(vScale, hScale);
+                if (keepAspect)
+                {
+                    // 原始寬度 = 目前框寬 ÷ 目前 ScaleX
+                    var originalWidth = text.ScaleX > 0.001f ? _origWidth / text.ScaleX : _origWidth;
+                    hScale = originalWidth > 0 ? newWidth / originalWidth : 1f;
+                    vScale = Math.Max(vScale, hScale);
+                }
                 var newSize = Math.Max(1f, text.FontSize * vScale);
 
                 float newScaleX;
                 if (keepAspect)
                 {
-                    newScaleX = text.ScaleX;
+                    newScaleX = 1f;
                 }
                 else
                 {

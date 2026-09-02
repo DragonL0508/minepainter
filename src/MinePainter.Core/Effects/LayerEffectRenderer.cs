@@ -65,6 +65,9 @@ public sealed class LayerEffectCache : IDisposable
 /// </summary>
 public static class LayerEffectRenderer
 {
+    /// <summary>某層的效果快取剛寫回（worker 執行緒上觸發）：縮圖等「不走合成器」的畫面靠它更新。</summary>
+    public static event Action<RasterLayer>? LayerRendered;
+
     private sealed class Job
     {
         public required RasterLayer Layer;
@@ -400,6 +403,7 @@ public static class LayerEffectRenderer
             write.Left + layer.Offset.X, write.Top + layer.Offset.Y,
             write.Right + layer.Offset.X, write.Bottom + layer.Offset.Y);
         layer.InvalidateComposite(docRect);
+        LayerRendered?.Invoke(layer);
     }
 
     /// <summary>

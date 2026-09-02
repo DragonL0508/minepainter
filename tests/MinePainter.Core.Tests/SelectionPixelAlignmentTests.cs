@@ -128,7 +128,7 @@ public class SelectionPixelAlignmentTests
     }
 
     [Fact]
-    public void ShiftResizeText_KeepsCurrentAspect()
+    public void ShiftResizeText_RestoresOriginalAspect()
     {
         // 先把文字拉寬（ScaleX = 2），再按 Shift 拖角 →
         // 等比縮放「目前看到的框」：ScaleX 維持 2、字級放大（使用者 2026-09-02 明示）
@@ -155,7 +155,8 @@ public class SelectionPixelAlignmentTests
         {
             result = (TextElement)layer.FindElement(text.Id)!;
         }
-        Assert.Equal(2f, result.ScaleX, 3);
+        // Shift＝回到文字最原始的比例（ScaleX 1），之前拉寬的變形歸零（2026-09-02 使用者明示）
+        Assert.Equal(1f, result.ScaleX, 3);
         Assert.True(result.FontSize > 40, $"字級應該跟著放大，實得 {result.FontSize}");
     }
 

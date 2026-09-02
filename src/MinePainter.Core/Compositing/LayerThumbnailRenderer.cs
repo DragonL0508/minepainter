@@ -88,8 +88,12 @@ public static class LayerThumbnailRenderer
                     using var img = SKImage.FromPixels(pixmap); // 零拷貝；持 SyncRoot 期間使用
                     canvas.DrawImage(img, rect.Left + raster.Offset.X, rect.Top + raster.Offset.Y, paint);
                 }
-                foreach (var el in raster.Elements)
-                    el.Render(canvas);
+                // 效果堆疊作用中時物件已經併進效果快取（外框／漸層都在裡面），再畫一次原件會把效果蓋掉
+                if (!raster.EffectsRendered)
+                {
+                    foreach (var el in raster.Elements)
+                        el.Render(canvas);
+                }
                 break;
             }
 

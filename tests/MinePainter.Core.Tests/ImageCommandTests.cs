@@ -166,7 +166,7 @@ public class TextTransformResetTests
     }
 
     [Fact]
-    public void ShiftResize_KeepsCurrentScaleX()
+    public void ShiftResize_RestoresOriginalScaleX()
     {
         using var doc = ImageCodec.CreateBlankDocument(400, 400, SKColors.White);
         var layer = (RasterLayer)doc.ActiveLayer!;
@@ -180,7 +180,7 @@ public class TextTransformResetTests
         Assert.True(helper.TryBegin(session, new SKPoint(frame.Right, frame.Bottom), 6f, allowInsideMove: false));
         helper.Continue(session, new SKPoint(frame.Right + 60, frame.Bottom + 60), ToolModifiers.Shift);
         var resized = Assert.IsType<TextElement>(layer.Elements[0]);
-        Assert.Equal(1.5f, resized.ScaleX, 3); // Shift 維持目前比例，而不是硬歸 1
+        Assert.Equal(1f, resized.ScaleX, 3); // Shift＝原始比例：ScaleX 歸 1，字級等比
         Assert.True(resized.FontSize > 40f);
         Assert.Equal(40f, resized.BaseFontSize);
         helper.End(session);

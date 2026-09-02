@@ -9,6 +9,7 @@ using Material.Icons;
 using Material.Icons.Avalonia;
 using MinePainter.App.Rendering;
 using MinePainter.Core.Adjustments;
+using MinePainter.Core.Effects;
 using MinePainter.Core.History;
 using MinePainter.Core.Layers;
 using MinePainter.Core.Tools;
@@ -54,6 +55,33 @@ public partial class LayersPanel : UserControl
         InitializeComponent();
         BuildActionBar();
 
+        // 效果堆疊在 worker 上算完 → 縮圖要跟著換（縮圖只在 history 變動時重畫，
+        // 效果剛套上時快取多半還沒算好，不接這條會一直停在沒效果的樣子）
+        LayerEffectRenderer.LayerRendered += OnLayerEffectsRendered;
+        _thumbTimer.Tick += (_, _) =>
+        {
+            _thumbTimer.Stop();
+            if (_session == null) return;
+            LayerNode[] pending;
+            lock (_thumbDirty)
+            {
+                pending = _thumbDirty.ToArray();
+                _thumbDirty.Clear();
+            }
+            foreach (var node in pending)
+            {
+                var row = _rows.FirstOrDefault(r => ReferenceEquals(r.Node, node));
+                if (row != null) row.Thumb.Source = LayerThumbnail.Render(_session.Document, node, ThumbWidth, ThumbHeight);
+                // 祖先群組的縮圖也含這層
+                for (var g = node.Parent; g != null; g = g.Parent)
+                {
+                    var groupRow = _rows.FirstOrDefault(r => ReferenceEquals(r.Node, g));
+                    if (groupRow != null) groupRow.Thumb.Source = LayerThumbnail.Render(_session.Document, g, ThumbWidth, ThumbHeight);
+                }
+                if (_propsWindow is { } win && ReferenceEquals(win.Node, node)) win.RefreshPreview();
+            }
+        };
+
         // 拖曳排序：tunnel 才收得到列上（含 ListBoxItem 內部）的指標事件
         LayerList.AddHandler(PointerPressedEvent, OnListPointerPressed, RoutingStrategies.Tunnel);
         LayerList.AddHandler(PointerMovedEvent, OnListPointerMoved, RoutingStrategies.Tunnel);
@@ -72,6 +100,20 @@ public partial class LayersPanel : UserControl
     }
 
     private void OnHistoryChanged() => Avalonia.Threading.Dispatcher.UIThread.Post(Refresh);
+
+    private readonly HashSet<LayerNode> _thumbDirty = new();
+    private readonly Avalonia.Threading.DispatcherTimer _thumbTimer = new() { Interval = TimeSpan.FromMilliseconds(120) };
+
+    /// <summary>worker 執行緒：記下哪層算完，UI 端節流 120ms 一次重畫縮圖（連續繪畫時每步都會觸發）。</summary>
+    private void OnLayerEffectsRendered(RasterLayer layer)
+    {
+        if (_session == null || layer.Document != _session.Document) return;
+        lock (_thumbDirty) _thumbDirty.Add(layer);
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            if (!_thumbTimer.IsEnabled) _thumbTimer.Start();
+        });
+    }
 
     /// <summary>
     /// 刷新圖層列表（顯示順序：最上層在最前）。
@@ -270,6 +312,7 @@ public partial class LayersPanel : UserControl
         adjustment.Flyout = menu;
         ActionBar.Children.Add(adjustment);
 
+        ActionBar.Children.Add(IconButton(MaterialIconKind.ContentDuplicate, "複製圖層", OnDuplicateLayer));
         ActionBar.Children.Add(IconButton(MaterialIconKind.FolderPlusOutline, "群組化", OnGroupLayer));
         ActionBar.Children.Add(new Border { Width = 1, Margin = new Thickness(3, 5), Background = AppTheme.SeparatorBrush });
         ActionBar.Children.Add(IconButton(MaterialIconKind.ArrowUp, "上移", OnMoveUp));
@@ -774,6 +817,19 @@ public partial class LayersPanel : UserControl
         var layer = new RasterLayer { Name = $"圖層 {CountLayers(doc.Root) + 1}" };
         LayerCommands.InsertLayer(doc, _session.History, parent, index, layer);
         lock (doc.SyncRoot) doc.ActiveLayer = layer;
+        Refresh();
+        StateChanged?.Invoke();
+    }
+
+    private void OnDuplicateLayer(object? sender, RoutedEventArgs e)
+    {
+        if (_session == null) return;
+        if (SelectedNode is not RasterLayer layer)
+        {
+            _session.Notify("請先選擇一個圖層（群組／調整圖層不能複製）");
+            return;
+        }
+        LayerCommands.DuplicateLayer(_session.Document, _session.History, layer);
         Refresh();
         StateChanged?.Invoke();
     }

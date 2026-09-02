@@ -559,8 +559,11 @@ public sealed class MoveTool : ITool
         return -1;
     }
 
-    /// <summary>拖角縮放：對角固定；keepAspect 時維持原始長寬比。</summary>
-    public static SKRect ResizeRect(SKRect start, int corner, SKPoint p, bool keepAspect)
+    /// <summary>
+    /// 拖角縮放：對角固定；keepAspect 時維持長寬比 —— 給了 <paramref name="aspect"/>（寬/高）就用它
+    /// （＝物件「最原始」的比例，不是變形後的），否則用起始框的比例。
+    /// </summary>
+    public static SKRect ResizeRect(SKRect start, int corner, SKPoint p, bool keepAspect, float? aspect = null)
     {
         var l = Math.Min(start.Left, start.Right);
         var t = Math.Min(start.Top, start.Bottom);
@@ -579,14 +582,14 @@ public sealed class MoveTool : ITool
         var w = p.X - anchor.X;
         var h = p.Y - anchor.Y;
 
-        if (keepAspect && start.Width > 0 && start.Height > 0)
+        if (keepAspect && (aspect is > 0 || (start.Width > 0 && start.Height > 0)))
         {
-            var aspect = start.Width / start.Height;
+            var ratio = aspect is > 0 ? aspect.Value : start.Width / start.Height;
             // 取較大的一邊決定尺寸，另一邊依比例
-            if (Math.Abs(w) / aspect > Math.Abs(h))
-                h = Math.Sign(h == 0 ? 1 : h) * Math.Abs(w) / aspect;
+            if (Math.Abs(w) / ratio > Math.Abs(h))
+                h = Math.Sign(h == 0 ? 1 : h) * Math.Abs(w) / ratio;
             else
-                w = Math.Sign(w == 0 ? 1 : w) * Math.Abs(h) * aspect;
+                w = Math.Sign(w == 0 ? 1 : w) * Math.Abs(h) * ratio;
         }
 
         return new SKRect(

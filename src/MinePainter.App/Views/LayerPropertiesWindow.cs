@@ -224,6 +224,13 @@ public sealed class LayerPropertiesWindow : Window
     // ---- 模型 → UI（開啟時與外部變更後） ----
 
     /// <summary>把目前模型狀態同步進 UI；節點已不在文件上（被刪/undo 掉）就自行關閉。</summary>
+    /// <summary>只重畫預覽圖（效果快取算完時用；不重建效果堆疊卡片，拖曳中的卡片才不會被換掉）。</summary>
+    public void RefreshPreview()
+    {
+        if (_node.Document == null) return;
+        _preview.Source = Rendering.LayerThumbnail.Render(_session.Document, _node, 176, 132);
+    }
+
     public void SyncFromModel()
     {
         if (_node.Document == null)
@@ -489,10 +496,12 @@ public sealed class LayerPropertiesWindow : Window
             card.PointerReleased += (_, e) =>
             {
                 if (_row != row) return;
-                e.Pointer.Capture(null);
+                // 先把狀態讀出來：Capture(null) 會「同步」觸發 PointerCaptureLost → Reset，
+                // 之後才讀 _dragging/_slot 就永遠是「沒在拖」，放開什麼都不會發生。
                 var wasDragging = _dragging;
                 var slot = _slot;
                 Reset(card, row);
+                e.Pointer.Capture(null);
                 if (wasDragging && slot >= 0) Apply(row, slot);
             };
             card.PointerCaptureLost += (_, _) =>

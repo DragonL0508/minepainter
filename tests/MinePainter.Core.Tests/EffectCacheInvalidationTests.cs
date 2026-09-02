@@ -212,4 +212,35 @@ public class EffectCacheInvalidationTests
         var line = ShapeTool.Constrain(anchor, new SKPoint(110, 14), shift: true, ShapeKind.Line);
         Assert.Equal(10, line.Y, 1); // 接近 0° 就吸到 0°
     }
+
+    [Fact]
+    public void Thumbnail_UsesEffectCache_NotOriginalElementColor()
+    {
+        var (session, layer) = NewTransparentSession();
+        var doc = session.Document;
+        var text = new TextElement { Text = "████", Position = new SKPoint(20, 100), FontSize = 80, Color = SKColors.Red };
+        lock (doc.SyncRoot) layer.AddElement(text);
+        LayerEffectCommands.Add(doc, session.History, layer,
+            LayerEffect.Create(new ObjectGradientEffect { Start = SKColors.Blue, End = SKColors.Blue, Angle = 0 }));
+        LayerEffectRenderer.RenderLayerNow(doc, layer);
+
+        using var surface = SKSurface.Create(new SKImageInfo(256, 256));
+        surface.Canvas.Clear(SKColors.Transparent);
+        Compositing.LayerThumbnailRenderer.Draw(surface.Canvas, doc, layer, 256, 256);
+        using var img = surface.Snapshot();
+        using var bmp = SKBitmap.FromImage(img);
+        var anyRed = false;
+        var anyBlue = false;
+        for (var y = 0; y < 256; y += 2)
+        for (var x = 0; x < 256; x += 2)
+        {
+            var c = bmp.GetPixel(x, y);
+            if (c.Alpha < 200) continue;
+            if (c.Red > 200 && c.Blue < 60) anyRed = true;
+            if (c.Blue > 200 && c.Red < 60) anyBlue = true;
+        }
+        Assert.True(anyBlue, "縮圖要看到效果後的顏色");
+        Assert.False(anyRed, "原件不該再畫一次蓋掉效果");
+        session.Dispose();
+    }
 }

@@ -217,8 +217,11 @@ public sealed class HandleDragController
                 var before = floating.TargetBounds;
                 // 對齊整像素：浮動內容的框與螞蟻線都由 TargetRect 推導，
                 // 留小數會讓兩者在放大時對不齊
+                // Shift＝回到像素「最原始」的比例（續接時 Pixels 是原始那份），不是目前變形後的框
+                var floatingAspect = floating.PixelSize.Height > 0
+                    ? (float)floating.PixelSize.Width / floating.PixelSize.Height : (float?)null;
                 var resizedRect = SelectionMask.SnapToPixels(
-                    MoveTool.ResizeRect(_startRect, _corner, p, keepAspect));
+                    MoveTool.ResizeRect(_startRect, _corner, p, keepAspect, floatingAspect));
                 if (resizedRect == floating.TargetRect) break; // 同一格像素內的抖動
                 floating.TargetRect = resizedRect;
                 MoveTool.InvalidateFloating(session, floating, before); // 覆疊/重合成的取捨在那裡
@@ -240,8 +243,11 @@ public sealed class HandleDragController
                 // 框可能已旋轉：在未旋轉空間裡算縮放（指標先反轉），角度不變
                 var local = MoveTool.RotatePoint(p,
                     new SKPoint(_startRect.MidX, _startRect.MidY), -transform.RotationDeg);
+                // Shift＝回到內容最原始的比例（ResetSize 是這輪／續接前的原始尺寸）
+                var originalAspect = transform.ResetSize.Height > 0
+                    ? transform.ResetSize.Width / transform.ResetSize.Height : (float?)null;
                 var target = SelectionMask.SnapToPixels(
-                    MoveTool.ResizeRect(_startRect, _corner, local, keepAspect));
+                    MoveTool.ResizeRect(_startRect, _corner, local, keepAspect, originalAspect));
                 if (target.Width < 1 || target.Height < 1 || target == transform.TargetRect) break;
                 transform.TargetRect = target;
                 transform.Apply(preview: true);
