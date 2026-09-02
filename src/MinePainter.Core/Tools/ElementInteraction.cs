@@ -201,8 +201,9 @@ public sealed class ElementDragHelper
                 // 錨點在含效果外擴的框上；扣掉兩邊外擴才是排版框的新尺寸
                 var newHeight = Math.Max(1f, Math.Abs(p.Y - _anchor.Y) - _framePad * 2);
                 var newWidth = Math.Max(1f, Math.Abs(p.X - _anchor.X) - _framePad * 2);
-                // 邊把手：另一軸不跟指標走。上下邊維持目前 ScaleX（寬隨字級等比）；左右邊字級不動
-                if (_resizeAxis == ResizeAxis.Vertical) newWidth = _origWidth * (newHeight / _origHeight);
+                // 邊把手＝單純往那個方向壓扁／拉長：另一軸的尺寸完全不動
+                //（上下邊改字級、ScaleX 反向補償讓寬度不變；左右邊只動 ScaleX）
+                if (_resizeAxis == ResizeAxis.Vertical) newWidth = _origWidth;
                 else if (_resizeAxis == ResizeAxis.Horizontal) newHeight = _origHeight;
 
                 var vScale = _origHeight > 0 ? newHeight / _origHeight : 1f;
