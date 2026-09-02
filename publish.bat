@@ -20,9 +20,12 @@ set PROJ=src\MinePainter.App
 if /i "%MODE%"=="fd" (
     set SELF=false
     set SUFFIX=framework-dependent
+    rem single-file compression is only supported for self-contained builds
+    set COMPRESS=false
 ) else (
     set SELF=true
     set SUFFIX=%RID%
+    set COMPRESS=true
 )
 
 rem NOTE: variable names avoid MSBuild property names (OutDir, Version...):
@@ -43,7 +46,7 @@ dotnet publish "%PROJ%" -c Release -r %RID% --self-contained %SELF% ^
     "-p:PublishDir=%STAGE%" ^
     -p:PublishSingleFile=true ^
     -p:IncludeNativeLibrariesForSelfExtract=true ^
-    -p:EnableCompressionInSingleFile=true ^
+    -p:EnableCompressionInSingleFile=%COMPRESS% ^
     -p:DebugType=none ^
     -p:Version=%APPVER% ^
     -p:InformationalVersion=%APPVER% ^
