@@ -169,7 +169,7 @@ public sealed class BarSlider : Control
     private static IBrush TrackGradient(SliderTrack track)
     {
         if (TrackBrushes.TryGetValue(track, out var cached)) return cached;
-        var stops = new GradientStops();
+        var stops = new Avalonia.Media.GradientStops();
         switch (track)
         {
             case SliderTrack.Hue:
@@ -178,17 +178,17 @@ public sealed class BarSlider : Control
                 {
                     var deg = -180 + i * 30;
                     var hsv = HsvToRgb(((deg % 360) + 360) % 360, 0.85, 0.95);
-                    stops.Add(new GradientStop(hsv, i / 12.0));
+                    stops.Add(new Avalonia.Media.GradientStop(hsv, i / 12.0));
                 }
                 break;
             case SliderTrack.Gray:
-                stops.Add(new GradientStop(Colors.Black, 0));
-                stops.Add(new GradientStop(Colors.White, 1));
+                stops.Add(new Avalonia.Media.GradientStop(Colors.Black, 0));
+                stops.Add(new Avalonia.Media.GradientStop(Colors.White, 1));
                 break;
             default:
-                stops.Add(new GradientStop(Color.FromRgb(0x20, 0x20, 0x20), 0));
-                stops.Add(new GradientStop(Color.FromRgb(0x80, 0x80, 0x80), 0.5));
-                stops.Add(new GradientStop(Color.FromRgb(0xF0, 0xF0, 0xF0), 1));
+                stops.Add(new Avalonia.Media.GradientStop(Color.FromRgb(0x20, 0x20, 0x20), 0));
+                stops.Add(new Avalonia.Media.GradientStop(Color.FromRgb(0x80, 0x80, 0x80), 0.5));
+                stops.Add(new Avalonia.Media.GradientStop(Color.FromRgb(0xF0, 0xF0, 0xF0), 1));
                 break;
         }
         var brush = new LinearGradientBrush

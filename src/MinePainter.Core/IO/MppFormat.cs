@@ -487,7 +487,7 @@ public static class MppFormat
         {
             effects.Add(LayerEffect.Create(new ObjectGradientEffect
             {
-                Start = g.Start, End = g.End, Angle = g.Angle, Radial = g.Radial,
+                Stops = GradientStops.Two(g.Start, g.End), Angle = g.Angle, Radial = g.Radial,
             }));
         }
         if (text.Stroke is { } stroke)

@@ -54,6 +54,7 @@ public static class EffectSerializer
                 case BoolParam b: dict[b.Key] = b.Get(effect) ? "1" : "0"; break;
                 case ChoiceParam c: dict[c.Key] = c.Get(effect).ToString(inv); break;
                 case ColorParam col: dict[col.Key] = ((uint)col.Get(effect)).ToString("X8"); break;
+                case GradientParam g: dict[g.Key] = g.Get(effect).Serialize(); break;
                 case PointParam p:
                     var v = p.Get(effect);
                     dict[p.Key] = $"{v.X.ToString(inv)},{v.Y.ToString(inv)}";
@@ -92,7 +93,18 @@ public static class EffectSerializer
         object effect = entry.Create();
         foreach (var def in ((IEffect)effect).Parameters)
         {
-            if (!parameters.TryGetValue(def.Key, out var raw)) continue;
+            if (!parameters.TryGetValue(def.Key, out var raw))
+            {
+                // 舊檔的兩色漸層（起始色／結束色兩個鍵）→ 兩節點
+                if (def is GradientParam { LegacyStartKey: { } sk, LegacyEndKey: { } ek } lg &&
+                    parameters.TryGetValue(sk, out var sRaw) && parameters.TryGetValue(ek, out var eRaw) &&
+                    uint.TryParse(sRaw, System.Globalization.NumberStyles.HexNumber, inv, out var sArgb) &&
+                    uint.TryParse(eRaw, System.Globalization.NumberStyles.HexNumber, inv, out var eArgb))
+                {
+                    effect = lg.With(effect, GradientStops.Two(new SkiaSharp.SKColor(sArgb), new SkiaSharp.SKColor(eArgb)));
+                }
+                continue;
+            }
             try
             {
                 effect = def switch
@@ -102,6 +114,7 @@ public static class EffectSerializer
                     BoolParam b => b.With(effect, raw == "1" || raw.Equals("true", StringComparison.OrdinalIgnoreCase)),
                     ChoiceParam c => c.With(effect, int.Parse(raw, inv)),
                     ColorParam col => col.With(effect, new SkiaSharp.SKColor(uint.Parse(raw, System.Globalization.NumberStyles.HexNumber, inv))),
+                    GradientParam g when GradientStops.TryParse(raw, out var stops) => g.With(effect, stops),
                     PointParam p when raw.Split(',') is [var xs, var ys] =>
                         p.With(effect, (float.Parse(xs, inv), float.Parse(ys, inv))),
                     _ => effect,

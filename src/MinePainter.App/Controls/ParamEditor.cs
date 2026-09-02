@@ -120,6 +120,9 @@ public sealed class ParamEditor : StackPanel
                 case ColorParam col:
                     Children.Add(BuildColor(col));
                     break;
+                case GradientParam gr:
+                    Children.Add(BuildGradient(gr));
+                    break;
             }
         }
         _suppress = false;
@@ -262,6 +265,110 @@ public sealed class ParamEditor : StackPanel
 
         var label = new TextBlock { Text = col.Label, FontSize = 12, Width = 64, VerticalAlignment = VerticalAlignment.Center };
         return new StackPanel { Orientation = Orientation.Horizontal, Children = { label, swatch, hexText } };
+    }
+
+    /// <summary>
+    /// 多節點漸層：漸層條＋節點標記；下面一列是「選中節點」的顏色色票、位置滑桿，
+    /// 以及刪除／反轉／平均分佈。新增節點＝點漸層條空白處；刪除＝右鍵標記或往下拖出去。
+    /// </summary>
+    private Control BuildGradient(GradientParam gr)
+    {
+        var editor = new GradientEditor { Stops = gr.Get(Current) };
+
+        var swatch = new Border
+        {
+            Width = 44,
+            Height = 22,
+            CornerRadius = new CornerRadius(3),
+            BorderBrush = AppTheme.SeparatorBrush,
+            BorderThickness = new Thickness(1),
+            Background = ToBrush(editor.SelectedStop.Color),
+            Cursor = new Avalonia.Input.Cursor(Avalonia.Input.StandardCursorType.Hand),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        ToolTip.SetTip(swatch, "選中節點的顏色（點一下選色）");
+        var picker = new ColorPickerPanel { Color = editor.SelectedStop.Color, Margin = new Thickness(4) };
+        var flyout = new Flyout { Content = picker, Placement = PlacementMode.Bottom, ShowMode = FlyoutShowMode.Transient };
+        picker.Changed += c =>
+        {
+            if (_suppress) return;
+            swatch.Background = ToBrush(c);
+            editor.SetSelectedColor(c, commit: false);
+        };
+        picker.Committed += _ => { if (!_suppress) Committed?.Invoke(Current); };
+        void OpenPicker()
+        {
+            picker.Color = editor.SelectedStop.Color;
+            flyout.ShowAt(swatch);
+        }
+        swatch.PointerPressed += (_, e) => { OpenPicker(); e.Handled = true; };
+        editor.StopActivated += _ => OpenPicker();
+
+        var position = new BarSlider
+        {
+            Label = "位置",
+            Minimum = 0,
+            Maximum = 100,
+            Suffix = "%",
+            Height = 22,
+            Value = editor.SelectedStop.Position * 100,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        position.ValueChanged += v => { if (!_suppress) editor.SetSelectedPosition((float)(v / 100), commit: false); };
+        position.DragCompleted += _ => { if (!_suppress) Committed?.Invoke(Current); };
+
+        Button SmallButton(string text, string tip)
+        {
+            var b = new Button { Content = text, FontSize = 12, Padding = new Thickness(8, 2), Height = 22, VerticalContentAlignment = VerticalAlignment.Center };
+            ToolTip.SetTip(b, tip);
+            return b;
+        }
+        var remove = SmallButton("刪除", "刪除選中的節點（至少留兩個）");
+        remove.Click += (_, _) => editor.RemoveSelected();
+        var reverse = SmallButton("反轉", "顛倒漸層方向");
+        reverse.Click += (_, _) => editor.Reverse();
+        var distribute = SmallButton("平均", "節點平均分佈");
+        distribute.Click += (_, _) => editor.Distribute();
+
+        void SyncSelected()
+        {
+            _suppress = true;
+            swatch.Background = ToBrush(editor.SelectedStop.Color);
+            position.Value = editor.SelectedStop.Position * 100;
+            remove.IsEnabled = editor.Stops.Count > 2;
+            _suppress = false;
+        }
+        editor.SelectionChanged += _ => SyncSelected();
+        editor.Changed += stops =>
+        {
+            if (_suppress) return;
+            Update(gr.With(Current, stops), commit: false);
+            SyncSelected();
+        };
+        editor.Committed += _ => { if (!_suppress) Committed?.Invoke(Current); };
+        SyncSelected();
+
+        var label = new TextBlock { Text = gr.Label, FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
+        var hint = new TextBlock
+        {
+            Text = "點漸層條新增節點；拖標記移動、右鍵或往下拖出刪除；雙擊標記選色",
+            FontSize = 10,
+            Foreground = AppTheme.TextMutedBrush,
+            TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+        };
+        var row = new DockPanel { Margin = new Thickness(0, 2, 0, 0) };
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, Margin = new Thickness(6, 0, 0, 0) };
+        buttons.Children.Add(remove);
+        buttons.Children.Add(reverse);
+        buttons.Children.Add(distribute);
+        DockPanel.SetDock(swatch, Dock.Left);
+        DockPanel.SetDock(buttons, Dock.Right);
+        position.Margin = new Thickness(6, 0, 0, 0);
+        row.Children.Add(swatch);
+        row.Children.Add(buttons);
+        row.Children.Add(position);
+
+        return new StackPanel { Spacing = 3, Children = { label, editor, row, hint } };
     }
 
     private static Avalonia.Media.IBrush ToBrush(SkiaSharp.SKColor c) =>

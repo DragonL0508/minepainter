@@ -49,6 +49,18 @@ public sealed record ColorParam(
     public bool UsePrimaryByDefault { get; init; }
 }
 
+/// <summary>
+/// 多節點漸層：UI 用漸層條＋節點標記編輯。LegacyStartKey／LegacyEndKey = 舊檔的兩色鍵
+/// （沒有節點鍵時用這兩個鍵拼成兩節點漸層）。
+/// </summary>
+public sealed record GradientParam(
+    string Key, string Label,
+    Func<object, GradientStops> Get, Func<object, GradientStops, object> With) : ParamDef(Key, Label)
+{
+    public string? LegacyStartKey { get; init; }
+    public string? LegacyEndKey { get; init; }
+}
+
 /// <summary>核取方塊。</summary>
 public sealed record BoolParam(
     string Key, string Label,

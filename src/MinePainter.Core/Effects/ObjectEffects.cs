@@ -115,10 +115,25 @@ public sealed record ObjectOutlineEffect : IEffect
     public int Softness { get; init; } = 0;  // 0..100
     public SKColor Color { get; init; } = SKColors.Black;
 
-    /// <summary>外框用漸層上色（Color → GradientEnd，沿 GradientAngle，以「內容＋外框」的外接框為準）。</summary>
+    /// <summary>外框用漸層上色（GradientStops 沿 GradientAngle，以「內容＋外框」的外接框為準）。</summary>
     public bool Gradient { get; init; }
-    public SKColor GradientEnd { get; init; } = SKColors.White;
     public float GradientAngle { get; init; } = 90f;
+
+    private readonly GradientStops? _gradientStops;
+
+    /// <summary>漸層節點；沒設定過時預設「外框色 → 白」（跟著 Color 走，改主色時漸層起點也跟著換）。</summary>
+    public GradientStops GradientStops
+    {
+        get => _gradientStops ?? GradientStops.Two(Color, SKColors.White);
+        init => _gradientStops = value;
+    }
+
+    /// <summary>相容舊欄位：漸層末節點的顏色。</summary>
+    public SKColor GradientEnd
+    {
+        get => GradientStops.Last;
+        init => GradientStops = GradientStops.WithEnd(value);
+    }
 
     public string Name => "物件外框";
     public string Category => "物件";
@@ -139,8 +154,9 @@ public sealed record ObjectOutlineEffect : IEffect
             (o, v) => ((ObjectOutlineEffect)o) with { Color = v }) { UsePrimaryByDefault = true },
         new BoolParam("gradient", "漸層外框", o => ((ObjectOutlineEffect)o).Gradient,
             (o, v) => ((ObjectOutlineEffect)o) with { Gradient = v }),
-        new ColorParam("gradientEnd", "漸層結束色", o => ((ObjectOutlineEffect)o).GradientEnd,
-            (o, v) => ((ObjectOutlineEffect)o) with { GradientEnd = v }),
+        new GradientParam("gradientStops", "漸層", o => ((ObjectOutlineEffect)o).GradientStops,
+            (o, v) => ((ObjectOutlineEffect)o) with { GradientStops = v })
+            { LegacyStartKey = "color", LegacyEndKey = "gradientEnd" },
         new AngleParam("gradientAngle", "漸層角度", 0, 360, o => ((ObjectOutlineEffect)o).GradientAngle,
             (o, v) => ((ObjectOutlineEffect)o) with { GradientAngle = (float)v }),
     ];
@@ -163,7 +179,7 @@ public sealed record ObjectOutlineEffect : IEffect
             if (!bbox.IsEmpty)
             {
                 bbox.Inflate(width, width);
-                ramp = new GradientRamp(bbox, GradientAngle, radial: false, Color, GradientEnd);
+                ramp = new GradientRamp(bbox, GradientAngle, radial: false, GradientStops);
             }
         }
 
@@ -213,6 +229,9 @@ internal sealed class GradientRamp
     private readonly SKColor[] _lut = new SKColor[257];
 
     public GradientRamp(SKRectI box, float angleDeg, bool radial, SKColor start, SKColor end)
+        : this(box, angleDeg, radial, GradientStops.Two(start, end)) { }
+
+    public GradientRamp(SKRectI box, float angleDeg, bool radial, GradientStops stops)
     {
         var bw = Math.Max(1, box.Width);
         var bh = Math.Max(1, box.Height);
@@ -224,15 +243,7 @@ internal sealed class GradientRamp
         _half = Math.Abs(_dx) * bw / 2f + Math.Abs(_dy) * bh / 2f;
         _maxR = MathF.Sqrt(bw * bw + bh * bh) / 2f;
         _radial = radial;
-        for (var i = 0; i <= 256; i++)
-        {
-            var t = i / 256f;
-            _lut[i] = new SKColor(
-                (byte)(start.Red + (end.Red - start.Red) * t),
-                (byte)(start.Green + (end.Green - start.Green) * t),
-                (byte)(start.Blue + (end.Blue - start.Blue) * t),
-                (byte)(start.Alpha + (end.Alpha - start.Alpha) * t));
-        }
+        for (var i = 0; i <= 256; i++) _lut[i] = stops.ColorAt(i / 256f);
     }
 
     public SKColor At(int x, int y)
@@ -419,13 +430,26 @@ public sealed record ObjectGlowEffect : IEffect
     }
 }
 
-/// <summary>物件漸層：把不透明內容重新上色成兩色漸層（線性可轉角度，或放射狀）。</summary>
+/// <summary>物件漸層：把不透明內容重新上色成多節點漸層（線性可轉角度，或放射狀）。</summary>
 public sealed record ObjectGradientEffect : IEffect
 {
-    public SKColor Start { get; init; } = SKColors.White;
-    public SKColor End { get; init; } = new(0x3A, 0x7B, 0xD5);
+    public GradientStops Stops { get; init; } = GradientStops.Two(SKColors.White, new SKColor(0x3A, 0x7B, 0xD5));
     public float Angle { get; init; } = 90f;
     public bool Radial { get; init; }
+
+    /// <summary>相容舊欄位：首節點顏色。</summary>
+    public SKColor Start
+    {
+        get => Stops.First;
+        init => Stops = Stops.WithStart(value);
+    }
+
+    /// <summary>相容舊欄位：末節點顏色。</summary>
+    public SKColor End
+    {
+        get => Stops.Last;
+        init => Stops = Stops.WithEnd(value);
+    }
 
     public string Name => "物件漸層";
     public string Category => "物件";
@@ -435,10 +459,9 @@ public sealed record ObjectGradientEffect : IEffect
 
     private static readonly ParamDef[] Params =
     [
-        new ColorParam("start", "起始色", o => ((ObjectGradientEffect)o).Start,
-            (o, v) => ((ObjectGradientEffect)o) with { Start = v }),
-        new ColorParam("end", "結束色", o => ((ObjectGradientEffect)o).End,
-            (o, v) => ((ObjectGradientEffect)o) with { End = v }),
+        new GradientParam("stops", "漸層", o => ((ObjectGradientEffect)o).Stops,
+            (o, v) => ((ObjectGradientEffect)o) with { Stops = v })
+            { LegacyStartKey = "start", LegacyEndKey = "end" },
         new AngleParam("angle", "角度", 0, 360, o => ((ObjectGradientEffect)o).Angle,
             (o, v) => ((ObjectGradientEffect)o) with { Angle = (float)v }),
         new BoolParam("radial", "放射狀", o => ((ObjectGradientEffect)o).Radial,
@@ -474,16 +497,10 @@ public sealed record ObjectGradientEffect : IEffect
         var dy = MathF.Sin(rad);
         var half = Math.Abs(dx) * bw / 2f + Math.Abs(dy) * bh / 2f;
         var maxR = MathF.Sqrt(bw * bw + bh * bh) / 2f;
+        var colors = Stops.BuildLut(257);
         var lut = new uint[257];
         for (var i = 0; i <= 256; i++)
-        {
-            var t = i / 256f;
-            lut[i] = Pack(
-                (int)(Start.Blue + (End.Blue - Start.Blue) * t),
-                (int)(Start.Green + (End.Green - Start.Green) * t),
-                (int)(Start.Red + (End.Red - Start.Red) * t),
-                (int)(Start.Alpha + (End.Alpha - Start.Alpha) * t));
-        }
+            lut[i] = Pack(colors[i].Blue, colors[i].Green, colors[i].Red, colors[i].Alpha);
 
         ctx.ForRows(y =>
         {
