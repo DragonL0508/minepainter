@@ -10,11 +10,14 @@ namespace MinePainter.Core.History;
 public sealed record BackgroundRemovalOptions
 {
     public required OnnxModelInfo Model { get; init; }
-    public bool UseGpu { get; init; }
-    /// <summary>用高清原圖做引導濾波精修遮罩邊緣（見 <see cref="GuidedFilter"/>）。</summary>
-    public bool RefineEdges { get; init; } = true;
-    /// <summary>精修半徑（全解析度 px）。</summary>
+    public bool UseGpu { get; init; } = true;
+    /// <summary>引導濾波精修半徑（全解析度 px；一律精修，見 <see cref="GuidedFilter"/>）。</summary>
     public int RefineRadius { get; init; } = 16;
+    /// <summary>
+    /// 內部填實：離邊界超過 <see cref="RefineRadius"/> 的內部一律不透明、外部一律透明，
+    /// 只在邊緣一圈保留半透明（否則模型的機率圖會讓物件內部變半透明）。
+    /// </summary>
+    public bool SolidCore { get; init; } = true;
     /// <summary>遮罩對比 0..100（去掉半透明的殘影）。</summary>
     public int Contrast { get; init; }
     /// <summary>邊緣收縮（負）／擴張（正）px。</summary>
@@ -94,10 +97,14 @@ public static class BackgroundRemovalCommand
             }
 
             // ---- 3. 推論 + 後處理（鎖外）----
-            var mask = BackgroundRemover.Infer(options.Model, pixels, crop.Width, crop.Height, options.UseGpu, ct);
+            var model = BackgroundRemover.Infer(options.Model, pixels, crop.Width, crop.Height, options.UseGpu, ct);
             ct.ThrowIfCancellationRequested();
-            if (options.RefineEdges)
-                mask = GuidedFilter.Refine(mask, pixels, crop.Width, crop.Height, options.RefineRadius, ct: ct);
+            // 精修半徑隨圖片大小放大：模型的一個像素在大圖上是好幾個像素
+            var scale = Math.Max(1, (int)MathF.Ceiling(Math.Max(crop.Width, crop.Height) / 1024f));
+            var radius = Math.Max(options.RefineRadius, 6 * scale);
+            var mask = GuidedFilter.Refine(model, pixels, crop.Width, crop.Height, radius, ct: ct);
+            if (options.SolidCore)
+                mask = BackgroundRemover.SolidifyCore(mask, model, crop.Width, crop.Height, radius);
             BackgroundRemover.ApplyContrast(mask, options.Contrast);
             mask = BackgroundRemover.Shift(mask, crop.Width, crop.Height, options.Shift);
             ct.ThrowIfCancellationRequested();

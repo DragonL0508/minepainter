@@ -104,6 +104,26 @@ public class BackgroundRemovalAndFeatherTests
     }
 
     [Fact]
+    public void SolidifyCore_FillsInteriorKeepsSoftEdge()
+    {
+        const int w = 64, h = 64;
+        var model = new byte[w * h];
+        var soft = new byte[w * h];
+        for (var y = 0; y < h; y++)
+        for (var x = 0; x < w; x++)
+        {
+            var inside = x is >= 8 and < 56 && y is >= 8 and < 56;
+            model[y * w + x] = inside ? (byte)180 : (byte)20; // 內部只有七成、外部兩成
+            soft[y * w + x] = inside ? (byte)170 : (byte)30;
+        }
+        var result = BackgroundRemover.SolidifyCore(soft, model, w, h, band: 6);
+        Assert.Equal(255, result[32 * w + 32]); // 核心填實
+        Assert.Equal(0, result[32 * w + 1]);    // 遠處外部清空
+        Assert.Equal(170, result[32 * w + 9]);  // 邊緣一圈保留 soft 值
+        Assert.Equal(30, result[32 * w + 6]);
+    }
+
+    [Fact]
     public void Shift_ShrinksAndGrows()
     {
         const int w = 32, h = 32;
@@ -178,14 +198,14 @@ public class BackgroundRemovalAndFeatherTests
         var ok = BackgroundRemovalCommand.Run(session, layer, new BackgroundRemovalOptions
         {
             Model = new OnnxModelInfo("u2netp", Path.Combine(dir, "u2netp.onnx")),
-            RefineEdges = true,
+            UseGpu = Environment.GetEnvironmentVariable("MINEPAINTER_TEST_GPU") == "1",
         });
         Assert.True(ok);
 
         Assert.False(layer.HasActiveEffects);      // 已平面化
         Assert.Empty(layer.Effects);
         Assert.False(layer.HasElements);
-        Assert.True(AlphaAt(layer, 128, 128) > 180, $"center {AlphaAt(layer, 128, 128)}");
+        Assert.Equal(255, AlphaAt(layer, 128, 128)); // 內部填實：中心完全不透明
         Assert.True(AlphaAt(layer, 250, 250) < 80, $"corner {AlphaAt(layer, 250, 250)}");
         Assert.Equal("AI 去背", session.History.UndoLabel);
 

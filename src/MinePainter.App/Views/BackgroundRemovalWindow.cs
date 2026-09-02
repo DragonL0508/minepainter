@@ -18,8 +18,8 @@ public sealed class BackgroundRemovalWindow : ModalDialog
 {
     // 記住上次的選擇（App 存活期間）
     private static string? _lastModel;
-    private static bool _lastGpu;
-    private static bool _lastRefine = true;
+    private static bool _lastGpu = true;
+    private static bool _lastSolid = true;
     private static int _lastContrast;
     private static int _lastShift;
 
@@ -29,7 +29,7 @@ public sealed class BackgroundRemovalWindow : ModalDialog
 
     private readonly ComboBox _modelCombo = new() { FontSize = 12, HorizontalAlignment = HorizontalAlignment.Stretch };
     private readonly CheckBox _gpuCheck = new() { Content = "使用 GPU（DirectML；不支援時自動改用 CPU）", FontSize = 12 };
-    private readonly CheckBox _refineCheck = new() { Content = "以高清原圖精修邊緣（引導濾波）", FontSize = 12 };
+    private readonly CheckBox _solidCheck = new() { Content = "內部填實（只在邊緣保留半透明）", FontSize = 12 };
     private readonly BarSlider _contrastBar = new() { Minimum = 0, Maximum = 100, Width = 160, Suffix = "%" };
     private readonly BarSlider _shiftBar = new() { Minimum = -20, Maximum = 20, Width = 160, Suffix = "px" };
     private readonly TextBlock _status = new() { FontSize = 11, Foreground = AppTheme.TextMutedBrush };
@@ -56,18 +56,18 @@ public sealed class BackgroundRemovalWindow : ModalDialog
         if (idx < 0) idx = models.ToList().FindIndex(m => m.Name.Contains("isnet", StringComparison.OrdinalIgnoreCase));
         _modelCombo.SelectedIndex = Math.Max(0, idx);
         _gpuCheck.IsChecked = _lastGpu;
-        _refineCheck.IsChecked = _lastRefine;
+        _solidCheck.IsChecked = _lastSolid;
         _contrastBar.Value = _lastContrast;
         _shiftBar.Value = _lastShift;
-        ToolTip.SetTip(_refineCheck, "模型只看 1024 解析度，遮罩邊緣是放大回來的；勾選後用原圖的高清像素當引導，讓邊緣重新貼回真實的物件邊（髮絲、毛邊會更細）");
+        ToolTip.SetTip(_solidCheck, "模型的機率圖在物件內部常只有六、七成，會讓內部變半透明；勾選後離邊界夠遠的內部一律不透明，半透明只留在邊緣（髮絲、毛邊）");
         ToolTip.SetTip(_contrastBar, "遮罩對比：拉高可去掉半透明的殘影，但也會失去柔邊");
         ToolTip.SetTip(_shiftBar, "邊緣收縮（負）／擴張（正）：收縮可吃掉殘留的背景色邊");
 
         var hint = new TextBlock
         {
-            Text = layer.HasActiveEffects || layer.HasElements
+            Text = (layer.HasActiveEffects || layer.HasElements
                 ? "本圖層的效果堆疊／文字物件會先平面化成像素，再去背。"
-                : "去背結果直接寫進本圖層（可 undo）。",
+                : "去背結果直接寫進本圖層（可 undo）。") + "邊緣一律以高清原圖做引導濾波精修。",
             FontSize = 11,
             Foreground = AppTheme.TextMutedBrush,
             TextWrapping = Avalonia.Media.TextWrapping.Wrap,
@@ -80,7 +80,7 @@ public sealed class BackgroundRemovalWindow : ModalDialog
             {
                 LabeledRow("模型", _modelCombo),
                 _gpuCheck,
-                _refineCheck,
+                _solidCheck,
                 LabeledRow("遮罩對比", _contrastBar),
                 LabeledRow("邊緣收縮", _shiftBar),
                 new Separator { Margin = new Thickness(0, 3) },
@@ -107,18 +107,18 @@ public sealed class BackgroundRemovalWindow : ModalDialog
         {
             Model = model,
             UseGpu = _gpuCheck.IsChecked == true,
-            RefineEdges = _refineCheck.IsChecked == true,
+            SolidCore = _solidCheck.IsChecked == true,
             Contrast = (int)_contrastBar.Value,
             Shift = (int)_shiftBar.Value,
         };
         _lastModel = model.Name;
         _lastGpu = options.UseGpu;
-        _lastRefine = options.RefineEdges;
+        _lastSolid = options.SolidCore;
         _lastContrast = options.Contrast;
         _lastShift = options.Shift;
 
         _okButton.IsEnabled = false;
-        _modelCombo.IsEnabled = _gpuCheck.IsEnabled = _refineCheck.IsEnabled = false;
+        _modelCombo.IsEnabled = _gpuCheck.IsEnabled = _solidCheck.IsEnabled = false;
         _contrastBar.IsEnabled = _shiftBar.IsEnabled = false;
         _status.Text = "處理中…（第一次載入模型會多花幾秒）";
 

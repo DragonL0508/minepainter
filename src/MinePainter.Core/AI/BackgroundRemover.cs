@@ -211,6 +211,24 @@ public static class BackgroundRemover
         for (var i = 0; i < mask.Length; i++) mask[i] = lut[mask[i]];
     }
 
+    /// <summary>
+    /// Trimap 填實：模型的機率圖在物件內部常只有 0.6～0.9（顏色近背景、紋理），引導濾波又會把
+    /// 內部紋理漏進 alpha，結果「去背後物件內部變半透明」。這裡以 model 的 0.5 門檻切二值，
+    /// 往內縮 band 的核心一律 255、往外擴 band 之外一律 0，只有邊界一圈保留 soft 的半透明值
+    /// （髮絲、毛邊都在這一圈裡）。
+    /// </summary>
+    public static byte[] SolidifyCore(byte[] soft, byte[] model, int w, int h, int band)
+    {
+        var bin = new byte[model.Length];
+        for (var i = 0; i < bin.Length; i++) bin[i] = model[i] >= 128 ? (byte)255 : (byte)0;
+        var core = Shift(bin, w, h, -band);  // 內縮：離邊界 ≥ band 的內部
+        var outer = Shift(bin, w, h, band);  // 外擴：離邊界 ≥ band 的外部為 0
+        var result = new byte[soft.Length];
+        for (var i = 0; i < result.Length; i++)
+            result[i] = core[i] != 0 ? (byte)255 : outer[i] == 0 ? (byte)0 : soft[i];
+        return result;
+    }
+
     /// <summary>以方框 min/max 濾波收縮（負）或擴張（正）遮罩；回傳新陣列。</summary>
     public static byte[] Shift(byte[] mask, int w, int h, int shift)
     {
