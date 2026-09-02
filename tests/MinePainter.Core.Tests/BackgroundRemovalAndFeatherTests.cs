@@ -1,4 +1,13 @@
+using MinePainter.Core.AI;
+using MinePainter.Core.Adjustments;
 using MinePainter.Core.Effects;
+using MinePainter.Core.History;
+using MinePainter.Core.IO;
+using MinePainter.Core.Layers;
+using MinePainter.Core.Tiles;
+using MinePainter.Core.Tools;
+using MinePainter.Core.Vectors;
+using SkiaSharp;
 using Xunit;
 using static MinePainter.Core.Effects.EffectMath;
 
@@ -15,21 +24,21 @@ public class BackgroundRemovalAndFeatherTests
         return a;
     }
 
+    // ---- 羽化物件 ----
+
     [Fact]
     public void Feather_FadesEdgeInward_KeepsCore()
     {
         const int w = 64, h = 64;
-        // 中央 40×40 的不透明紅色方塊
         var src = Canvas(w, h, (x, y) => x is >= 12 and < 52 && y is >= 12 and < 52 ? Premul(0, 0, 255, 255) : 0);
         var fx = new ObjectFeatherEffect { Radius = 8, Strength = 100 };
         var ctx = EffectContext.FromPixels(src, w, h, fx.SourceMargin);
         fx.Render(ctx);
 
-        Assert.Equal(255, A(ctx.Dst[32 * w + 32]));         // 核心不變
-        Assert.InRange(A(ctx.Dst[32 * w + 12]), 0, 40);     // 最外圈幾乎透明
-        Assert.InRange(A(ctx.Dst[32 * w + 16]), 60, 200);   // 中段半透明
-        Assert.Equal(0u, ctx.Dst[32 * w + 5]);               // 原本透明的仍透明
-        // 單調：越往內越不透明
+        Assert.Equal(255, A(ctx.Dst[32 * w + 32]));
+        Assert.InRange(A(ctx.Dst[32 * w + 12]), 0, 40);
+        Assert.InRange(A(ctx.Dst[32 * w + 16]), 60, 200);
+        Assert.Equal(0u, ctx.Dst[32 * w + 5]);
         Assert.True(A(ctx.Dst[32 * w + 14]) < A(ctx.Dst[32 * w + 17]));
     }
 
@@ -41,18 +50,18 @@ public class BackgroundRemovalAndFeatherTests
         var fx = new ObjectFeatherEffect { Radius = 6, Strength = 50 };
         var ctx = EffectContext.FromPixels(src, w, h, fx.SourceMargin);
         fx.Render(ctx);
-        Assert.InRange(A(ctx.Dst[16 * w + 8]), 120, 140); // 最外圈保留約 50%
+        Assert.InRange(A(ctx.Dst[16 * w + 8]), 120, 140);
     }
 
     [Fact]
     public void Feather_CanvasEdgeOption()
     {
         const int w = 32, h = 32;
-        var src = Canvas(w, h, (_, _) => Premul(0, 0, 255, 255)); // 整層填滿
+        var src = Canvas(w, h, (_, _) => Premul(0, 0, 255, 255));
         var keep = new ObjectFeatherEffect { Radius = 6, FeatherCanvasEdge = false };
         var ctx = EffectContext.FromPixels(src, w, h, keep.SourceMargin);
         keep.Render(ctx);
-        Assert.Equal(255, A(ctx.Dst[0])); // 畫布邊不算物件邊 → 不羽化
+        Assert.Equal(255, A(ctx.Dst[0]));
 
         var fade = new ObjectFeatherEffect { Radius = 6, FeatherCanvasEdge = true };
         ctx = EffectContext.FromPixels(src, w, h, fade.SourceMargin);
@@ -60,44 +69,134 @@ public class BackgroundRemovalAndFeatherTests
         Assert.InRange(A(ctx.Dst[0]), 0, 40);
     }
 
+    // ---- 引導濾波：糊掉的遮罩貼回高清邊緣 ----
+
     [Fact]
-    public void BackgroundRemoval_WithoutModels_PassesThrough()
+    public void GuidedFilter_SnapsBlurryMaskToImageEdge()
     {
-        var src = Canvas(8, 8, (_, _) => Premul(1, 2, 3, 255));
-        var fx = new BackgroundRemovalEffect([]);
-        Assert.Null(fx.SelectedModel);
-        var ctx = EffectContext.FromPixels(src, 8, 8);
-        fx.Render(ctx);
-        Assert.Equal(src, ctx.Dst);
+        const int w = 128, h = 64;
+        // 左半綠、右半紅，邊在 x=64（銳利）
+        var src = Canvas(w, h, (x, _) => x < 64 ? Premul(40, 160, 60, 255) : Premul(30, 30, 220, 255));
+        // 模型遮罩：同一條邊但糊了 20px（線性漸層 54..74）
+        var mask = new byte[w * h];
+        for (var y = 0; y < h; y++)
+        for (var x = 0; x < w; x++)
+            mask[y * w + x] = (byte)Math.Clamp((x - 54) / 20f * 255f, 0, 255);
+
+        var refined = GuidedFilter.Refine(mask, src, w, h, radius: 16, eps: 1e-3f);
+
+        // 精修後邊界兩側應各自接近 0 / 255（原本 x=58 約 51、x=70 約 204）
+        Assert.True(refined[32 * w + 58] < 30, $"left {refined[32 * w + 58]}");
+        Assert.True(refined[32 * w + 70] > 225, $"right {refined[32 * w + 70]}");
+        Assert.True(refined[32 * w + 10] < 10);
+        Assert.True(refined[32 * w + 120] > 245);
+    }
+
+    [Fact]
+    public void GuidedFilter_LeavesUniformRegionsAlone()
+    {
+        const int w = 64, h = 64;
+        var src = Canvas(w, h, (_, _) => Premul(100, 100, 100, 255));
+        var mask = new byte[w * h];
+        Array.Fill(mask, (byte)255);
+        var refined = GuidedFilter.Refine(mask, src, w, h);
+        Assert.All(refined, v => Assert.InRange(v, 250, 255));
+    }
+
+    [Fact]
+    public void Shift_ShrinksAndGrows()
+    {
+        const int w = 32, h = 32;
+        var mask = new byte[w * h];
+        for (var y = 8; y < 24; y++)
+        for (var x = 8; x < 24; x++)
+            mask[y * w + x] = 255;
+        var shrunk = BackgroundRemover.Shift(mask, w, h, -2);
+        Assert.Equal(0, shrunk[16 * w + 8]);
+        Assert.Equal(255, shrunk[16 * w + 12]);
+        var grown = BackgroundRemover.Shift(mask, w, h, 2);
+        Assert.Equal(255, grown[16 * w + 6]);
+        Assert.Equal(0, grown[16 * w + 4]);
+    }
+
+    // ---- 圖層命令（真的跑模型）----
+
+    private static string? ModelDir()
+    {
+        var dir = Environment.GetEnvironmentVariable("MINEPAINTER_TEST_MODELS");
+        return string.IsNullOrEmpty(dir) || !File.Exists(Path.Combine(dir, "u2netp.onnx")) ? null : dir;
+    }
+
+    private static byte AlphaAt(RasterLayer layer, int x, int y)
+    {
+        var lx = x - layer.Offset.X;
+        var ly = y - layer.Offset.Y;
+        var tile = layer.Surface.GetTileForRead(TileIndex.FromPixel(lx, ly));
+        if (tile == null) return 0;
+        var rect = TileIndex.FromPixel(lx, ly).ToPixelRect();
+        return tile.PixelSpan[((ly - rect.Top) * Tile.Size + (lx - rect.Left)) * 4 + 3];
+    }
+
+    private static void FillCircle(RasterLayer layer, SKPoint c, float r, SKColor color)
+    {
+        var rect = new SKRectI((int)(c.X - r) - 1, (int)(c.Y - r) - 1, (int)(c.X + r) + 2, (int)(c.Y + r) + 2);
+        foreach (var idx in TileIndex.CoveringRect(rect))
+        {
+            var tile = layer.Surface.GetTileForWrite(idx);
+            using var surface = SKSurface.Create(Tile.Info, tile.Pixels, Tile.RowBytes);
+            var tr = idx.ToPixelRect();
+            surface.Canvas.Translate(-tr.Left, -tr.Top);
+            using var paint = new SKPaint { Color = color, IsAntialias = true };
+            surface.Canvas.DrawCircle(c, r, paint);
+            surface.Canvas.Flush();
+        }
     }
 
     /// <summary>
-    /// 真的跑一次模型：只在環境變數 MINEPAINTER_TEST_MODELS 指到含 u2netp.onnx 的資料夾時執行。
-    /// 圖：灰底中央一個高對比的深色圓（顯著物件），期望圓內 alpha 高、角落 alpha 低。
+    /// 灰底＋深色圓（顯著物件）＋一個效果與一個文字物件：命令要先平面化再去背，
+    /// 圓內保留、角落透明；undo 後像素、效果堆疊、文字物件全部回來。
+    /// 只在 MINEPAINTER_TEST_MODELS 指到含 u2netp.onnx 的資料夾時執行。
     /// </summary>
     [Fact]
-    public void BackgroundRemoval_RealModel_SeparatesSalientObject()
+    public void Command_FlattensThenRemovesBackground_OneUndoStep()
     {
-        var dir = Environment.GetEnvironmentVariable("MINEPAINTER_TEST_MODELS");
-        if (string.IsNullOrEmpty(dir) || !File.Exists(Path.Combine(dir, "u2netp.onnx"))) return;
+        var dir = ModelDir();
+        if (dir == null) return;
 
-        // 不動靜態的 ModelDirectories：其他測試（如「所有效果預設渲染」）平行跑時不該看到模型
-        var model = new OnnxModelInfo("u2netp", Path.Combine(dir, "u2netp.onnx"));
-        var fx = new BackgroundRemovalEffect([model])
+        var doc = ImageCodec.CreateBlankDocument(256, 256, new SKColor(200, 200, 200));
+        using var session = new EditorSession(doc);
+        var layer = (RasterLayer)doc.ActiveLayer!;
+        lock (doc.SyncRoot)
         {
-            UseGpu = Environment.GetEnvironmentVariable("MINEPAINTER_TEST_GPU") == "1", // DirectML 路徑（失敗會退回 CPU）
-        };
+            FillCircle(layer, new SKPoint(128, 128), 60, new SKColor(30, 20, 200));
+            layer.SetEffects([LayerEffect.Create(new AdjustmentEffect(new InvertAdjustment()))]);
+            layer.AddElement(new TextElement { Text = "hi", Position = new SKPoint(10, 10), FontSize = 24, Color = SKColors.Black });
+        }
+        Assert.True(layer.HasActiveEffects);
+        Assert.True(layer.HasElements);
 
-        const int w = 256, h = 256;
-        var src = Canvas(w, h, (x, y) =>
+        var ok = BackgroundRemovalCommand.Run(session, layer, new BackgroundRemovalOptions
         {
-            var dx = x - 128; var dy = y - 128;
-            return dx * dx + dy * dy < 60 * 60 ? Premul(30, 20, 200, 255) : Premul(200, 200, 200, 255);
+            Model = new OnnxModelInfo("u2netp", Path.Combine(dir, "u2netp.onnx")),
+            RefineEdges = true,
         });
-        var ctx = EffectContext.FromPixels(src, w, h);
-        fx.Render(ctx);
+        Assert.True(ok);
 
-        Assert.True(A(ctx.Dst[128 * w + 128]) > 180, $"center alpha {A(ctx.Dst[128 * w + 128])}");
-        Assert.True(A(ctx.Dst[4 * w + 4]) < 80, $"corner alpha {A(ctx.Dst[4 * w + 4])}");
+        Assert.False(layer.HasActiveEffects);      // 已平面化
+        Assert.Empty(layer.Effects);
+        Assert.False(layer.HasElements);
+        Assert.True(AlphaAt(layer, 128, 128) > 180, $"center {AlphaAt(layer, 128, 128)}");
+        Assert.True(AlphaAt(layer, 250, 250) < 80, $"corner {AlphaAt(layer, 250, 250)}");
+        Assert.Equal("AI 去背", session.History.UndoLabel);
+
+        session.Undo();
+        Assert.Equal(255, AlphaAt(layer, 250, 250));
+        Assert.True(layer.HasActiveEffects);
+        Assert.True(layer.HasElements);
+        Assert.False(session.History.CanUndo);
+
+        session.Redo();
+        Assert.True(AlphaAt(layer, 250, 250) < 80);
+        Assert.False(layer.HasElements);
     }
 }

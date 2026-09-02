@@ -104,7 +104,7 @@ public static class LayerEffectCommands
         return true;
     }
 
-    private static unsafe void CopyRegion(TileSurface from, TileSurface to, SKRectI rect)
+    internal static unsafe void CopyRegion(TileSurface from, TileSurface to, SKRectI rect)
     {
         foreach (var idx in TileIndex.CoveringRect(rect))
         {

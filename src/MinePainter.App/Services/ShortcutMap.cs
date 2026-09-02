@@ -61,6 +61,7 @@ public static class ShortcutMap
         new("layer.flipH", "圖層", "水平翻轉圖層", null),
         new("layer.flipV", "圖層", "垂直翻轉圖層", null),
         new("layer.properties", "圖層", "圖層屬性", new KeyGesture(Key.F4)),
+        new("layer.removeBackground", "圖層", "AI 去背", null),
 
         new("view.zoomIn", "檢視", "放大", new KeyGesture(Key.OemPlus, KeyModifiers.Control)),
         new("view.zoomOut", "檢視", "縮小", new KeyGesture(Key.OemMinus, KeyModifiers.Control)),

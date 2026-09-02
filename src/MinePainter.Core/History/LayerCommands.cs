@@ -311,40 +311,11 @@ public static class LayerCommands
             elements = layer.Elements.ToArray();
             if (elements.Length == 0) return false;
 
-            docRect = SKRectI.Empty;
-            foreach (var el in elements)
-            {
-                if (el.Bounds.IsEmpty) continue;
-                docRect = docRect.IsEmpty ? el.Bounds : SKRectI.Union(docRect, el.Bounds);
-            }
-
-            var layerRect = new SKRectI(
-                docRect.Left - layer.Offset.X, docRect.Top - layer.Offset.Y,
-                docRect.Right - layer.Offset.X, docRect.Bottom - layer.Offset.Y);
-
             using var before = layer.Surface.Snapshot();
-            if (!layerRect.IsEmpty)
-            {
-                foreach (var idx in TileIndex.CoveringRect(layerRect))
-                {
-                    var tileRect = idx.ToPixelRect();
-                    var tileDoc = new SKRectI(
-                        tileRect.Left + layer.Offset.X, tileRect.Top + layer.Offset.Y,
-                        tileRect.Right + layer.Offset.X, tileRect.Bottom + layer.Offset.Y);
-                    // 沒有文字碰到的格子不要建（空 tile 也會進 undo 記錄）
-                    if (!elements.Any(el => el.Bounds.IntersectsWith(tileDoc))) continue;
-
-                    var tile = layer.Surface.GetTileForWrite(idx);
-                    using var surface = SKSurface.Create(Tile.Info, tile.Pixels, Tile.RowBytes);
-                    var canvas = surface.Canvas;
-                    canvas.Translate(-tileRect.Left - layer.Offset.X, -tileRect.Top - layer.Offset.Y);
-                    foreach (var el in elements)
-                    {
-                        if (el.Bounds.IntersectsWith(tileDoc)) el.Render(canvas);
-                    }
-                    canvas.Flush();
-                }
-            }
+            var layerRect = RasterizeElementsLocked(layer, elements);
+            docRect = layerRect.IsEmpty ? SKRectI.Empty : new SKRectI(
+                layerRect.Left + layer.Offset.X, layerRect.Top + layer.Offset.Y,
+                layerRect.Right + layer.Offset.X, layerRect.Bottom + layer.Offset.Y);
             pixelEntry = layerRect.IsEmpty ? null : TileDeltaEntry.Capture("平面化文字", layer, before, layerRect);
 
             foreach (var el in elements) layer.RemoveElement(el.Id);
@@ -365,6 +336,46 @@ public static class LayerCommands
             : elementEntry);
         if (!docRect.IsEmpty) layer.Invalidate(docRect);
         return true;
+    }
+
+    /// <summary>
+    /// 把物件以 SrcOver 畫進圖層像素（不移除物件、不記 history；在 SyncRoot 內）。
+    /// 回傳受影響範圍（圖層座標；沒有物件範圍時為 Empty）。
+    /// </summary>
+    internal static SKRectI RasterizeElementsLocked(RasterLayer layer, IReadOnlyList<VectorElement> elements)
+    {
+        var docRect = SKRectI.Empty;
+        foreach (var el in elements)
+        {
+            if (el.Bounds.IsEmpty) continue;
+            docRect = docRect.IsEmpty ? el.Bounds : SKRectI.Union(docRect, el.Bounds);
+        }
+        if (docRect.IsEmpty) return SKRectI.Empty;
+
+        var layerRect = new SKRectI(
+            docRect.Left - layer.Offset.X, docRect.Top - layer.Offset.Y,
+            docRect.Right - layer.Offset.X, docRect.Bottom - layer.Offset.Y);
+
+        foreach (var idx in TileIndex.CoveringRect(layerRect))
+        {
+            var tileRect = idx.ToPixelRect();
+            var tileDoc = new SKRectI(
+                tileRect.Left + layer.Offset.X, tileRect.Top + layer.Offset.Y,
+                tileRect.Right + layer.Offset.X, tileRect.Bottom + layer.Offset.Y);
+            // 沒有文字碰到的格子不要建（空 tile 也會進 undo 記錄）
+            if (!elements.Any(el => el.Bounds.IntersectsWith(tileDoc))) continue;
+
+            var tile = layer.Surface.GetTileForWrite(idx);
+            using var surface = SKSurface.Create(Tile.Info, tile.Pixels, Tile.RowBytes);
+            var canvas = surface.Canvas;
+            canvas.Translate(-tileRect.Left - layer.Offset.X, -tileRect.Top - layer.Offset.Y);
+            foreach (var el in elements)
+            {
+                if (el.Bounds.IntersectsWith(tileDoc)) el.Render(canvas);
+            }
+            canvas.Flush();
+        }
+        return layerRect;
     }
 
     /// <summary>

@@ -12,6 +12,7 @@ using Material.Icons;
 using Material.Icons.Avalonia;
 using MinePainter.App.Controls;
 using MinePainter.Core.Adjustments;
+using MinePainter.Core.AI;
 using MinePainter.Core.Effects;
 using IEffect = MinePainter.Core.Effects.IEffect;
 using MinePainter.Core.History;
@@ -1600,6 +1601,40 @@ public partial class MainWindow : Window
             : $"已匯入 {imported} 個圖層");
     }
 
+    private void OpenModelFolder()
+    {
+        System.IO.Directory.CreateDirectory(ModelFolder);
+        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(ModelFolder) { UseShellExecute = true });
+    }
+
+    private void OnModelFolderClicked(object? sender, RoutedEventArgs e) => OpenModelFolder();
+
+    /// <summary>圖層 → AI 去背：對話框選模型與選項，處理完直接寫進圖層（先平面化；一步 undo）。</summary>
+    private async void OnRemoveBackgroundClicked(object? sender, RoutedEventArgs e)
+    {
+        var session = CommitPending();
+        if (session == null) return;
+        if (session.Document.ActiveLayer is not RasterLayer layer)
+        {
+            Toasts.Show("請先選擇一個點陣圖層");
+            return;
+        }
+        var models = OnnxModels.Scan();
+        if (models.Count == 0)
+        {
+            Toasts.Show("找不到去背模型：請把 .onnx（例如 rembg 的 isnet-general-use.onnx）放進模型資料夾");
+            OpenModelFolder();
+            return;
+        }
+        session.SelectedElement = null; // 平面化後物件不存在，把手框不能還指著它
+        var dialog = new BackgroundRemovalWindow(session, layer, models);
+        await dialog.ShowDialog(this);
+        if (dialog.Error != null) Toasts.Show("AI 去背失敗：" + dialog.Error);
+        else if (dialog.Applied) Toasts.Show("AI 去背完成");
+        _layersContent.Refresh();
+        RefreshUiState();
+    }
+
     private void OnLayerPropertiesClicked(object? sender, RoutedEventArgs e)
     {
         var session = Canvas.Session;
@@ -1672,15 +1707,6 @@ public partial class MainWindow : Window
                 : "移動時只顯示基底像素，放開後才套用效果（較省效能）");
         };
         EffectsMenu.Items.Add(fxWhileDrag);
-
-        var modelFolder = new MenuItem { Header = "AI 去背模型資料夾…" };
-        ToolTip.SetTip(modelFolder, "把去背模型（.onnx：u2net、isnet、RMBG、BiRefNet…）放進這個資料夾，「相片 → AI 去背」就能選到");
-        modelFolder.Click += (_, _) =>
-        {
-            System.IO.Directory.CreateDirectory(ModelFolder);
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(ModelFolder) { UseShellExecute = true });
-        };
-        EffectsMenu.Items.Add(modelFolder);
         EffectsMenu.Items.Add(new Separator());
 
         foreach (var category in EffectRegistry.Categories)
@@ -1734,13 +1760,6 @@ public partial class MainWindow : Window
     {
         var session = CommitPending();
         if (session == null) return;
-        if (effect is BackgroundRemovalEffect { SelectedModel: null })
-        {
-            Toasts.Show("找不到去背模型：請用「效果 → AI 去背模型資料夾…」放入 .onnx（例如 rembg 的 isnet-general-use.onnx）");
-            System.IO.Directory.CreateDirectory(ModelFolder);
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(ModelFolder) { UseShellExecute = true });
-            return;
-        }
         if (session.Document.ActiveLayer is not RasterLayer layer)
         {
             Toasts.Show("請先選擇一個點陣圖層");
@@ -2008,6 +2027,7 @@ public partial class MainWindow : Window
         _shortcutActions["layer.flipH"] = () => OnFlipLayerHorizontalClicked(null, new RoutedEventArgs());
         _shortcutActions["layer.flipV"] = () => OnFlipLayerVerticalClicked(null, new RoutedEventArgs());
         _shortcutActions["layer.properties"] = () => OnLayerPropertiesClicked(null, new RoutedEventArgs());
+        _shortcutActions["layer.removeBackground"] = () => OnRemoveBackgroundClicked(null, new RoutedEventArgs());
 
         _shortcutActions["adjust.autoLevel"] = () => _ = ApplyAutoLevelAsync();
         foreach (var entry in AdjustmentRegistry.All)
