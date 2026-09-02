@@ -9,12 +9,14 @@ namespace MinePainter.Core.Tools;
 /// 筆刷：dab → StrokeBuffer 預覽，PointerUp 一次 commit 進圖層 + TileDeltaEntry。
 /// EraserTool 繼承並改為 DstOut。
 /// </summary>
-public class BrushTool : ITool
+public class BrushTool : ITool, IBrushCursorTool
 {
     public virtual string Name => "筆刷";
     protected virtual bool IsEraser => false;
 
     public BrushSettings Settings { get; } = new();
+
+    public float CursorRadius => Settings.Radius;
 
     private readonly BrushEngine _engine = new();
     private TileSnapshot? _beforeSnapshot;

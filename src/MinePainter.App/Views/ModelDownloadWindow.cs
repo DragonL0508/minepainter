@@ -120,7 +120,14 @@ public sealed class ModelDownloadWindow : ModalDialog
 
         private readonly ModelDownloadWindow _owner;
         private readonly Button _action = new() { FontSize = 11, Padding = new Thickness(12, 4), Width = 84 };
-        private readonly ProgressBar _progress = new() { Height = 4, Minimum = 0, Maximum = 1, IsVisible = false };
+        private readonly ProgressBar _progress = new()
+        {
+            Height = 4,
+            Minimum = 0,
+            Maximum = 1,
+            IsVisible = false,
+            Foreground = Brushes.White,
+        };
         private readonly TextBlock _state = new() { FontSize = 11, Foreground = AppTheme.TextMutedBrush };
         private bool _installed;
 

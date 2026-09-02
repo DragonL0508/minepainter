@@ -42,3 +42,13 @@ public interface ITool
     void OnPointerMove(ToolPointerEvent e, EditorSession session);
     void OnPointerUp(ToolPointerEvent e, EditorSession session);
 }
+
+/// <summary>
+/// 畫筆型工具：游標畫成筆刷實際大小的圈，而不是一個固定的十字。
+/// 落筆前就看得到會蓋到哪裡，是這類工具唯一能預期下筆結果的方式。
+/// </summary>
+public interface IBrushCursorTool
+{
+    /// <summary>筆刷半徑（doc px）。</summary>
+    float CursorRadius { get; }
+}

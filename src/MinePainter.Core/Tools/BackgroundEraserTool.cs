@@ -46,11 +46,13 @@ public sealed record BackgroundEraserSettings
 /// 擦除量寫進 StrokeBuffer（取 max，wash 語意），合成器即時預覽、PointerUp 才以 DstOut 烙進圖層，
 /// 與橡皮擦共用同一條 commit / undo 路徑。
 /// </summary>
-public sealed class BackgroundEraserTool : ITool
+public sealed class BackgroundEraserTool : ITool, IBrushCursorTool
 {
     public string Name => "去背筆";
 
     public BackgroundEraserSettings Settings { get; } = new();
+
+    public float CursorRadius => Settings.Radius;
 
     private TileSnapshot? _beforeSnapshot;
     private RasterLayer? _targetLayer;

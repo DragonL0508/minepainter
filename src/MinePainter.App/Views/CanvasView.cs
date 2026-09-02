@@ -31,6 +31,20 @@ public sealed class CanvasView : Control
     private bool _viewportInitialized;
     private bool _spaceDown;
     private bool _panning;
+
+    // ---- 筆刷游標（畫筆型工具畫成筆刷實際大小的虛線圈）----
+    private Point _hoverView;
+    private bool _pointerInside;
+    private bool _brushCursorShown;
+
+    /// <summary>圈小於這個螢幕半徑就看不出是圈了，改回十字游標。</summary>
+    private const double MinBrushCursorRadius = 3.5;
+
+    // 黑白交錯的虛線：任何底色上都看得見（純白圈在亮圖上、純黑圈在暗圖上都會消失）
+    private static readonly Pen BrushCursorPenDark =
+        new(Brushes.Black, 1, new DashStyle([4, 4], 0));
+    private static readonly Pen BrushCursorPenLight =
+        new(Brushes.White, 1, new DashStyle([4, 4], 4));
     private bool _toolActive;
     private Point _lastPointerView;
     private bool _animationRunning;
@@ -98,6 +112,7 @@ public sealed class CanvasView : Control
     {
         ClipToBounds = true;
         Cursor = new Cursor(StandardCursorType.Cross);
+        UpdateBrushCursor();
     }
 
     public EditorSession? Session => _session;
@@ -158,6 +173,7 @@ public sealed class CanvasView : Control
             if (!_animationRunning) return;
             _session?.CollectOverlayGhost(); // 落地後的殘影：合成器追上就收掉
             StepViewportAnimation();
+            UpdateBrushCursor();
             FrameTick?.Invoke();
             InvalidateVisual();
             TopLevel.GetTopLevel(this)?.RequestAnimationFrame(Frame);
@@ -192,6 +208,8 @@ public sealed class CanvasView : Control
         context.Custom(new CanvasDrawOperation(
             new Rect(0, 0, Bounds.Width, Bounds.Height), session, _viewport, _stats, ShowPixelGrid,
             (float)CurrentContentFade));
+
+        DrawBrushCursor(context);
     }
 
     // ---- 文件內容 fade（分頁切換動畫）----
@@ -395,6 +413,8 @@ public sealed class CanvasView : Control
         base.OnPointerMoved(e);
         _currentModifiers = e.KeyModifiers;
         var pos = e.GetPosition(this);
+        _hoverView = pos;
+        _pointerInside = true;
 
         {
             var doc = _viewport.ViewToDoc(pos);
@@ -477,8 +497,49 @@ public sealed class CanvasView : Control
             StateChanged?.Invoke();
         }
         _panning = false;
+        _brushCursorShown = false; // 平移把游標換成 SizeAll 了，強制重新決定一次
         Cursor = new Cursor(StandardCursorType.Cross);
+        UpdateBrushCursor();
         e.Pointer.Capture(null);
+    }
+
+    protected override void OnPointerEntered(PointerEventArgs e)
+    {
+        base.OnPointerEntered(e);
+        _hoverView = e.GetPosition(this);
+        _pointerInside = true;
+    }
+
+    protected override void OnPointerExited(PointerEventArgs e)
+    {
+        base.OnPointerExited(e);
+        _pointerInside = false;
+    }
+
+    /// <summary>畫筆型工具且圈夠大時藏掉系統游標，只留我們畫的圈。</summary>
+    private void UpdateBrushCursor()
+    {
+        if (_panning) return; // 平移中的 SizeAll 不要被蓋掉
+        var wanted = BrushCursorRadius() != null;
+        if (wanted == _brushCursorShown) return;
+        _brushCursorShown = wanted;
+        Cursor = new Cursor(wanted ? StandardCursorType.None : StandardCursorType.Cross);
+    }
+
+    /// <summary>目前該畫的圈的螢幕半徑；不該畫時回 null。</summary>
+    private double? BrushCursorRadius()
+    {
+        if (_session?.ActiveTool is not IBrushCursorTool tool) return null;
+        var radius = tool.CursorRadius * _viewport.Scale;
+        return radius >= MinBrushCursorRadius ? radius : null;
+    }
+
+    private void DrawBrushCursor(DrawingContext context)
+    {
+        if (_panning || !_pointerInside) return;
+        if (BrushCursorRadius() is not { } radius) return;
+        context.DrawEllipse(null, BrushCursorPenDark, _hoverView, radius, radius);
+        context.DrawEllipse(null, BrushCursorPenLight, _hoverView, radius, radius);
     }
 
     private ToolPointerEvent ToToolEvent(PointerPoint point)
