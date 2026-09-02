@@ -554,8 +554,10 @@ public sealed class EditorSession : IDisposable
         {
             if (!FloatingSelection.CanOverlay(layer)) return false;
             var withEffects = RenderEffectsWhileDragging && layer.HasActiveEffects;
-            if (withEffects && layer.FxCache.HasPending)
-                LayerEffectRenderer.RenderLayerNow(Document, layer); // 快照要是最新的（通常閒置時早算完了）
+            // 快照要是最新的（通常閒置時早算完了）。只看 HasPending 不夠：worker 可能剛取走工作、
+            // 正在鎖外計算 —— 髒區已清空但 Rendered 還是 false，RenderLayerNow 會等它寫回。
+            if (withEffects && (layer.FxCache.HasPending || !layer.EffectsRendered))
+                LayerEffectRenderer.RenderLayerNow(Document, layer);
             withEffects &= layer.EffectsRendered;
             region = withEffects ? layer.DisplayContentBounds : layer.ContentBounds;
             if (region.Width <= 0 || region.Height <= 0) return false;

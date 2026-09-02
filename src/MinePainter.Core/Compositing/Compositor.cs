@@ -307,7 +307,7 @@ public sealed class Compositor : IDisposable
     /// </summary>
     public static SKImage RenderComposite(Document doc)
     {
-        Effects.LayerEffectRenderer.RenderPending(doc); // 效果堆疊要先是最新的
+        Effects.LayerEffectRenderer.RenderAllNow(doc); // 效果堆疊要先是最新的（含 worker 正在算的）
         var info = new SKImageInfo(doc.Width, doc.Height, SKColorType.Bgra8888, SKAlphaType.Premul);
         using var full = SKSurface.Create(info);
         full.Canvas.Clear(SKColors.Transparent);

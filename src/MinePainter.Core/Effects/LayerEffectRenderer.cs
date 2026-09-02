@@ -160,6 +160,19 @@ public static class LayerEffectRenderer
         }
     }
 
+    /// <summary>
+    /// 同步把整份文件的效果堆疊算到最新（匯出／離線合成用）。
+    /// 與 <see cref="RenderPending"/> 的差別：合成器 worker 已取走、正在鎖外算的工作也會等它寫回，
+    /// 否則 RenderComposite 會拿到「效果尚未套用」的基底像素（偶發）。
+    /// </summary>
+    public static void RenderAllNow(Document doc)
+    {
+        List<RasterLayer> layers;
+        lock (doc.SyncRoot)
+            layers = doc.Descendants().OfType<RasterLayer>().Where(l => l.HasActiveEffects).ToList();
+        foreach (var layer in layers) RenderLayerNow(doc, layer);
+    }
+
     /// <summary>作用中效果的總 margin（有限值相加；整層來源的效果不計）。</summary>
     public static int TotalMargin(RasterLayer layer)
     {
