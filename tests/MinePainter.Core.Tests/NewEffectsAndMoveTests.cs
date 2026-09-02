@@ -25,7 +25,7 @@ public class NewEffectsAndMoveTests
         src[3] = 0;                             // 本來就透明
         var ctx = EffectContext.FromPixels(src, 4, 1);
 
-        new ColorToAlphaEffect { Color = SKColors.Red, Tolerance = 20, Softness = 0 }.Render(ctx);
+        new ColorToAlphaEffect { Mode = 1, Color = SKColors.Red, Tolerance = 20, Softness = 0 }.Render(ctx);
 
         Assert.Equal(0, A(ctx.Dst[0]));
         Assert.Equal(0, A(ctx.Dst[1]));
@@ -38,7 +38,7 @@ public class NewEffectsAndMoveTests
     {
         var src = new uint[] { Premul(0, 0, 205, 255) }; // 與紅差 50
         var ctx = EffectContext.FromPixels(src, 1, 1);
-        new ColorToAlphaEffect { Color = SKColors.Red, Tolerance = 0, Softness = 100 }.Render(ctx);
+        new ColorToAlphaEffect { Mode = 1, Color = SKColors.Red, Tolerance = 0, Softness = 100 }.Render(ctx);
         Assert.InRange(A(ctx.Dst[0]), 100, 155); // 50/100 ≈ 半透明
     }
 
@@ -47,9 +47,45 @@ public class NewEffectsAndMoveTests
     {
         var src = new uint[] { Premul(0, 0, 255, 255), Premul(255, 0, 0, 255) };
         var ctx = EffectContext.FromPixels(src, 2, 1);
-        new ColorToAlphaEffect { Color = SKColors.Red, Tolerance = 20, Softness = 0, Invert = true }.Render(ctx);
+        new ColorToAlphaEffect { Mode = 1, Color = SKColors.Red, Tolerance = 20, Softness = 0, Invert = true }.Render(ctx);
         Assert.Equal(255, A(ctx.Dst[0]));
         Assert.Equal(0, A(ctx.Dst[1]));
+    }
+
+    [Fact]
+    public void ColorToAlpha_Gradual_RampsAlphaAcrossAGradient()
+    {
+        // 白 → 黑的漸層，指定黑色透明化：白的地方原樣、灰的地方半透明、黑的地方全透明
+        const int n = 5;
+        var src = new uint[n];
+        for (var i = 0; i < n; i++)
+        {
+            var v = 255 - i * 255 / (n - 1); // 255,191,127,63,0
+            src[i] = Premul(v, v, v, 255);
+        }
+        var ctx = EffectContext.FromPixels(src, n, 1);
+        new ColorToAlphaEffect { Color = SKColors.Black }.Render(ctx);
+
+        Assert.Equal(255, A(ctx.Dst[0]));
+        Assert.Equal(0, A(ctx.Dst[4]));
+        Assert.InRange(A(ctx.Dst[2]), 115, 140); // 中間灰 ≈ 半透明
+        // alpha 必須單調遞減（漸層不會出現「突然一整段沒變」）
+        for (var i = 1; i < n; i++) Assert.True(A(ctx.Dst[i]) < A(ctx.Dst[i - 1]));
+
+        // 抽掉黑底之後剩下的顏色是白的：疊回黑底要還原成原本的灰
+        Unpremul(ctx.Dst[2], out var b, out var g, out var r, out _);
+        Assert.InRange(r, 245, 255);
+        Assert.InRange(g, 245, 255);
+        Assert.InRange(b, 245, 255);
+    }
+
+    [Fact]
+    public void ColorToAlpha_Gradual_StrengthZeroKeepsEverything()
+    {
+        var src = new uint[] { Premul(128, 128, 128, 255) };
+        var ctx = EffectContext.FromPixels(src, 1, 1);
+        new ColorToAlphaEffect { Color = SKColors.Black, Strength = 0 }.Render(ctx);
+        Assert.Equal(src[0], ctx.Dst[0]);
     }
 
     // ---- 傾斜 ----
