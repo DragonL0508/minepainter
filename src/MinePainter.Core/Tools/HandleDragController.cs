@@ -30,6 +30,7 @@ public sealed class HandleDragController
     private int _corner;
     private SKRect _startRect;
     private SelectionMask? _startSelection;
+    private float _transformPad; // 變形框顯示用的效果外擴量（TargetRect 本身不含）
 
     public bool IsActive => _kind != TargetKind.None;
 
@@ -39,6 +40,36 @@ public sealed class HandleDragController
     /// </summary>
     public static float ElementEffectPad(RasterLayer layer) =>
         layer.HasActiveEffects ? Effects.LayerEffectRenderer.TotalMargin(layer) : 0f;
+
+    /// <summary>任一圖層節點的效果外擴量：點陣層看自己的堆疊；群組取子孫點陣層的最大值。</summary>
+    public static float EffectPad(LayerNode node)
+    {
+        switch (node)
+        {
+            case RasterLayer raster:
+                return ElementEffectPad(raster);
+            case GroupLayer group:
+            {
+                var max = 0f;
+                foreach (var child in group.Children) max = Math.Max(max, EffectPad(child));
+                return max;
+            }
+            default:
+                return 0f;
+        }
+    }
+
+    private static SKRect Inflated(SKRect r, float pad)
+    {
+        if (pad > 0) r.Inflate(pad, pad);
+        return r;
+    }
+
+    private static SKRect Deflated(SKRect r, float pad)
+    {
+        if (pad > 0) r.Inflate(-pad, -pad);
+        return r;
+    }
 
     /// <summary>使用者看到的物件框 = 排版框往外加效果外擴量。</summary>
     public static SKRect ElementFrame(RasterLayer layer, VectorElement element)
@@ -52,7 +83,8 @@ public sealed class HandleDragController
     /// <summary>目前畫布上「被框住的東西」的外框；null = 沒有。</summary>
     public static SKRect? GetFrame(EditorSession session)
     {
-        if (session.Transform is { } transform) return transform.TargetRect;
+        // 變形框：TargetRect 是被變形的像素框，使用者看到的框要再包住效果外擴
+        if (session.Transform is { } transform) return Inflated(transform.TargetRect, EffectPad(transform.Target));
         if (session.Floating is { } floating) return floating.TargetRect;
 
         if (session.SelectedElement is { } sel &&
@@ -99,17 +131,19 @@ public sealed class HandleDragController
                 {
                     case RasterLayer raster:
                     {
+                        // 每層各自的效果外擴（外框／陰影畫在內容之外，框要包住它們）
+                        var pad = ElementEffectPad(raster);
                         var b = raster.Surface.ExactContentBounds();
                         if (b.Width > 0 && b.Height > 0)
                         {
-                            Add(new SKRect(
+                            Add(Inflated(new SKRect(
                                 b.Left + raster.Offset.X, b.Top + raster.Offset.Y,
-                                b.Right + raster.Offset.X, b.Bottom + raster.Offset.Y));
+                                b.Right + raster.Offset.X, b.Bottom + raster.Offset.Y), pad));
                         }
                         foreach (var el in raster.Elements)
                         {
                             var eb = el.FrameBounds;
-                            if (!eb.IsEmpty) Add(eb);
+                            if (!eb.IsEmpty) Add(Inflated(eb, pad));
                         }
                         break;
                     }
@@ -134,18 +168,20 @@ public sealed class HandleDragController
                 Math.Max(a.Right, r.Right), Math.Max(a.Bottom, r.Bottom))
             : r;
 
+        var pad = ElementEffectPad(layer);
         var b = layer.Surface.ExactContentBounds(); // 內容沒變時是 O(1)（按寫入版本快取）
         if (b.Width > 0 && b.Height > 0)
         {
-            Add(new SKRect(
+            Add(Inflated(new SKRect(
                 b.Left + layer.Offset.X, b.Top + layer.Offset.Y,
-                b.Right + layer.Offset.X, b.Bottom + layer.Offset.Y));
+                b.Right + layer.Offset.X, b.Bottom + layer.Offset.Y), pad));
         }
-        // 拖角走變形 session（像素與本層文字一起縮放），框也要把文字算進去才對得上
+        // 拖角走變形 session（像素與本層文字一起縮放），框也要把文字算進去才對得上；
+        // 效果外擴也一起算進去，第一次選到圖層時框就在外框／陰影之外
         foreach (var el in layer.Elements)
         {
             var eb = el.FrameBounds;
-            if (!eb.IsEmpty) Add(eb);
+            if (!eb.IsEmpty) Add(Inflated(eb, pad));
         }
         return acc is { Width: > 0, Height: > 0 } ? acc : null;
     }
@@ -159,11 +195,13 @@ public sealed class HandleDragController
             var local = MoveTool.RotatePoint(p,
                 new SKPoint(transform.TargetRect.MidX, transform.TargetRect.MidY),
                 -transform.RotationDeg);
-            var tCorner = MoveTool.HitCorner(transform.TargetRect, local, tolerance);
+            _transformPad = EffectPad(transform.Target);
+            var shownRect = Inflated(transform.TargetRect, _transformPad); // 把手畫在含效果外擴的框上
+            var tCorner = MoveTool.HitCorner(shownRect, local, tolerance);
             if (tCorner < 0) return false;
             _kind = TargetKind.Transform;
             _corner = tCorner;
-            _startRect = transform.TargetRect;
+            _startRect = shownRect;
             transform.BeginGesturePreview(); // 拖曳期間 render thread 直接畫，不逐步蓋章
             return true;
         }
@@ -211,7 +249,8 @@ public sealed class HandleDragController
             if (session.BeginTransform() is not { } begun) return false;
             _kind = TargetKind.Transform;
             _corner = corner;
-            _startRect = begun.TargetRect;
+            _transformPad = EffectPad(begun.Target);
+            _startRect = Inflated(begun.TargetRect, _transformPad);
             begun.BeginGesturePreview();
             return true;
         }
@@ -263,8 +302,9 @@ public sealed class HandleDragController
                 // Shift＝回到內容最原始的比例（ResetSize 是這輪／續接前的原始尺寸）
                 var originalAspect = transform.ResetSize.Height > 0
                     ? transform.ResetSize.Width / transform.ResetSize.Height : (float?)null;
-                var target = SelectionMask.SnapToPixels(
-                    MoveTool.ResizeRect(_startRect, _corner, local, keepAspect, originalAspect));
+                // 在含外擴的框上算縮放，再扣掉外擴才是像素框
+                var target = SelectionMask.SnapToPixels(Deflated(
+                    MoveTool.ResizeRect(_startRect, _corner, local, keepAspect, originalAspect), _transformPad));
                 if (target.Width < 1 || target.Height < 1 || target == transform.TargetRect) break;
                 transform.TargetRect = target;
                 transform.Apply(preview: true);
