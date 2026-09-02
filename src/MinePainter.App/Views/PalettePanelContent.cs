@@ -45,6 +45,17 @@ public sealed class PalettePanelContent : UserControl
     private static readonly List<SKColor> Recent = LoadRecent();
     private static event Action? RecentChanged;
 
+    /// <summary>給效果選色面板等小型調色盤共用：最近使用清單（唯讀）與變更通知。</summary>
+    public static IReadOnlyList<SKColor> RecentColors => Recent;
+    public static event Action? RecentColorsChanged
+    {
+        add => RecentChanged += value;
+        remove => RecentChanged -= value;
+    }
+
+    /// <summary>色票格的 13 欄（第一欄灰階、其餘 12 個色相）。</summary>
+    public const int SwatchColumns = Columns;
+
     public PalettePanelContent()
     {
         // 子控制項（色輪／滑桿／色票鈕）自己的 class handler 先跑完才冒泡到這裡，
@@ -179,7 +190,7 @@ public sealed class PalettePanelContent : UserControl
     /// 色票：6 列 × 13 欄。第一欄灰階（黑→白），其餘 12 欄是 30° 一階的色相，
     /// 由上而下 深 → 純 → 淡（paint.net 的預設調色盤也是同一種「色相 × 深淺」排法）。
     /// </summary>
-    private static IEnumerable<SKColor> BuildSwatchColors()
+    public static IEnumerable<SKColor> BuildSwatchColors()
     {
         (float S, float V)[] rows = [(1f, 0.45f), (1f, 0.72f), (1f, 1f), (0.68f, 1f), (0.42f, 1f), (0.18f, 1f)];
         byte[] grays = [0x00, 0x33, 0x66, 0x99, 0xCC, 0xFF];
