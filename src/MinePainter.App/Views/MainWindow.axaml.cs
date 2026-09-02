@@ -131,9 +131,9 @@ public partial class MainWindow : Window
             // 開發驗證用（GUI 驗證不得注入輸入，這是看到那些畫面的正規途徑）：
             // MINEPAINTER_DEBUG_TEXTFX=1 啟動即開進階文字設定；
             // =2 另外先放一段旋轉過、含兩層外框＋陰影的文字並選取它（看得到多層外框 UI 與選取框旁的按鈕）
-            // MINEPAINTER_DEBUG_OFFSCREEN=1：整個 app（含浮窗）擺到主螢幕右側之外 ——
-            // 開發驗證用 PrintWindow 截圖時不會跳到使用者面前干擾他們
-            if (Environment.GetEnvironmentVariable("MINEPAINTER_DEBUG_OFFSCREEN") == "1" &&
+            // MINEPAINTER_DEBUG_OFFSCREEN=1：整個 app（含浮窗、啟動畫面）擺到主螢幕右側之外 ——
+            // 開發驗證用 PrintWindow 截圖時不會跳到使用者面前干擾他們；=main 只移主視窗（啟動畫面留在原位供截圖）
+            if (Environment.GetEnvironmentVariable("MINEPAINTER_DEBUG_OFFSCREEN") is "1" or "main" &&
                 Screens.Primary is { } primary)
             {
                 Position = new PixelPoint(primary.Bounds.Right + 40, primary.Bounds.Y + 40);

@@ -6,6 +6,7 @@ rem   publish.bat              self-contained single exe (~70-90MB, target PC ne
 rem   publish.bat fd           framework-dependent (~10MB, target PC needs .NET 8 Desktop Runtime)
 rem   publish.bat sc 1.2.0     also set the version (written into exe properties and zip name)
 rem
+rem ReadyToRun pre-compiles IL to native code: noticeably faster startup (less JIT).
 rem Output: dist\MinePainter-<version>-<suffix>\MinePainter.exe and a .zip next to it
 setlocal
 cd /d "%~dp0"
@@ -47,6 +48,7 @@ dotnet publish "%PROJ%" -c Release -r %RID% --self-contained %SELF% ^
     -p:PublishSingleFile=true ^
     -p:IncludeNativeLibrariesForSelfExtract=true ^
     -p:EnableCompressionInSingleFile=%COMPRESS% ^
+    -p:PublishReadyToRun=true ^
     -p:DebugType=none ^
     -p:Version=%APPVER% ^
     -p:InformationalVersion=%APPVER% ^
