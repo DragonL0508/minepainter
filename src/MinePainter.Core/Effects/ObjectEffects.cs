@@ -20,6 +20,28 @@ internal static class DistanceTransform
     }
 
     /// <summary>
+    /// 先做形態學閉運算（膨脹 r 再侵蝕 r）把小於 r 的凹縫／細洞補平，再回傳到「補平後形狀」的距離。
+    /// 外框的「平滑」用這個：邊緣的小抖動不會再讓外框跟著抖。r ≤ 0 時等同 <see cref="FromAlpha"/>。
+    /// </summary>
+    public static float[] FromAlphaClosed(EffectContext ctx, int pad, int r)
+    {
+        var dist = FromAlpha(ctx, pad);
+        if (r <= 0) return dist;
+        var w = ctx.Width + pad * 2;
+        var h = ctx.Height + pad * 2;
+        var n = w * h;
+        var big = 1e9f;
+        // 膨脹：離不透明 ≤ r 的都算形狀；接著算「到膨脹形狀之外」的距離
+        var toOutside = new float[n];
+        for (var i = 0; i < n; i++) toOutside[i] = dist[i] <= r ? big : 0f;
+        Propagate(toOutside, w, h);
+        // 侵蝕：離外側 > r 的才留下 = 閉運算結果；最後回到「到閉運算形狀」的距離
+        for (var i = 0; i < n; i++) dist[i] = toOutside[i] > r ? 0f : big;
+        Propagate(dist, w, h);
+        return dist;
+    }
+
+    /// <summary>
     /// 反向：到最近「透明像素」的距離（羽化用）。canvasEdge = 畫布外也算透明；
     /// 否則畫布外視為與邊緣像素相同（貼齊畫布邊的物件不會被羽化）。
     /// </summary>
@@ -113,6 +135,8 @@ public sealed record ObjectOutlineEffect : IEffect
 {
     public int Width { get; init; } = 5;     // 1..60（滑桿；內部上限 100）
     public int Softness { get; init; } = 0;  // 0..100
+    /// <summary>平滑半徑（px）：先把邊緣小於此尺寸的凹縫／細洞補平再描外框，內側小抖動不會帶動外框。</summary>
+    public int Smooth { get; init; } = 0;    // 0..20
     public SKColor Color { get; init; } = SKColors.Black;
 
     /// <summary>外框用漸層上色（GradientStops 沿 GradientAngle，以「內容＋外框」的外接框為準）。</summary>
@@ -138,11 +162,17 @@ public sealed record ObjectOutlineEffect : IEffect
     public string Name => "物件外框";
     public string Category => "物件";
 
-    /// <summary>漸層要看整個內容的外接框，所以得整層算；純色只需要外框寬度的來源餘裕。</summary>
-    public int SourceMargin => Gradient ? EffectContext.WholeLayer : Math.Min(Width, 100) + 2;
+    private int ClampedWidth => Math.Min(Width, 100);
+    private int ClampedSmooth => Math.Clamp(Smooth, 0, 20);
 
-    /// <summary>漸層模式下輸出會延伸到內容外多遠（快取範圍用）。</summary>
-    public int OutputMargin => Math.Min(Width, 100) + 2;
+    /// <summary>
+    /// 漸層要看整個內容的外接框，所以得整層算；純色只需要外框寬度的來源餘裕。
+    /// 平滑（閉運算）膨脹再侵蝕各 r，所以來源餘裕要再加 2r。
+    /// </summary>
+    public int SourceMargin => Gradient ? EffectContext.WholeLayer : ClampedWidth + ClampedSmooth * 2 + 2;
+
+    /// <summary>輸出會延伸到內容外多遠（快取範圍用）：補平的凹縫最遠離原內容 r。</summary>
+    public int OutputMargin => ClampedWidth + ClampedSmooth + 2;
 
     private static readonly ParamDef[] Params =
     [
@@ -150,6 +180,8 @@ public sealed record ObjectOutlineEffect : IEffect
             (o, v) => ((ObjectOutlineEffect)o) with { Width = (int)v }),
         new SliderParam("softness", "柔邊", 0, 100, o => ((ObjectOutlineEffect)o).Softness,
             (o, v) => ((ObjectOutlineEffect)o) with { Softness = (int)v }),
+        new SliderParam("smooth", "平滑", 0, 20, o => ((ObjectOutlineEffect)o).Smooth,
+            (o, v) => ((ObjectOutlineEffect)o) with { Smooth = (int)v }),
         new ColorParam("color", "顏色", o => ((ObjectOutlineEffect)o).Color,
             (o, v) => ((ObjectOutlineEffect)o) with { Color = v }) { UsePrimaryByDefault = true },
         new BoolParam("gradient", "漸層外框", o => ((ObjectOutlineEffect)o).Gradient,
@@ -164,9 +196,10 @@ public sealed record ObjectOutlineEffect : IEffect
 
     public void Render(EffectContext ctx)
     {
-        var width = Math.Min(Width, 100);
-        var pad = width + 2;
-        var dist = DistanceTransform.FromAlpha(ctx, pad);
+        var width = ClampedWidth;
+        var smooth = ClampedSmooth;
+        var pad = width + smooth * 2 + 2;
+        var dist = DistanceTransform.FromAlphaClosed(ctx, pad, smooth);
         var dw = ctx.Width + pad * 2;
         var soft = Math.Max(0.5f, width * Softness / 100f);
         var color = Color;

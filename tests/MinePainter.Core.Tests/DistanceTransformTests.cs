@@ -53,4 +53,32 @@ public class DistanceTransformTests
         // (12,12) 距離 8√2 ≈ 11.3 → 在外框外
         Assert.Equal(0, A(ctx.Dst[12 * w + 12]));
     }
+
+    [Fact]
+    public void Outline_Smooth_BridgesSmallGap_WithoutTouchingFarPixels()
+    {
+        // 兩塊 10×10 方形中間留 3px 縫：平滑 0 時外框寬 1 不會碰到縫中央；平滑 2 會把縫補平、外框跨過去
+        const int w = 40, h = 30;
+        var src = new uint[w * h];
+        for (var y = 10; y < 20; y++)
+        for (var x = 10; x < 30; x++)
+            if (x < 20 || x >= 23) src[y * w + x] = FromColor(SKColors.Black, 255);
+
+        var plain = new ObjectOutlineEffect { Width = 1, Color = SKColors.Red };
+        var ctxPlain = EffectContext.FromPixels(src, w, h, plain.SourceMargin);
+        plain.Render(ctxPlain);
+        Assert.Equal(0, A(ctxPlain.Dst[15 * w + 21]));
+
+        var smooth = plain with { Smooth = 2 };
+        var ctxSmooth = EffectContext.FromPixels(src, w, h, smooth.SourceMargin);
+        smooth.Render(ctxSmooth);
+        Assert.Equal(255, A(ctxSmooth.Dst[15 * w + 21]));
+        Assert.Equal(SKColors.Red.Red, R(ctxSmooth.Dst[15 * w + 21]));
+
+        // 離內容遠的像素不受影響；一般邊緣的外框覆蓋也不變
+        Assert.Equal(0, A(ctxSmooth.Dst[5 * w + 5]));
+        Assert.Equal(A(ctxPlain.Dst[15 * w + 9]), A(ctxSmooth.Dst[15 * w + 9]));
+        // 原本的不透明像素保持原色（閉運算只會補、不會削）
+        Assert.Equal(src[10 * w + 10], ctxSmooth.Dst[10 * w + 10]);
+    }
 }
