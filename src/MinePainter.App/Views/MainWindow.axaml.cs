@@ -1611,6 +1611,16 @@ public partial class MainWindow : Window
 
     private void OnModelFolderClicked(object? sender, RoutedEventArgs e) => OpenModelFolder();
 
+    private async void OnDownloadModelsClicked(object? sender, RoutedEventArgs e) => await ShowModelDownloadAsync();
+
+    /// <summary>開下載模型對話框；有裝好東西就重新掃資料夾。回傳現在掃得到的模型。</summary>
+    private async Task<IReadOnlyList<OnnxModelInfo>> ShowModelDownloadAsync()
+    {
+        var dialog = new ModelDownloadWindow(ModelFolder);
+        await dialog.ShowDialog(this);
+        return OnnxModels.Scan();
+    }
+
     /// <summary>圖層 → AI 去背：對話框選模型與選項，處理完直接寫進圖層（先平面化；一步 undo）。</summary>
     private async void OnRemoveBackgroundClicked(object? sender, RoutedEventArgs e)
     {
@@ -1624,9 +1634,9 @@ public partial class MainWindow : Window
         var models = OnnxModels.Scan();
         if (models.Count == 0)
         {
-            Toasts.Show("找不到去背模型：請把 .onnx（例如 rembg 的 isnet-general-use.onnx）放進模型資料夾");
-            OpenModelFolder();
-            return;
+            // 還沒有模型就直接請他下載，而不是丟一句話叫他自己去找 .onnx
+            models = await ShowModelDownloadAsync();
+            if (models.Count == 0) return;
         }
         session.SelectedElement = null; // 平面化後物件不存在，把手框不能還指著它
         var dialog = new BackgroundRemovalWindow(session, layer, models);

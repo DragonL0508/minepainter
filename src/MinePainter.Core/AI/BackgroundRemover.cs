@@ -18,7 +18,7 @@ public sealed record OnnxModelInfo(string Name, string Path)
         get
         {
             var n = Name.ToLowerInvariant();
-            if (n.Contains("u2net")) return (320, ImageNetMean, ImageNetStd, true);
+            if (n.Contains("u2net") || n.Contains("silueta")) return (320, ImageNetMean, ImageNetStd, true);
             if (n.Contains("isnet") || n.Contains("dis")) return (1024, [0.5f, 0.5f, 0.5f], [1f, 1f, 1f], false);
             if (n.Contains("modnet")) return (512, [0.5f, 0.5f, 0.5f], [0.5f, 0.5f, 0.5f], false);
             return (1024, ImageNetMean, ImageNetStd, false); // rmbg / birefnet / 其他

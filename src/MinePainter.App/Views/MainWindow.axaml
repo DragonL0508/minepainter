@@ -89,6 +89,8 @@
             <Separator />
             <MenuItem Header="AI 去背(_B)…" Click="OnRemoveBackgroundClicked" Tag="layer.removeBackground"
                       ToolTip.Tip="用 AI 模型把背景變透明（會先把本圖層的效果與文字平面化成像素）" />
+            <MenuItem Header="下載 AI 去背模型…" Click="OnDownloadModelsClicked"
+                      ToolTip.Tip="從 rembg 官方發佈下載去背模型，每個都標了品質、速度與記憶體需求" />
             <MenuItem Header="AI 去背模型資料夾…" Click="OnModelFolderClicked"
                       ToolTip.Tip="把去背模型（.onnx：u2net、isnet、RMBG、BiRefNet…）放進這個資料夾" />
             <Separator />

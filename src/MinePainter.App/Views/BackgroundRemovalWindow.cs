@@ -103,12 +103,17 @@ public sealed class BackgroundRemovalWindow : ModalDialog
         Closing += (_, _) => _cts?.Cancel();
     }
 
-    /// <summary>把「這台機器會怎麼跑這個模型」寫進狀態列。</summary>
+    /// <summary>
+    /// 把「這個模型擅長什麼」與「這台機器會怎麼跑它」寫進狀態列。
+    /// 前者讓不熟模型的人選得下去，後者讓他不會按下去才發現記憶體不夠。
+    /// </summary>
     private void UpdatePlanHint()
     {
         if (_running || _models.Count == 0) return;
         var model = _models[Math.Clamp(_modelCombo.SelectedIndex, 0, _models.Count - 1)];
-        _status.Text = InferenceBudget.Describe(model, model.Preset.Size, _gpuCheck.IsChecked == true);
+        var about = ModelCatalog.Find(Path.GetFileName(model.Path));
+        var plan = InferenceBudget.Describe(model, model.Preset.Size, _gpuCheck.IsChecked == true);
+        _status.Text = about == null ? plan : $"{about.Strength}。{plan}";
     }
 
     /// <summary>「確定」= 開始跑；跑完自己關窗。回傳 false 讓對話框留著。</summary>
