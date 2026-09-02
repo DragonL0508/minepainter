@@ -33,13 +33,15 @@ release.bat 1.2.0
 下載頁是 `docs/index.html`（GitHub Pages），用 GitHub API 讀「最新的 Release」把下載連結、
 版本、檔案大小填進去 —— 發新版不必改網頁。
 
-第一次要先設定一次：
+第一次要先把 Pages 打開（只做一次）：
 
-1. GitHub → Settings → Pages → Source 選 **Deploy from a branch**，分支 `main`、資料夾 `/docs`
-2. 網址會是 `https://dragonl0508.github.io/minepainter/`
+1. 直接開 <https://github.com/DragonL0508/minepainter/settings/pages>
+   （或 repo 上方 **Settings** 分頁 → 左側 **Code and automation** → **Pages**）
+2. **Build and deployment** 的 **Source** 選 `Deploy from a branch`
+3. **Branch** 選 `main`、資料夾選 `/docs` → **Save**
+4. 一兩分鐘後網址是 <https://dragonl0508.github.io/minepainter/>
 
-> Repository 目前是 private。GitHub Pages 與 Release 附件對外公開都需要 repo 是 public
-> （private repo 的 Pages 要付費方案，附件也需要登入才能下載）。要給別人下載就得先把 repo 轉成 public。
+看不到 Settings 分頁＝目前登入的帳號沒有這個 repo 的管理權限（要用 owner 帳號）。
 
 ## 結構
 
