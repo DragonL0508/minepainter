@@ -116,7 +116,7 @@ public sealed class ColorPickerPanel : StackPanel
 
     private Control BuildRecentRow()
     {
-        var row = new StackPanel { Orientation = Orientation.Horizontal };
+        var row = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Left };
         for (var i = 0; i < _recentButtons.Length; i++)
         {
             _recentButtons[i] = SwatchButton(null);
@@ -153,11 +153,23 @@ public sealed class ColorPickerPanel : StackPanel
         }
     }
 
+    /// <summary>精簡色票：兩列 × 13 欄 —— 上列灰階（黑→白）、下列純色相；跟最近使用列同寬同欄。</summary>
     private Control BuildSwatchGrid()
     {
-        var grid = new WrapPanel { Orientation = Orientation.Horizontal, Width = Cell * Views.PalettePanelContent.SwatchColumns };
-        foreach (var c in Views.PalettePanelContent.BuildSwatchColors())
-            grid.Children.Add(SwatchButton(c));
+        var grid = new WrapPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Width = Cell * Views.PalettePanelContent.SwatchColumns,
+            HorizontalAlignment = HorizontalAlignment.Left,
+        };
+        var n = Views.PalettePanelContent.SwatchColumns;
+        for (var i = 0; i < n; i++)
+        {
+            var v = (byte)Math.Round(255.0 * i / (n - 1));
+            grid.Children.Add(SwatchButton(new SKColor(v, v, v)));
+        }
+        for (var i = 0; i < n; i++)
+            grid.Children.Add(SwatchButton(SKColor.FromHsv(360f * i / n, 100f, 100f)));
         return grid;
     }
 
