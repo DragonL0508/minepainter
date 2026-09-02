@@ -32,7 +32,9 @@ public static class EffectRegistry
 {
     public sealed record Entry(string Id, string Category, string Name, Func<IEffect> Create);
 
-    public static readonly string[] Categories = ["藝術", "模糊", "扭曲", "雜訊", "物件", "相片", "演算", "風格化"];
+    // 順序照 paint.net 的效果選單（Artistic, Blurs, Color, Distort, Noise, Object, Photo, Render, Stylize）
+    public static readonly string[] Categories =
+        ["藝術", "模糊", "色彩", "扭曲", "雜訊", "物件", "相片", "演算", "風格化"];
 
     public static readonly Entry[] All =
     [
@@ -48,6 +50,8 @@ public static class EffectRegistry
         new("surfaceBlur", "模糊", "表面模糊", () => new SurfaceBlurEffect()),
         new("unfocus", "模糊", "失焦", () => new UnfocusEffect()),
         new("zoomBlur", "模糊", "縮放模糊", () => new ZoomBlurEffect()),
+
+        new("colorToAlpha", "色彩", "顏色透明化", () => new ColorToAlphaEffect()),
 
         new("bulge", "扭曲", "凸起", () => new BulgeEffect()),
         new("crystalize", "扭曲", "結晶化", () => new CrystalizeEffect()),
@@ -69,7 +73,6 @@ public static class EffectRegistry
         new("innerGlow", "物件", "物件內光暈", () => new InnerGlowEffect()),
         new("objectGradient", "物件", "物件漸層", () => new ObjectGradientEffect()),
         new("objectFeather", "物件", "羽化物件", () => new ObjectFeatherEffect()),
-        new("colorToAlpha", "物件", "顏色透明化", () => new ColorToAlphaEffect()),
 
         new("glow", "相片", "光暈", () => new GlowEffect()),
         new("redEye", "相片", "紅眼移除", () => new RedEyeRemovalEffect()),
