@@ -119,8 +119,26 @@ public class BackgroundRemovalAndFeatherTests
         var result = BackgroundRemover.SolidifyCore(soft, model, w, h, band: 6);
         Assert.Equal(255, result[32 * w + 32]); // 核心填實
         Assert.Equal(0, result[32 * w + 1]);    // 遠處外部清空
-        Assert.Equal(170, result[32 * w + 9]);  // 邊緣一圈保留 soft 值
-        Assert.Equal(30, result[32 * w + 6]);
+        Assert.InRange(result[32 * w + 9], 230, 254); // 邊緣一圈：0.67 被 S 曲線推向 1，但不是硬切
+        Assert.InRange(result[32 * w + 6], 0, 20);    // 0.12 推向 0
+        var raw = BackgroundRemover.SolidifyCore(soft, model, w, h, band: 6, edgeContrast: 0);
+        Assert.Equal(170, raw[32 * w + 9]);     // 關掉 S 曲線 = 原樣保留
+    }
+
+    [Fact]
+    public void FillSmallHoles_FillsEnclosedOnly()
+    {
+        const int w = 40, h = 40;
+        var bin = new byte[w * h];
+        for (var y = 5; y < 35; y++)
+        for (var x = 5; x < 35; x++)
+            bin[y * w + x] = 255;
+        bin[20 * w + 20] = 0; bin[20 * w + 21] = 0;          // 小洞（2px）
+        for (var y = 10; y < 15; y++) bin[y * w + 5] = 0;    // 邊界缺口（連到外部）
+        BackgroundRemover.FillSmallHoles(bin, w, h, maxArea: 10);
+        Assert.Equal(255, bin[20 * w + 20]);
+        Assert.Equal(0, bin[12 * w + 5]);
+        Assert.Equal(0, bin[0]);
     }
 
     [Fact]

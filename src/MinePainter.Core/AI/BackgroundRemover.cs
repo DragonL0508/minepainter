@@ -217,16 +217,79 @@ public static class BackgroundRemover
     /// 往內縮 band 的核心一律 255、往外擴 band 之外一律 0，只有邊界一圈保留 soft 的半透明值
     /// （髮絲、毛邊都在這一圈裡）。
     /// </summary>
-    public static byte[] SolidifyCore(byte[] soft, byte[] model, int w, int h, int band)
+    /// <param name="edgeContrast">
+    /// 邊帶內的 S 曲線強度 0..100：模型在頭髮這類區域常整片給 0.6～0.8、背景給 0.05～0.15，
+    /// 直接當 alpha 就是「大片微微透明」與外圈淡暈；把它們推向 1 / 0，只有真正的過渡像素（≈0.5）留著。
+    /// </param>
+    public static byte[] SolidifyCore(byte[] soft, byte[] model, int w, int h, int band, int edgeContrast = 60)
     {
         var bin = new byte[model.Length];
         for (var i = 0; i < bin.Length; i++) bin[i] = model[i] >= 128 ? (byte)255 : (byte)0;
+        FillSmallHoles(bin, w, h, maxArea: band * band * 16); // 身體上的小破洞（模型不確定的高光、皺褶）
         var core = Shift(bin, w, h, -band);  // 內縮：離邊界 ≥ band 的內部
         var outer = Shift(bin, w, h, band);  // 外擴：離邊界 ≥ band 的外部為 0
+
+        var lut = new byte[256];
+        for (var i = 0; i < 256; i++) lut[i] = (byte)i;
+        ApplyContrast(lut, edgeContrast);
+
         var result = new byte[soft.Length];
         for (var i = 0; i < result.Length; i++)
-            result[i] = core[i] != 0 ? (byte)255 : outer[i] == 0 ? (byte)0 : soft[i];
+            result[i] = core[i] != 0 ? (byte)255 : outer[i] == 0 ? (byte)0 : lut[soft[i]];
         return result;
+    }
+
+    /// <summary>
+    /// 把二值遮罩裡「被前景包住、面積 ≤ maxArea」的背景區填成前景。
+    /// 從影像邊界對背景 flood fill，碰不到的背景就是洞。
+    /// </summary>
+    public static void FillSmallHoles(byte[] bin, int w, int h, int maxArea)
+    {
+        var label = new int[w * h]; // 0 = 未訪；1 = 外部背景；2.. = 洞編號
+        var stack = new Stack<int>();
+        void Flood(int start, int id, out int area)
+        {
+            area = 0;
+            stack.Push(start);
+            label[start] = id;
+            while (stack.Count > 0)
+            {
+                var i = stack.Pop();
+                area++;
+                var x = i % w; var y = i / w;
+                if (x > 0 && bin[i - 1] == 0 && label[i - 1] == 0) { label[i - 1] = id; stack.Push(i - 1); }
+                if (x < w - 1 && bin[i + 1] == 0 && label[i + 1] == 0) { label[i + 1] = id; stack.Push(i + 1); }
+                if (y > 0 && bin[i - w] == 0 && label[i - w] == 0) { label[i - w] = id; stack.Push(i - w); }
+                if (y < h - 1 && bin[i + w] == 0 && label[i + w] == 0) { label[i + w] = id; stack.Push(i + w); }
+            }
+        }
+        // 外部：所有邊界上的背景像素
+        for (var x = 0; x < w; x++)
+        {
+            if (bin[x] == 0 && label[x] == 0) Flood(x, 1, out _);
+            var b = (h - 1) * w + x;
+            if (bin[b] == 0 && label[b] == 0) Flood(b, 1, out _);
+        }
+        for (var y = 0; y < h; y++)
+        {
+            var l = y * w; var r = y * w + w - 1;
+            if (bin[l] == 0 && label[l] == 0) Flood(l, 1, out _);
+            if (bin[r] == 0 && label[r] == 0) Flood(r, 1, out _);
+        }
+        // 其餘背景 = 洞
+        var next = 2;
+        var fill = new List<int>();
+        for (var i = 0; i < bin.Length; i++)
+        {
+            if (bin[i] != 0 || label[i] != 0) continue;
+            var id = next++;
+            Flood(i, id, out var area);
+            if (area <= maxArea) fill.Add(id);
+        }
+        if (fill.Count == 0) return;
+        var set = new HashSet<int>(fill);
+        for (var i = 0; i < bin.Length; i++)
+            if (bin[i] == 0 && set.Contains(label[i])) bin[i] = 255;
     }
 
     /// <summary>以方框 min/max 濾波收縮（負）或擴張（正）遮罩；回傳新陣列。</summary>
