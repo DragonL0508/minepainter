@@ -1,0 +1,238 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:views="using:MinePainter.App.Views"
+        xmlns:controls="using:MinePainter.App.Controls"
+        xmlns:app="using:MinePainter.App"
+        xmlns:mi="using:Material.Icons.Avalonia"
+        x:Class="MinePainter.App.Views.MainWindow"
+        Title="MinePainter"
+        Icon="avares://MinePainter.App/Assets/icon.ico"
+        Width="1360" Height="860"
+        WindowStartupLocation="CenterScreen">
+
+  <DockPanel>
+    <!-- 選單列 + 右上角面板開關 -->
+    <Border DockPanel.Dock="Top" Background="{x:Static app:AppTheme.ChromeBrush}">
+      <DockPanel>
+        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="2" Margin="0,2,8,2">
+          <ToggleButton x:Name="ToolsToggle" IsChecked="True" Padding="5,3" ToolTip.Tip="工具">
+            <mi:MaterialIcon Kind="Toolbox" Width="16" Height="16" />
+          </ToggleButton>
+          <ToggleButton x:Name="HistoryToggle" IsChecked="True" Padding="5,3" ToolTip.Tip="歷史記錄">
+            <mi:MaterialIcon Kind="History" Width="16" Height="16" />
+          </ToggleButton>
+          <ToggleButton x:Name="LayersToggle" IsChecked="True" Padding="5,3" ToolTip.Tip="圖層">
+            <mi:MaterialIcon Kind="Layers" Width="16" Height="16" />
+          </ToggleButton>
+          <ToggleButton x:Name="PaletteToggle" IsChecked="True" Padding="5,3" ToolTip.Tip="調色盤">
+            <mi:MaterialIcon Kind="Palette" Width="16" Height="16" />
+          </ToggleButton>
+        </StackPanel>
+
+        <controls:ClickSubmenuMenu x:Name="MainMenu" DockPanel.Dock="Left">
+          <MenuItem Header="檔案(_F)">
+            <MenuItem Header="新增(_N)" Click="OnNewClicked" Tag="file.new" />
+            <MenuItem Header="開啟(_O)…" Click="OnOpenClicked" Tag="file.open" />
+            <Separator />
+            <MenuItem Header="儲存(_S)" Click="OnSaveClicked" Tag="file.save" />
+            <MenuItem Header="另存新檔(_A)…" Click="OnSaveAsClicked" Tag="file.saveAs" />
+            <MenuItem Header="匯出影像(_E)…" Click="OnExportClicked" Tag="file.export" />
+            <Separator />
+            <MenuItem Header="關閉分頁(_W)" Click="OnCloseTabClicked" Tag="file.closeTab" />
+            <Separator />
+            <MenuItem Header="結束(_X)" Click="OnExitClicked" />
+          </MenuItem>
+          <MenuItem Header="編輯(_E)">
+            <MenuItem x:Name="UndoMenuItem" Header="復原(_U)" Click="OnUndoClicked" Tag="edit.undo" />
+            <MenuItem x:Name="RedoMenuItem" Header="重做(_R)" Click="OnRedoClicked" Tag="edit.redo" />
+            <Separator />
+            <MenuItem Header="剪下(_T)" Click="OnCutClicked" Tag="edit.cut" />
+            <MenuItem Header="複製(_C)" Click="OnCopyClicked" Tag="edit.copy" />
+            <MenuItem Header="貼上(_P)" Click="OnPasteClicked" Tag="edit.paste" />
+            <Separator />
+            <MenuItem Header="全選(_A)" Click="OnSelectAllClicked" Tag="edit.selectAll" />
+            <MenuItem Header="取消選取(_D)" Click="OnDeselectClicked" Tag="edit.deselect" />
+            <MenuItem Header="反轉選取(_I)" Click="OnInvertSelectionClicked" Tag="edit.invertSelection" />
+            <Separator />
+            <MenuItem Header="清除選取範圍(_E)" Click="OnEraseSelectionClicked" Tag="edit.erase" />
+            <MenuItem Header="填滿選取範圍(_F)" Click="OnFillSelectionClicked" Tag="edit.fill" />
+          </MenuItem>
+
+          <MenuItem Header="影像(_I)">
+            <MenuItem Header="裁切至選取範圍(_C)" Click="OnCropToSelectionClicked" Tag="image.crop" />
+            <MenuItem Header="調整影像大小(_R)…" Click="OnResizeImageClicked" Tag="image.resize" />
+            <MenuItem Header="調整畫布大小(_S)…" Click="OnCanvasSizeClicked" Tag="image.canvasSize" />
+            <Separator />
+            <MenuItem Header="水平翻轉(_H)" Click="OnFlipHorizontalClicked" />
+            <MenuItem Header="垂直翻轉(_V)" Click="OnFlipVerticalClicked" />
+            <Separator />
+            <MenuItem Header="順時針旋轉 90°" Click="OnRotateCwClicked" Tag="image.rotateCw" />
+            <MenuItem Header="逆時針旋轉 90°" Click="OnRotateCcwClicked" Tag="image.rotateCcw" />
+            <MenuItem Header="旋轉 180°" Click="OnRotate180Clicked" Tag="image.rotate180" />
+            <Separator />
+            <MenuItem Header="平面化(_F)" Click="OnFlattenClicked" Tag="image.flatten" />
+          </MenuItem>
+
+          <MenuItem Header="圖層(_L)">
+            <MenuItem Header="新增圖層(_N)" Click="OnAddLayerClicked" Tag="layer.add" />
+            <MenuItem Header="複製圖層(_D)" Click="OnDuplicateLayerClicked" Tag="layer.duplicate" />
+            <MenuItem Header="刪除圖層" Click="OnDeleteLayerClicked" />
+            <MenuItem Header="從檔案匯入圖層(_I)…" Click="OnImportLayerClicked" Tag="layer.import" />
+            <Separator />
+            <MenuItem Header="水平翻轉圖層" Click="OnFlipLayerHorizontalClicked" Tag="layer.flipH" />
+            <MenuItem Header="垂直翻轉圖層" Click="OnFlipLayerVerticalClicked" Tag="layer.flipV" />
+            <Separator />
+            <MenuItem Header="向下合併(_M)" Click="OnMergeLayerDownClicked" Tag="layer.mergeDown" />
+            <Separator />
+            <MenuItem Header="圖層文字平面化(_R)" Click="OnFlattenTextClicked" Tag="layer.flattenText"
+                      ToolTip.Tip="把本圖層的文字物件烙成像素（之後不能再編輯文字內容）" />
+            <Separator />
+            <MenuItem Header="圖層屬性(_P)…" Click="OnLayerPropertiesClicked" Tag="layer.properties" />
+          </MenuItem>
+
+          <MenuItem x:Name="AdjustmentsMenu" Header="調整(_A)" />
+          <MenuItem x:Name="EffectsMenu" Header="效果(_C)" />
+
+          <MenuItem Header="檢視(_V)">
+            <MenuItem Header="放大" Click="OnZoomInClicked" Tag="view.zoomIn" />
+            <MenuItem Header="縮小" Click="OnZoomOutClicked" Tag="view.zoomOut" />
+            <MenuItem Header="實際大小" Click="OnActualSizeClicked" Tag="view.actualSize" />
+            <MenuItem Header="最適大小" Click="OnBestFitClicked" Tag="view.bestFit" />
+            <Separator />
+            <MenuItem x:Name="PixelGridMenuItem" Header="像素格線" Click="OnTogglePixelGridClicked"
+                      ToggleType="CheckBox" />
+          </MenuItem>
+
+          <MenuItem Header="設定(_S)">
+            <MenuItem Header="快捷鍵(_K)…" Click="OnShortcutsClicked" />
+            <MenuItem Header="主題(_T)…" Click="OnThemeClicked" />
+          </MenuItem>
+        </controls:ClickSubmenuMenu>
+      </DockPanel>
+    </Border>
+
+    <!-- 文件分頁條：獨立一行（含縮圖預覽；「＋」= 新增）。
+         高度固定 = 分頁鈕高度（38 縮圖框 + 4×2 padding），零分頁時才不會整條塌掉讓畫面跳一下 -->
+    <Border DockPanel.Dock="Top" Background="{x:Static app:AppTheme.ChromeBrush}"
+            BorderBrush="{x:Static app:AppTheme.BorderBrush}" BorderThickness="0,1,0,0" Padding="8,4">
+      <ScrollViewer Height="46" HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Disabled">
+        <StackPanel x:Name="TabStrip" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center" />
+      </ScrollViewer>
+    </Border>
+
+    <!-- 工具選項列（單行；依工具顯示不同群組，高度固定不位移） -->
+    <Border DockPanel.Dock="Top" Background="{x:Static app:AppTheme.PanelBrush}" Padding="8,4" Height="40"
+            BorderBrush="{x:Static app:AppTheme.BorderBrush}" BorderThickness="0,1">
+      <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+        <TextBlock x:Name="ActiveToolLabel" Text="筆刷" FontSize="12" FontWeight="Bold"
+                   VerticalAlignment="Center" MinWidth="52" />
+        <Separator Width="1" Height="24" Background="{x:Static app:AppTheme.SeparatorBrush}" />
+
+        <StackPanel x:Name="SizeGroup" Orientation="Horizontal" Spacing="5" VerticalAlignment="Center">
+          <TextBlock Text="大小：" FontSize="12" VerticalAlignment="Center" />
+          <controls:NumberBox x:Name="SizeBox" Minimum="1" Maximum="500" Step="1" Width="46" />
+        </StackPanel>
+
+        <StackPanel x:Name="HardnessGroup" Orientation="Horizontal" Spacing="5" VerticalAlignment="Center">
+          <TextBlock Text="硬度：" FontSize="12" VerticalAlignment="Center" />
+          <controls:BarSlider x:Name="HardnessBar" Minimum="0" Maximum="100" Value="80" Width="120" Suffix="%" />
+        </StackPanel>
+
+        <StackPanel x:Name="OpacityGroup" Orientation="Horizontal" Spacing="5" VerticalAlignment="Center">
+          <TextBlock Text="不透明度：" FontSize="12" VerticalAlignment="Center" />
+          <controls:BarSlider x:Name="OpacityBar" Minimum="1" Maximum="100" Value="100" Width="120" Suffix="%" />
+        </StackPanel>
+
+        <StackPanel x:Name="ToleranceGroup" Orientation="Horizontal" Spacing="5" VerticalAlignment="Center">
+          <TextBlock Text="容許度：" FontSize="12" VerticalAlignment="Center" />
+          <controls:BarSlider x:Name="ToleranceBar" Minimum="0" Maximum="255" Value="32" Width="120" />
+        </StackPanel>
+
+        <StackPanel x:Name="TextGroup" Orientation="Horizontal" Spacing="5" VerticalAlignment="Center" IsVisible="False">
+          <TextBlock Text="字型：" FontSize="12" VerticalAlignment="Center" />
+          <ComboBox x:Name="FontFamilyCombo" Width="170" FontSize="12" MaxDropDownHeight="420" />
+          <ComboBox x:Name="FontStyleCombo" Width="104" FontSize="12" MaxDropDownHeight="300"
+                    ToolTip.Tip="字重／變種（如 Light、Black）" />
+          <TextBlock Text="字級：" FontSize="12" VerticalAlignment="Center" />
+          <controls:NumberBox x:Name="FontSizeBox" Minimum="8" Maximum="288" Step="2" Width="46" />
+
+          <StackPanel Orientation="Horizontal" Spacing="1" Margin="4,0,0,0">
+            <ToggleButton x:Name="BoldToggle" Width="28" Height="24" Padding="0"
+                          HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                          ToolTip.Tip="粗體">
+              <mi:MaterialIcon Kind="FormatBold" Width="16" Height="16" />
+            </ToggleButton>
+            <ToggleButton x:Name="ItalicToggle" Width="28" Height="24" Padding="0"
+                          HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                          ToolTip.Tip="斜體">
+              <mi:MaterialIcon Kind="FormatItalic" Width="16" Height="16" />
+            </ToggleButton>
+            <ToggleButton x:Name="UnderlineToggle" Width="28" Height="24" Padding="0"
+                          HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                          ToolTip.Tip="底線">
+              <mi:MaterialIcon Kind="FormatUnderline" Width="16" Height="16" />
+            </ToggleButton>
+            <ToggleButton x:Name="StrikeToggle" Width="28" Height="24" Padding="0"
+                          HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                          ToolTip.Tip="刪除線">
+              <mi:MaterialIcon Kind="FormatStrikethrough" Width="16" Height="16" />
+            </ToggleButton>
+          </StackPanel>
+
+          <StackPanel Orientation="Horizontal" Spacing="1" Margin="4,0,0,0">
+            <ToggleButton x:Name="AlignLeftToggle" Width="28" Height="24" Padding="0" IsChecked="True"
+                          HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                          ToolTip.Tip="靠左對齊">
+              <mi:MaterialIcon Kind="FormatAlignLeft" Width="16" Height="16" />
+            </ToggleButton>
+            <ToggleButton x:Name="AlignCenterToggle" Width="28" Height="24" Padding="0"
+                          HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                          ToolTip.Tip="置中對齊">
+              <mi:MaterialIcon Kind="FormatAlignCenter" Width="16" Height="16" />
+            </ToggleButton>
+            <ToggleButton x:Name="AlignRightToggle" Width="28" Height="24" Padding="0"
+                          HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                          ToolTip.Tip="靠右對齊">
+              <mi:MaterialIcon Kind="FormatAlignRight" Width="16" Height="16" />
+            </ToggleButton>
+          </StackPanel>
+        </StackPanel>
+
+        <StackPanel x:Name="ShapeGroup" Orientation="Horizontal" Spacing="5" VerticalAlignment="Center" IsVisible="False">
+          <TextBlock Text="形狀：" FontSize="12" VerticalAlignment="Center" />
+          <ComboBox x:Name="ShapeKindCombo" Width="90" FontSize="12" />
+          <CheckBox x:Name="ShapeFilledCheck" Content="填滿" IsChecked="True" FontSize="12" />
+        </StackPanel>
+
+        <Separator Width="1" Height="24" Background="{x:Static app:AppTheme.SeparatorBrush}" />
+        <Border x:Name="CurrentColorSwatch" Width="26" Height="26" CornerRadius="3"
+                BorderBrush="{x:Static app:AppTheme.SeparatorBrush}" BorderThickness="1" Background="Black"
+                ToolTip.Tip="目前前景色（調色盤面板可改）" />
+      </StackPanel>
+    </Border>
+
+    <!-- 狀態列 -->
+    <Border DockPanel.Dock="Bottom" Background="{x:Static app:AppTheme.ChromeBrush}" Padding="10,3"
+            BorderBrush="{x:Static app:AppTheme.BorderBrush}" BorderThickness="0,1,0,0">
+      <DockPanel>
+        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="10">
+          <TextBlock x:Name="PerfLabel" Text="" FontSize="11" Foreground="{x:Static app:AppTheme.TextMutedBrush}" VerticalAlignment="Center" />
+          <TextBlock x:Name="DocSizeLabel" Text="" FontSize="11" Foreground="{x:Static app:AppTheme.TextMutedBrush}" VerticalAlignment="Center" />
+          <controls:BarSlider x:Name="ZoomBar" Minimum="2" Maximum="800" Value="100" Width="160" Label="縮放" Suffix="%" Height="20" />
+        </StackPanel>
+        <TextBlock x:Name="CursorPosLabel" Text="" FontSize="11" Foreground="{x:Static app:AppTheme.TextMutedBrush}" VerticalAlignment="Center" />
+      </DockPanel>
+    </Border>
+
+    <Grid ClipToBounds="True">
+      <!-- 分頁切換動畫動的是這個 host（滑入方向依分頁相對位置）；toast 不跟著滑 -->
+      <Grid x:Name="CanvasHost">
+        <views:CanvasView x:Name="Canvas" Focusable="True" />
+        <!-- 畫布內文字編輯的宿主（透明、不擋點擊；編輯框本身可互動） -->
+        <Canvas x:Name="EditHost" Background="{x:Null}" />
+      </Grid>
+      <!-- 右下角提示訊息 -->
+      <controls:ToastHost x:Name="Toasts" />
+    </Grid>
+  </DockPanel>
+</Window>

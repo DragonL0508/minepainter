@@ -1,0 +1,24 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:app="using:MinePainter.App"
+             x:Class="MinePainter.App.Views.LayersPanel">
+
+  <DockPanel>
+    <!-- 操作列（icon-only，樣式比照工具面板；內容由 code-behind 建立以便用 MaterialIcon） -->
+    <Border DockPanel.Dock="Bottom" Margin="0,6,0,0" Padding="3"
+            Background="{x:Static app:AppTheme.ChromeBrush}" CornerRadius="4">
+      <StackPanel x:Name="ActionBar" Orientation="Horizontal" Spacing="2" HorizontalAlignment="Center" />
+    </Border>
+
+    <!-- 填滿面板剩餘高度（面板視窗可拉大小），內部捲動；圖層數量不影響視窗尺寸。
+         Overlay 畫拖曳排序的插入線（座標系與 ListBox 相同）。 -->
+    <Panel>
+      <ListBox x:Name="LayerList" SelectionChanged="OnSelectionChanged" Background="{x:Static app:AppTheme.InnerBrush}"
+               MinHeight="80" ScrollViewer.VerticalScrollBarVisibility="Auto"
+               ScrollViewer.HorizontalScrollBarVisibility="Disabled" />
+      <Canvas x:Name="DragOverlay" IsHitTestVisible="False">
+        <Border x:Name="DropIndicator" Height="3" Background="{x:Static app:AppTheme.AccentBrush}" CornerRadius="1.5" IsVisible="False" />
+      </Canvas>
+    </Panel>
+  </DockPanel>
+</UserControl>

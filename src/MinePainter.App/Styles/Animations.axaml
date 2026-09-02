@@ -1,0 +1,141 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+  <!--
+    全域微動畫：所有互動元件的狀態切換都帶平滑過渡。
+    時間刻意壓在 90–160ms —— 夠滑順但不拖慢操作節奏。
+  -->
+
+  <Style Selector="Button">
+    <Setter Property="Transitions">
+      <Transitions>
+        <BrushTransition Property="Background" Duration="0:0:0.14" Easing="CubicEaseOut" />
+        <BrushTransition Property="BorderBrush" Duration="0:0:0.14" Easing="CubicEaseOut" />
+        <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.11" Easing="CubicEaseOut" />
+      </Transitions>
+    </Setter>
+    <Setter Property="RenderTransform" Value="scale(1)" />
+  </Style>
+  <Style Selector="Button:pressed">
+    <Setter Property="RenderTransform" Value="scale(0.95)" />
+  </Style>
+
+  <Style Selector="ToggleButton">
+    <Setter Property="Transitions">
+      <Transitions>
+        <BrushTransition Property="Background" Duration="0:0:0.14" Easing="CubicEaseOut" />
+        <BrushTransition Property="BorderBrush" Duration="0:0:0.14" Easing="CubicEaseOut" />
+        <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.11" Easing="CubicEaseOut" />
+      </Transitions>
+    </Setter>
+    <Setter Property="RenderTransform" Value="scale(1)" />
+  </Style>
+  <Style Selector="ToggleButton:pressed">
+    <Setter Property="RenderTransform" Value="scale(0.94)" />
+  </Style>
+
+  <!-- 工具面板的圖示按鈕：選中時輕微放大，強化「目前工具」的存在感 -->
+  <Style Selector="ToggleButton:checked /template/ ContentPresenter">
+    <Setter Property="Transitions">
+      <Transitions>
+        <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.16" Easing="BackEaseOut" />
+      </Transitions>
+    </Setter>
+    <Setter Property="RenderTransform" Value="scale(1.12)" />
+  </Style>
+
+  <Style Selector="ListBoxItem">
+    <Setter Property="Transitions">
+      <Transitions>
+        <BrushTransition Property="Background" Duration="0:0:0.13" Easing="CubicEaseOut" />
+      </Transitions>
+    </Setter>
+  </Style>
+
+  <Style Selector="MenuItem">
+    <Setter Property="Transitions">
+      <Transitions>
+        <BrushTransition Property="Background" Duration="0:0:0.11" Easing="CubicEaseOut" />
+      </Transitions>
+    </Setter>
+  </Style>
+
+  <Style Selector="TextBox">
+    <Setter Property="Transitions">
+      <Transitions>
+        <BrushTransition Property="BorderBrush" Duration="0:0:0.15" Easing="CubicEaseOut" />
+        <BrushTransition Property="Background" Duration="0:0:0.15" Easing="CubicEaseOut" />
+      </Transitions>
+    </Setter>
+  </Style>
+
+  <Style Selector="ComboBox">
+    <Setter Property="Transitions">
+      <Transitions>
+        <BrushTransition Property="Background" Duration="0:0:0.14" Easing="CubicEaseOut" />
+        <BrushTransition Property="BorderBrush" Duration="0:0:0.14" Easing="CubicEaseOut" />
+      </Transitions>
+    </Setter>
+  </Style>
+
+  <Style Selector="CheckBox">
+    <Setter Property="Transitions">
+      <Transitions>
+        <BrushTransition Property="Background" Duration="0:0:0.13" Easing="CubicEaseOut" />
+      </Transitions>
+    </Setter>
+  </Style>
+
+  <!--
+    下拉／選單彈出動畫：淡入 + 從上方滑下、微放大（原點在頂端中央）。
+    ComboBox 用 :dropdownopen、MenuItem 用 :open 偽類觸發 —— 偽類每次切換都會重新套用樣式，
+    keyframe 因此每次打開都播。Flyout 沒有偽類，走 Controls/PopupAnimator。
+    注意：keyframe 不能直接動 RenderTransform（沒有對應的 animator，啟動就炸），
+    要用 TranslateTransform.Y／ScaleTransform.ScaleY 這種「變換屬性」寫法（TransformAnimator 會自動掛 TransformGroup）。
+  -->
+  <!--
+    ComboBox 只做淡入：下拉清單是虛擬化的，PopupBorder 上任何動畫化的 RenderTransform
+    都會讓它第一次打開時算不出可視範圍（只渲染第一項、要捲動才出現），所以不能位移／縮放。
+  -->
+  <Style Selector="ComboBox:dropdownopen /template/ Border#PopupBorder">
+    <Style.Animations>
+      <Animation Duration="0:0:0.16" Easing="CubicEaseOut" FillMode="Forward">
+        <KeyFrame Cue="0%">
+          <Setter Property="Opacity" Value="0" />
+        </KeyFrame>
+        <KeyFrame Cue="100%">
+          <Setter Property="Opacity" Value="1" />
+        </KeyFrame>
+      </Animation>
+    </Style.Animations>
+  </Style>
+
+  <Style Selector="MenuItem /template/ Popup#PART_Popup > Border">
+    <Setter Property="RenderTransformOrigin" Value="50%,0%" />
+  </Style>
+  <Style Selector="MenuItem:open /template/ Popup#PART_Popup > Border">
+    <Style.Animations>
+      <Animation Duration="0:0:0.14" Easing="CubicEaseOut" FillMode="Forward">
+        <KeyFrame Cue="0%">
+          <Setter Property="Opacity" Value="0" />
+          <Setter Property="TranslateTransform.Y" Value="-6" />
+          <Setter Property="ScaleTransform.ScaleY" Value="0.97" />
+        </KeyFrame>
+        <KeyFrame Cue="100%">
+          <Setter Property="Opacity" Value="1" />
+          <Setter Property="TranslateTransform.Y" Value="0" />
+          <Setter Property="ScaleTransform.ScaleY" Value="1" />
+        </KeyFrame>
+      </Animation>
+    </Style.Animations>
+  </Style>
+
+  <!-- 浮動面板內容淡入 -->
+  <Style Selector="Border.panel-body">
+    <Setter Property="Transitions">
+      <Transitions>
+        <DoubleTransition Property="Opacity" Duration="0:0:0.18" Easing="CubicEaseOut" />
+      </Transitions>
+    </Setter>
+  </Style>
+</Styles>

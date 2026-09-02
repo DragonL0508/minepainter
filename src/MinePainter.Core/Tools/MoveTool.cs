@@ -1,0 +1,577 @@
+using MinePainter.Core.History;
+using MinePainter.Core.Layers;
+using MinePainter.Core.Selections;
+using MinePainter.Core.Vectors;
+using SkiaSharp;
+
+namespace MinePainter.Core.Tools;
+
+/// <summary>
+/// 移動工具（paint.net 式，一律作用於「作用中圖層」）：
+/// 　1. 有選取範圍 → 提起該範圍的像素成為浮動內容，可移動、拖四角縮放（Shift 等比）。
+/// 　　 只要選取範圍還在，任何拖曳都是在動「選取的東西」，游標在不在框內都一樣
+/// 　　 （paint.net 的「移動選取的像素」／Pinta MoveSelectedTool 也是不做命中測試）；
+/// 　　 要移動圖層或物件得先取消選取（在範圍外點一下）。
+/// 　2. 點中本圖層的文字物件 → 移動／縮放該物件
+/// 　3. 其他 → 平移整個圖層；此時把手框顯示在「圖層實際內容」上（可超出畫布），
+/// 　　 拖角＝提起整個內容縮放 —— 這是把畫布外像素整批抓回來的入口（GIMP 縮放圖層的對應）。
+/// 　4. 作用中是群組 → 平移整個群組：所有子孫點陣圖層的像素（Offset）與文字物件一起動，
+/// 　　 整趟一步 undo。整層平移時本層的文字物件也跟著走（像素與文字不拆散）。
+/// </summary>
+public sealed class MoveTool : ITool
+{
+    public string Name => "移動";
+
+    /// <summary>算不算「拖曳」的門檻（螢幕像素）；沒超過就當成點一下。</summary>
+    private const double DragThreshold = 2;
+
+    private enum Mode
+    {
+        None,
+        Layer,
+        /// <summary>在選取範圍外按下：先不提起，等真的拖曳了才提。</summary>
+        PendingLift,
+        FloatingMove,
+        Handles,
+        /// <summary>拖曳整個變形框（session 進行中）。</summary>
+        TransformMove,
+    }
+
+    private readonly ElementDragHelper _elementDrag = new();
+    private readonly HandleDragController _handles = new();
+    private Mode _mode;
+
+    // 圖層／群組平移（群組 = 底下所有點陣圖層一起動，像素與文字物件都跟著走）
+    private RasterLayer? _layer; // 單一圖層時非 null（可走覆疊快路徑）
+    private readonly List<RasterLayer> _moveLayers = new();
+    private readonly List<SKPointI> _startOffsets = new();
+    private readonly List<VectorElement[]> _startElements = new();
+    private SKPointI _lastMoveDelta;
+    private bool _movingGroup;
+    private bool _layerDetachTried;
+
+    // 浮動內容
+    private SKPoint _dragStart;
+    private SKRect _startRect;
+
+    // 「點空白處取消選取」的判定
+    private SKPoint _pressPoint;
+    private bool _pressedOutsideSelection;
+
+    /// <summary>目前檢視縮放（UI 設定）；用來把「算不算拖曳」的門檻換算成螢幕距離。</summary>
+    public double ViewScale { get; set; } = 1.0;
+
+    /// <summary>把手命中容差（doc 像素）；UI 依縮放調整。</summary>
+    public float HandleTolerance { get; set; } = 10f;
+
+    public void OnPointerDown(ToolPointerEvent e, EditorSession session)
+    {
+        var doc = session.Document;
+
+        // 1) 選取框把手（選取範圍／浮動內容／文字物件共用同一套）
+        if (_handles.TryBegin(session, e.DocPosition, HandleTolerance))
+        {
+            _mode = Mode.Handles;
+            return;
+        }
+
+        _pressPoint = e.DocPosition;
+        _pressedOutsideSelection = false;
+
+        // 1.5) 變形 session 進行中：拖曳＝移動整個變形框；框外點一下（沒拖）＝落地
+        if (session.Transform is { } transform)
+        {
+            _mode = Mode.TransformMove;
+            _dragStart = e.DocPosition;
+            _startRect = transform.TargetRect;
+            _layerDetachTried = false; // 單層 session 的平移可走拖曳覆疊快路徑
+            _pressedOutsideSelection = !TransformContains(transform, e.DocPosition);
+            return;
+        }
+
+        // 2) 已浮動 → 移動它。從浮動內容外面按下也一樣：拖曳仍然是在動浮動內容，
+        //    只有「沒拖曳就放開」才當成點空白處（落地並取消選取，見 OnPointerUp）。
+        if (session.Floating is { } floating)
+        {
+            _mode = Mode.FloatingMove;
+            _dragStart = e.DocPosition;
+            _startRect = floating.TargetRect;
+            _pressedOutsideSelection = !floating.TargetRect.Contains(e.DocPosition.X, e.DocPosition.Y);
+            return;
+        }
+
+        // 3) 有選取範圍 → 這一下一定是在動選取的內容，不會碰到圖層或物件。
+        //    範圍內按下就提起；範圍外先不提起（否則單純「點一下取消選取」也會白挖一次像素），
+        //    等真的拖曳過門檻才提，見 OnPointerMove。
+        if (session.Selection is { IsEmpty: false } selection)
+        {
+            _dragStart = e.DocPosition;
+            if (selection.CoverageAt((int)e.DocPosition.X, (int)e.DocPosition.Y) > 0)
+            {
+                var lifted = session.LiftSelection();
+                if (lifted != null)
+                {
+                    _mode = Mode.FloatingMove;
+                    _startRect = lifted.TargetRect;
+                    return;
+                }
+            }
+            else
+            {
+                // 點在選取範圍外：若接下來沒有拖曳，放開時就取消選取
+                _pressedOutsideSelection = true;
+            }
+
+            _mode = Mode.PendingLift;
+            return;
+        }
+
+        // 3) 本圖層的物件（把手/內部）
+        if (_elementDrag.TryBegin(session, e.DocPosition, HandleTolerance, allowInsideMove: true))
+            return;
+
+        lock (doc.SyncRoot)
+        {
+            if (VectorHitTest.FindTextAt(doc, e.DocPosition) is { } hit)
+            {
+                _elementDrag.BeginMoveLocked(session, hit.Layer, hit.Element, e.DocPosition);
+                return;
+            }
+        }
+
+        // 4) 平移整個圖層／群組（群組 = 所有子孫點陣圖層的像素與文字物件一起動；單層只動像素）
+        session.SelectedElement = null;
+        _moveLayers.Clear();
+        _startOffsets.Clear();
+        _startElements.Clear();
+        _layer = null;
+        _movingGroup = false;
+        switch (doc.ActiveLayer)
+        {
+            case RasterLayer single:
+                _moveLayers.Add(single);
+                _layer = single; // 單一圖層才有覆疊快路徑
+                break;
+            case GroupLayer group:
+                CollectRasterLayers(group, _moveLayers);
+                _movingGroup = true;
+                break;
+        }
+        if (_moveLayers.Count == 0) return;
+
+        lock (doc.SyncRoot)
+        {
+            foreach (var l in _moveLayers)
+            {
+                _startOffsets.Add(l.Offset);
+                // 單一圖層平移只動像素、不帶文字物件（使用者明示）：像素走覆疊快路徑零重合成，
+                // 文字每步 ReplaceElement 卻得重合成，兩者步調不同看起來就是一直閃。
+                // 群組仍是「所有東西一起動」（像素＋各層文字）。
+                _startElements.Add(_movingGroup && l.HasElements
+                    ? l.Elements.ToArray()
+                    : Array.Empty<VectorElement>());
+            }
+        }
+        session.RefreshSelectionHandles(); // 確保拿到的是當下的框（不靠先前狀態）
+        // 對齊模式吸附的起始框＝畫面上那個把手框（ExactContentBounds 推導）。
+        // 不能用 LayerNode.ContentBounds —— 那是 tile 對齊（256 倍數）的保守外擴，
+        // 吸附會對到看不見的 tile 邊界，整個對不齊。
+        _startRect = session.SelectionHandles ?? SKRect.Empty;
+        _dragStart = e.DocPosition;
+        _lastMoveDelta = SKPointI.Empty;
+        _layerDetachTried = false;
+        _mode = Mode.Layer;
+    }
+
+    private static void CollectRasterLayers(GroupLayer group, List<RasterLayer> into)
+    {
+        foreach (var child in group.Children)
+        {
+            switch (child)
+            {
+                case RasterLayer r: into.Add(r); break;
+                case GroupLayer g: CollectRasterLayers(g, into); break;
+            }
+        }
+    }
+
+    public void OnPointerMove(ToolPointerEvent e, EditorSession session)
+    {
+        if (_mode == Mode.Handles)
+        {
+            _handles.Continue(session, e.DocPosition, e.Modifiers);
+            return;
+        }
+
+        if (_elementDrag.IsActive)
+        {
+            _elementDrag.Continue(session, e.DocPosition, e.Modifiers);
+            return;
+        }
+
+        // 在選取範圍外按下後真的拖了 → 現在才提起，之後照浮動內容處理
+        if (_mode == Mode.PendingLift)
+        {
+            if (SKPoint.Distance(e.DocPosition, _pressPoint) * ViewScale <= DragThreshold) return;
+
+            var lifted = session.LiftSelection();
+            if (lifted == null)
+            {
+                _mode = Mode.None;
+                return;
+            }
+            _mode = Mode.FloatingMove;
+            _startRect = lifted.TargetRect;
+        }
+
+        var floating = session.Floating;
+        switch (_mode)
+        {
+            case Mode.FloatingMove when floating != null:
+            {
+                var before = floating.TargetBounds;
+                // 位移取整到整數像素：子像素平移會引入重取樣模糊（Pinta 也是這樣做）
+                var dx = MathF.Floor(e.DocPosition.X - _dragStart.X);
+                var dy = MathF.Floor(e.DocPosition.Y - _dragStart.Y);
+                (dx, dy) = CanvasSnap.Adjust(session, _startRect, dx, dy); // 對齊模式：吸附畫布邊/中線
+                var moved = new SKRect(
+                    _startRect.Left + dx, _startRect.Top + dy,
+                    _startRect.Right + dx, _startRect.Bottom + dy);
+                if (moved == floating.TargetRect) return; // 同一格像素內的抖動：沒有畫面變化
+                floating.TargetRect = moved;
+                InvalidateFloating(session, floating, before);
+                break;
+            }
+
+            case Mode.TransformMove when session.Transform is { } transform:
+            {
+                var dx = MathF.Floor(e.DocPosition.X - _dragStart.X);
+                var dy = MathF.Floor(e.DocPosition.Y - _dragStart.Y);
+                (dx, dy) = CanvasSnap.Adjust(session, _startRect, dx, dy); // 對齊模式：吸附畫布邊/中線
+                var moved = new SKRect(
+                    _startRect.Left + dx, _startRect.Top + dy,
+                    _startRect.Right + dx, _startRect.Bottom + dy);
+                if (moved == transform.TargetRect) return;
+
+                // 單層 session：第一次真的動了才拆下來走覆疊（純平移期間 render thread 直接畫，
+                // 一格都不重合成）；群組沒有快路徑，但純平移也只改 Offset、不重取樣。
+                if (!_layerDetachTried && transform.SoleLayer is { } sole)
+                {
+                    _layerDetachTried = true;
+                    session.BeginLayerDrag(sole);
+                }
+
+                transform.TargetRect = moved;
+                transform.Apply(preview: true, layer =>
+                    session.LayerOverlay is { HandingOver: false } overlay && overlay.Layer == layer);
+                session.RefreshSelectionHandles();
+                break;
+            }
+
+            case Mode.Layer when _moveLayers.Count > 0:
+            {
+                var doc = session.Document;
+                var rawDx = e.DocPosition.X - _dragStart.X;
+                var rawDy = e.DocPosition.Y - _dragStart.Y;
+                (rawDx, rawDy) = CanvasSnap.Adjust(session, _startRect, rawDx, rawDy); // 對齊模式
+                var delta = new SKPointI((int)MathF.Round(rawDx), (int)MathF.Round(rawDy));
+                if (delta == _lastMoveDelta) return; // 同一格像素內的抖動
+                _lastMoveDelta = delta;
+
+                // 第一次真的動了才把圖層從合成結果拆下來 —— 只是點一下的話不必付這個代價。
+                // 拆下來之後拖曳期間一格都不用重合成（見 EditorSession.BeginLayerDrag）。
+                // 群組（多圖層）沒有覆疊快路徑，直接走合成器（層序正確優先）。
+                if (_layer != null && !_layerDetachTried)
+                {
+                    _layerDetachTried = true;
+                    session.BeginLayerDrag(_layer);
+                }
+
+                for (var i = 0; i < _moveLayers.Count; i++)
+                {
+                    var layer = _moveLayers[i];
+                    var newOffset = new SKPointI(
+                        _startOffsets[i].X + delta.X, _startOffsets[i].Y + delta.Y);
+
+                    if (newOffset != layer.Offset)
+                    {
+                        var overlaid = layer == _layer &&
+                                       session.LayerOverlay is { HandingOver: false } overlay &&
+                                       overlay.Layer == layer;
+                        if (overlaid)
+                        {
+                            lock (doc.SyncRoot) layer.Offset = newOffset;
+                        }
+                        else
+                        {
+                            SKRectI dirty;
+                            lock (doc.SyncRoot)
+                            {
+                                var before = layer.ContentBounds;
+                                layer.Offset = newOffset;
+                                var after = layer.ContentBounds;
+                                dirty = before.IsEmpty ? after
+                                    : after.IsEmpty ? before : SKRectI.Union(before, after);
+                            }
+                            if (!dirty.IsEmpty) layer.Invalidate(dirty);
+                        }
+                    }
+
+                    // 文字物件跟著整層移動；一律從起始快照換算，避免逐步累積誤差
+                    var startEls = _startElements[i];
+                    if (startEls.Length > 0)
+                    {
+                        lock (doc.SyncRoot)
+                        {
+                            foreach (var el in startEls)
+                            {
+                                if (layer.FindElement(el.Id) != null)
+                                    layer.ReplaceElement(el.Translated(delta.X, delta.Y));
+                            }
+                        }
+                    }
+                }
+                session.RefreshSelectionHandles(); // 圖層內容框跟著 offset 走（內容快取沒失效，O(1)）
+                break;
+            }
+        }
+    }
+
+    public void OnPointerUp(ToolPointerEvent e, EditorSession session)
+    {
+        session.SnapGuides = null; // 導線只在拖曳中顯示
+        if (_mode == Mode.Handles)
+        {
+            _handles.End(session);
+            _mode = Mode.None;
+            return;
+        }
+
+        if (_elementDrag.IsActive)
+        {
+            _elementDrag.End(session);
+            return;
+        }
+
+        // 點一下（沒拖曳）在框外 → 落地（變形框/浮動內容）並取消選取
+        var moved = SKPoint.Distance(e.DocPosition, _pressPoint) * ViewScale;
+        if (_pressedOutsideSelection && moved <= DragThreshold)
+        {
+            _pressedOutsideSelection = false;
+            _mode = Mode.None;
+            _layer = null;
+            session.CommitTransform(); // 變形框外點一下＝完成變形（paint.net 式）
+            session.CommitFloating();  // 浮動中先落地（沒動過等同還原，不會多記一步歷史）
+            if (session.Selection != null)
+                SelectionCommands.SetSelection(session, null, "取消選取");
+            return;
+        }
+        _pressedOutsideSelection = false;
+
+        switch (_mode)
+        {
+            case Mode.TransformMove when session.Transform is { } transform:
+                transform.Apply(preview: false); // 手勢結束補 High；history 等 session 落地一次記
+                session.RefreshSelectionHandles();
+                break;
+
+            case Mode.FloatingMove when session.Floating is { } floating:
+                // 留在浮動狀態（可繼續調整），只同步把手框
+                session.RefreshSelectionHandles();
+                if (floating.TargetRect.Width < 1 || floating.TargetRect.Height < 1)
+                {
+                    session.CancelFloating();
+                    session.Notify("選取內容太小，已還原");
+                }
+                break;
+
+            case Mode.Layer when _moveLayers.Count > 0 && _lastMoveDelta != SKPointI.Empty:
+            {
+                var layers = _moveLayers.ToArray();
+                var oldOffsets = _startOffsets.ToArray();
+                var oldElements = _startElements.ToArray();
+                var newOffsets = layers.Select(l => l.Offset).ToArray();
+                var delta = _lastMoveDelta;
+                var label = _movingGroup ? "移動群組" : "移動圖層";
+
+                session.History.Push(new ActionHistoryEntry(label, session.Document.Bounds,
+                    undo: _ =>
+                    {
+                        for (var i = 0; i < layers.Length; i++)
+                        {
+                            layers[i].Offset = oldOffsets[i];
+                            foreach (var el in oldElements[i])
+                            {
+                                if (layers[i].FindElement(el.Id) != null)
+                                    layers[i].ReplaceElement(el);
+                            }
+                            layers[i].InvalidateAll();
+                        }
+                    },
+                    redo: _ =>
+                    {
+                        for (var i = 0; i < layers.Length; i++)
+                        {
+                            layers[i].Offset = newOffsets[i];
+                            foreach (var el in oldElements[i])
+                            {
+                                if (layers[i].FindElement(el.Id) != null)
+                                    layers[i].ReplaceElement(el.Translated(delta.X, delta.Y));
+                            }
+                            layers[i].InvalidateAll();
+                        }
+                    }));
+                break;
+            }
+        }
+
+        session.EndLayerDrag(); // 覆疊層交還給合成器（逐格接手，畫面不會閃）；沒拆下來時是 no-op
+        _mode = Mode.None;
+        _layer = null;
+        _moveLayers.Clear();
+        _startOffsets.Clear();
+        _startElements.Clear();
+    }
+
+    /// <summary>
+    /// 浮動內容動了：通知畫面。
+    ///
+    /// 走覆疊路徑時（<see cref="EditorSession.FloatingOverlay"/>）合成器根本沒在畫浮動內容，
+    /// 一格都不必重新合成 —— 這是大片內容拖曳能跟手的關鍵。
+    ///
+    /// 退回合成器路徑時只標髒「舊位置 ∪ 新位置」，刻意不含
+    /// <see cref="FloatingSelection.SourceBounds"/> —— 提起時挖出的洞在整趟拖曳中
+    /// 都不會再變，每次移動都把它一起標髒等於白做一次；而且一旦拖遠，
+    /// 「原位置 ∪ 新位置」的外接矩形會膨脹成大半張畫布，每個滑鼠事件都重合成一次。
+    /// 洞的失效由 <see cref="EditorSession.LiftSelection"/> 在提起時做一次就夠。
+    /// </summary>
+    internal static void InvalidateFloating(EditorSession session, FloatingSelection floating, SKRectI before)
+    {
+        session.RefreshSelectionHandles(); // TargetRect 是 FloatingSelection 內部狀態，要手動觸發
+        if (session.IsFloatingOverlaid) return;
+        if (session.Document.FindLayer(floating.LayerId) is RasterLayer layer)
+            layer.Invalidate(SKRectI.Union(before, floating.TargetBounds));
+    }
+
+    // ---- 旋轉手勢（右鍵拖曳，paint.net 式）----
+
+    private bool _rotateActive;
+    private float _rotateStartDeg;
+    private float _rotateAnchorDeg;
+
+    /// <summary>
+    /// 右鍵按下開始旋轉：需要（或自動開始）變形 session。
+    /// 旋轉角 = 指標相對框中心的角度變化；Shift 吸附 15°。
+    /// </summary>
+    public bool BeginRotate(EditorSession session, SKPoint p)
+    {
+        var transform = session.Transform ?? session.BeginTransform();
+        if (transform == null) return false;
+        _rotateActive = true;
+        _rotateStartDeg = transform.RotationDeg;
+        _rotateAnchorDeg = AngleDeg(p, new SKPoint(transform.TargetRect.MidX, transform.TargetRect.MidY));
+        transform.BeginGesturePreview(); // 拖曳期間 render thread 直接畫，不逐步蓋章
+        return true;
+    }
+
+    public void ContinueRotate(EditorSession session, SKPoint p, ToolModifiers modifiers)
+    {
+        if (!_rotateActive || session.Transform is not { } transform) return;
+        var center = new SKPoint(transform.TargetRect.MidX, transform.TargetRect.MidY);
+        var angle = _rotateStartDeg + AngleDeg(p, center) - _rotateAnchorDeg;
+        if (modifiers.HasFlag(ToolModifiers.Shift))
+            angle = MathF.Round(angle / 15f) * 15f;
+        angle = NormalizeDeg(angle);
+        if (Math.Abs(angle - transform.RotationDeg) < 0.05f) return;
+        transform.RotationDeg = angle;
+        transform.Apply(preview: true);
+        session.RefreshSelectionHandles();
+    }
+
+    public void EndRotate(EditorSession session)
+    {
+        if (!_rotateActive) return;
+        _rotateActive = false;
+        if (session.Transform is not { } transform) return;
+        transform.EndGesture();
+        session.RefreshSelectionHandles();
+    }
+
+    private static float AngleDeg(SKPoint p, SKPoint center) =>
+        MathF.Atan2(p.Y - center.Y, p.X - center.X) * 180f / MathF.PI;
+
+    private static float NormalizeDeg(float deg)
+    {
+        deg %= 360f;
+        if (deg > 180f) deg -= 360f;
+        if (deg < -180f) deg += 360f;
+        return deg;
+    }
+
+    /// <summary>把點以 center 為軸旋轉 deg 度。</summary>
+    public static SKPoint RotatePoint(SKPoint p, SKPoint center, float deg)
+    {
+        if (Math.Abs(deg) < 0.01f) return p;
+        return SKMatrix.CreateRotationDegrees(deg, center.X, center.Y).MapPoint(p);
+    }
+
+    /// <summary>點是否落在（可能已旋轉的）變形框內。</summary>
+    private static bool TransformContains(TransformSession transform, SKPoint p)
+    {
+        var local = RotatePoint(p,
+            new SKPoint(transform.TargetRect.MidX, transform.TargetRect.MidY),
+            -transform.RotationDeg);
+        return transform.TargetRect.Contains(local.X, local.Y);
+    }
+
+    /// <summary>四角把手命中測試；回傳 0=左上 1=右上 2=右下 3=左下，未命中為 -1。</summary>
+    public static int HitCorner(SKRect rect, SKPoint p, float tolerance)
+    {
+        Span<SKPoint> corners =
+        [
+            new(rect.Left, rect.Top), new(rect.Right, rect.Top),
+            new(rect.Right, rect.Bottom), new(rect.Left, rect.Bottom),
+        ];
+        for (var i = 0; i < 4; i++)
+        {
+            if (Math.Abs(p.X - corners[i].X) <= tolerance && Math.Abs(p.Y - corners[i].Y) <= tolerance)
+                return i;
+        }
+        return -1;
+    }
+
+    /// <summary>拖角縮放：對角固定；keepAspect 時維持原始長寬比。</summary>
+    public static SKRect ResizeRect(SKRect start, int corner, SKPoint p, bool keepAspect)
+    {
+        var l = Math.Min(start.Left, start.Right);
+        var t = Math.Min(start.Top, start.Bottom);
+        var r = Math.Max(start.Left, start.Right);
+        var b = Math.Max(start.Top, start.Bottom);
+
+        // 對角（固定點）
+        var anchor = corner switch
+        {
+            0 => new SKPoint(r, b),
+            1 => new SKPoint(l, b),
+            2 => new SKPoint(l, t),
+            _ => new SKPoint(r, t),
+        };
+
+        var w = p.X - anchor.X;
+        var h = p.Y - anchor.Y;
+
+        if (keepAspect && start.Width > 0 && start.Height > 0)
+        {
+            var aspect = start.Width / start.Height;
+            // 取較大的一邊決定尺寸，另一邊依比例
+            if (Math.Abs(w) / aspect > Math.Abs(h))
+                h = Math.Sign(h == 0 ? 1 : h) * Math.Abs(w) / aspect;
+            else
+                w = Math.Sign(w == 0 ? 1 : w) * Math.Abs(h) * aspect;
+        }
+
+        return new SKRect(
+            Math.Min(anchor.X, anchor.X + w), Math.Min(anchor.Y, anchor.Y + h),
+            Math.Max(anchor.X, anchor.X + w), Math.Max(anchor.Y, anchor.Y + h));
+    }
+}
