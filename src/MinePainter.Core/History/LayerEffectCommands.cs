@@ -83,9 +83,11 @@ public static class LayerEffectCommands
         var before = layer.Effects;
         lock (doc.SyncRoot)
         {
-            var region = new SKRectI(-layer.Offset.X, -layer.Offset.Y,
-                doc.Width - layer.Offset.X, doc.Height - layer.Offset.Y);
-            if (layer.HasActiveEffects && layer.FxCache.Rendered)
+            // 快取是圖層座標、涵蓋整個內容（含畫布外）；烙印範圍 = 基底內容 ∪ 快取內容
+            var region = layer.Surface.ContentBounds;
+            var fxBounds = layer.FxCache.Surface.ContentBounds;
+            if (!fxBounds.IsEmpty) region = region.IsEmpty ? fxBounds : SKRectI.Union(region, fxBounds);
+            if (layer.HasActiveEffects && layer.FxCache.Rendered && !region.IsEmpty)
             {
                 using var snapshot = layer.Surface.Snapshot();
                 CopyRegion(layer.FxCache.Surface, layer.Surface, region);

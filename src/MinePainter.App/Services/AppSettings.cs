@@ -25,6 +25,9 @@ public sealed class AppSettings
     /// <summary>效果／調整套用時記錄在圖層的效果堆疊（非破壞性），而不是直接改像素。</summary>
     public bool NonDestructiveEffects { get; set; } = true;
 
+    /// <summary>移動工具拖曳時覆疊層帶著效果堆疊結果（外框／陰影／漸層跟著走）；關掉省效能。</summary>
+    public bool RenderEffectsWhileDragging { get; set; } = true;
+
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
     private static string FilePath => System.IO.Path.Combine(

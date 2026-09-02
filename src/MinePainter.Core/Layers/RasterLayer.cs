@@ -70,6 +70,26 @@ public sealed class RasterLayer : LayerNode, IDisposable
     /// <summary>合成時該拿哪份像素：有作用中的效果且已算過 → 效果快取；否則基底。</summary>
     public TileSurface DisplaySurface => HasActiveEffects && FxCache.Rendered ? FxCache.Surface : Surface;
 
+    /// <summary>效果快取此刻是否代表這層的畫面（拖曳覆疊可直接拿它的快照）。</summary>
+    public bool EffectsRendered => HasActiveEffects && FxCache.Rendered;
+
+    /// <summary>
+    /// 畫面上這層佔的範圍（doc 座標，tile 粒度）：內容 ∪ 效果快取（外框／陰影會超出內容）。
+    /// 失效與覆疊交接用；使用者看得到的框仍用 ExactContentBounds／FrameBounds。
+    /// </summary>
+    public SKRectI DisplayContentBounds
+    {
+        get
+        {
+            var bounds = ContentBounds;
+            if (!EffectsRendered) return bounds;
+            var fx = FxCache.Surface.ContentBounds;
+            if (fx.IsEmpty) return bounds;
+            fx = new SKRectI(fx.Left + Offset.X, fx.Top + Offset.Y, fx.Right + Offset.X, fx.Bottom + Offset.Y);
+            return bounds.IsEmpty ? fx : SKRectI.Union(bounds, fx);
+        }
+    }
+
     /// <summary>圖層內容相對文件原點的偏移。</summary>
     public SKPointI Offset { get; set; }
 

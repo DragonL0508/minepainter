@@ -1532,6 +1532,24 @@ public partial class MainWindow : Window
                 : "效果將直接寫入像素");
         };
         EffectsMenu.Items.Add(nonDestructive);
+
+        var fxWhileDrag = new MenuItem
+        {
+            Header = "拖曳時即時顯示效果",
+            ToggleType = MenuItemToggleType.CheckBox,
+            IsChecked = Services.AppSettings.Instance.RenderEffectsWhileDragging,
+        };
+        Core.Tools.EditorSession.RenderEffectsWhileDragging = fxWhileDrag.IsChecked;
+        fxWhileDrag.Click += (_, _) =>
+        {
+            Services.AppSettings.Instance.RenderEffectsWhileDragging = fxWhileDrag.IsChecked;
+            Services.AppSettings.Instance.Save();
+            Core.Tools.EditorSession.RenderEffectsWhileDragging = fxWhileDrag.IsChecked;
+            Toasts.Show(fxWhileDrag.IsChecked
+                ? "移動物件／圖層時會連同外框、陰影等效果一起顯示"
+                : "移動時只顯示基底像素，放開後才套用效果（較省效能）");
+        };
+        EffectsMenu.Items.Add(fxWhileDrag);
         EffectsMenu.Items.Add(new Separator());
 
         foreach (var category in EffectRegistry.Categories)

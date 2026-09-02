@@ -24,7 +24,7 @@ public sealed class Compositor : IDisposable
     private readonly Func<Selections.FloatingSelection?>? _floatingProvider;
 
     /// <summary>拖曳中、已從合成結果拆下來改由畫面覆疊呈現的圖層（見 EditorSession.LayerOverlay）。</summary>
-    private readonly Func<Guid?>? _detachedProvider;
+    private readonly Func<(Guid? Id, bool IncludesElements)>? _detachedProvider;
 
     private readonly Thread _worker;
     private readonly CancellationTokenSource _cts = new();
@@ -87,7 +87,7 @@ public sealed class Compositor : IDisposable
 
     public Compositor(Document document, StrokeBuffer? strokeBuffer = null,
         Func<Selections.FloatingSelection?>? floatingProvider = null,
-        Func<Guid?>? detachedLayerProvider = null)
+        Func<(Guid? Id, bool IncludesElements)>? detachedLayerProvider = null)
     {
         _document = document;
         _strokeBuffer = strokeBuffer;
@@ -319,7 +319,7 @@ public sealed class Compositor : IDisposable
                 var tileRect = idx.ToPixelRect();
                 using var tileSurface = SKSurface.Create(Tile.Info);
                 tileSurface.Canvas.Clear(SKColors.Transparent);
-                if (!CompositeGroup(doc.Root, tileSurface, tileRect, null, null, null)) continue;
+                if (!CompositeGroup(doc.Root, tileSurface, tileRect, null, null, (null, false))) continue;
                 tileSurface.Canvas.Flush();
                 using var img = tileSurface.Snapshot();
                 full.Canvas.DrawImage(img, tileRect.Left, tileRect.Top);
@@ -332,11 +332,11 @@ public sealed class Compositor : IDisposable
 
     private bool CompositeGroup(GroupLayer group, SKSurface surface, SKRectI tileRect) =>
         CompositeGroup(group, surface, tileRect, _strokeBuffer,
-            _floatingProvider?.Invoke(), _detachedProvider?.Invoke());
+            _floatingProvider?.Invoke(), _detachedProvider?.Invoke() ?? (null, false));
 
     /// <summary>把群組內容合成到 surface（canvas 原點 = tileRect 左上）。回傳是否畫了東西。</summary>
     private static bool CompositeGroup(GroupLayer group, SKSurface surface, SKRectI tileRect,
-        StrokeBuffer? strokeBuffer, Selections.FloatingSelection? floating, Guid? detachedLayerId)
+        StrokeBuffer? strokeBuffer, Selections.FloatingSelection? floating, (Guid? Id, bool IncludesElements) detachedLayer)
     {
         var canvas = surface.Canvas;
         var drew = false;
@@ -370,7 +370,7 @@ public sealed class Compositor : IDisposable
                     // 拖曳中被拆下來的圖層（EditorSession.LayerOverlay）：像素改由 render thread
                     // 每幀直接覆疊，合成結果裡不能有它（否則畫面上會出現兩份）。
                     // 但物件（文字）不跟著 Offset 走，仍舊由合成器畫 —— 少了這條文字會在拖曳時消失。
-                    var detached = detachedLayerId is { } d && raster.Id == d;
+                    var detached = detachedLayer.Id is { } d && raster.Id == d;
 
                     var stroke = strokeBuffer;
                     var strokeHere = !detached && stroke is { IsActive: true } &&
@@ -385,7 +385,8 @@ public sealed class Compositor : IDisposable
 
                     if (detached)
                     {
-                        if (elementTile == null) break;
+                        // 覆疊層已含物件（效果快取快照／文字圖層整層拖曳）：這裡不再畫，否則兩份
+                        if (elementTile == null || detachedLayer.IncludesElements) break;
                         using (var pixmap = elementTile.AsPixmap())
                         using (var img = SKImage.FromPixels(pixmap))
                         {
@@ -446,7 +447,7 @@ public sealed class Compositor : IDisposable
                 case GroupLayer nested:
                 {
                     // isolated composite：先拿群組內容的快取 tile，再以群組 opacity/blend 疊上
-                    var contentTile = RenderGroupTile(nested, tileRect, strokeBuffer, floating, detachedLayerId);
+                    var contentTile = RenderGroupTile(nested, tileRect, strokeBuffer, floating, detachedLayer);
                     if (contentTile != null)
                     {
                         using var paint = new SKPaint
@@ -472,7 +473,7 @@ public sealed class Compositor : IDisposable
     /// 在 compositor 執行緒、Document.SyncRoot 內呼叫。
     /// </summary>
     private static Tile? RenderGroupTile(GroupLayer group, SKRectI tileRect,
-        StrokeBuffer? strokeBuffer, Selections.FloatingSelection? floating, Guid? detachedLayerId)
+        StrokeBuffer? strokeBuffer, Selections.FloatingSelection? floating, (Guid? Id, bool IncludesElements) detachedLayer)
     {
         var idx = TileIndex.FromPixel(tileRect.Left, tileRect.Top);
         if (group.Cache.IsClean(idx))
@@ -483,7 +484,7 @@ public sealed class Compositor : IDisposable
         using (var surface = SKSurface.Create(Tile.Info, tile.Pixels, Tile.RowBytes))
         {
             surface.Canvas.Clear(SKColors.Transparent);
-            drew = CompositeGroup(group, surface, tileRect, strokeBuffer, floating, detachedLayerId);
+            drew = CompositeGroup(group, surface, tileRect, strokeBuffer, floating, detachedLayer);
             surface.Canvas.Flush();
         }
 

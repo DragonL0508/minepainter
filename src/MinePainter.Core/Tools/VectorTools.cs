@@ -187,7 +187,8 @@ public sealed class ShapeTool : ITool
     public void OnPointerMove(ToolPointerEvent e, EditorSession session)
     {
         if (!_dragging) return;
-        session.Preview = new OverlayPreview([], Closed: false, BuildShape(_anchor, e.DocPosition, session.Foreground));
+        var end = Constrain(_anchor, e.DocPosition, e.Modifiers.HasFlag(ToolModifiers.Shift), Kind);
+        session.Preview = new OverlayPreview([], Closed: false, BuildShape(_anchor, end, session.Foreground));
     }
 
     public void OnPointerUp(ToolPointerEvent e, EditorSession session)
@@ -196,15 +197,16 @@ public sealed class ShapeTool : ITool
         _dragging = false;
         session.Preview = null;
 
-        var dx = Math.Abs(e.DocPosition.X - _anchor.X);
-        var dy = Math.Abs(e.DocPosition.Y - _anchor.Y);
+        var end = Constrain(_anchor, e.DocPosition, e.Modifiers.HasFlag(ToolModifiers.Shift), Kind);
+        var dx = Math.Abs(end.X - _anchor.X);
+        var dy = Math.Abs(end.Y - _anchor.Y);
         if (dx < 2 && dy < 2) return;
 
         var doc = session.Document;
         if (doc.ActiveLayer is not RasterLayer layer) return;
 
         // 借用 ShapeElement 的繪製邏輯，但畫完即丟（不儲存物件）
-        var shape = BuildShape(_anchor, e.DocPosition, session.Foreground);
+        var shape = BuildShape(_anchor, end, session.Foreground);
 
         History.TileDeltaEntry? entry;
         var dirtyDoc = SKRectI.Intersect(shape.Bounds, doc.Bounds); // 不畫到畫布外
@@ -223,6 +225,30 @@ public sealed class ShapeTool : ITool
 
         if (entry != null) session.History.Push(entry);
         layer.Invalidate(dirtyDoc);
+    }
+
+    /// <summary>
+    /// Shift 約束（paint.net 式）：矩形／橢圓 → 正方形／正圓（邊長取較長的一軸、方向跟著指標）；
+    /// 直線 → 角度吸附 15°。
+    /// </summary>
+    public static SKPoint Constrain(SKPoint anchor, SKPoint p, bool shift, ShapeKind kind)
+    {
+        if (!shift) return p;
+        var dx = p.X - anchor.X;
+        var dy = p.Y - anchor.Y;
+        if (kind == ShapeKind.Line)
+        {
+            var len = MathF.Sqrt(dx * dx + dy * dy);
+            if (len < 0.001f) return p;
+            var angle = MathF.Atan2(dy, dx);
+            var step = MathF.PI / 12f; // 15°
+            angle = MathF.Round(angle / step) * step;
+            return new SKPoint(anchor.X + MathF.Cos(angle) * len, anchor.Y + MathF.Sin(angle) * len);
+        }
+        var size = Math.Max(Math.Abs(dx), Math.Abs(dy));
+        var sx = dx < 0 ? -1f : 1f;
+        var sy = dy < 0 ? -1f : 1f;
+        return new SKPoint(anchor.X + sx * size, anchor.Y + sy * size);
     }
 
     /// <summary>由拖曳兩端點建立（像素對齊後的）形狀。</summary>

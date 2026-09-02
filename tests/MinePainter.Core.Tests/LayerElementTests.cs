@@ -307,15 +307,16 @@ public class LayerElementTests
         Assert.Equal(150, moved.Position.X, 1);
         Assert.Equal(SKPointI.Empty, layer.Offset); // 圖層本身沒被平移
 
-        // 點空白處 → 改成移動整個圖層：單層只動像素、本層文字留在原地
-        //（2026-09-02 使用者明示：文字跟著走會與覆疊快路徑步調不同、一直閃；群組才是全部一起動）
+        // 點空白處 → 移動整個圖層：文字圖層的內容就是文字，整層拖曳文字跟著走
+        //（覆疊路徑下文字已渲染進覆疊快照，拖曳中不逐步 ReplaceElement，放開才一次落地）
         session.Move.OnPointerDown(new ToolPointerEvent(new SKPoint(400, 400), 1f), session);
         session.Move.OnPointerMove(new ToolPointerEvent(new SKPoint(420, 400), 1f), session);
+        Assert.Equal(150, ((TextElement)layer.Elements[0]).Position.X, 1); // 拖曳中原件還沒動
         session.Move.OnPointerUp(new ToolPointerEvent(new SKPoint(420, 400), 1f), session);
         Assert.Equal(20, layer.Offset.X);
-        Assert.Equal(150, ((TextElement)layer.Elements[0]).Position.X, 1);
+        Assert.Equal(170, ((TextElement)layer.Elements[0]).Position.X, 1);
 
-        // undo 只還原 Offset，文字本來就沒動
+        // undo 一步：Offset 與文字一起還原
         Assert.True(session.History.Undo());
         Assert.Equal(SKPointI.Empty, layer.Offset);
         Assert.Equal(150, ((TextElement)layer.Elements[0]).Position.X, 1);

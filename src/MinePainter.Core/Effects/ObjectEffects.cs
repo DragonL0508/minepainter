@@ -55,9 +55,19 @@ public sealed record ObjectOutlineEffect : IEffect
     public int Softness { get; init; } = 0;  // 0..100
     public SKColor Color { get; init; } = SKColors.Black;
 
+    /// <summary>外框用漸層上色（Color → GradientEnd，沿 GradientAngle，以「內容＋外框」的外接框為準）。</summary>
+    public bool Gradient { get; init; }
+    public SKColor GradientEnd { get; init; } = SKColors.White;
+    public float GradientAngle { get; init; } = 90f;
+
     public string Name => "物件外框";
     public string Category => "物件";
-    public int SourceMargin => Math.Min(Width, 100) + 2;
+
+    /// <summary>漸層要看整個內容的外接框，所以得整層算；純色只需要外框寬度的來源餘裕。</summary>
+    public int SourceMargin => Gradient ? EffectContext.WholeLayer : Math.Min(Width, 100) + 2;
+
+    /// <summary>漸層模式下輸出會延伸到內容外多遠（快取範圍用）。</summary>
+    public int OutputMargin => Math.Min(Width, 100) + 2;
 
     private static readonly ParamDef[] Params =
     [
@@ -67,6 +77,12 @@ public sealed record ObjectOutlineEffect : IEffect
             (o, v) => ((ObjectOutlineEffect)o) with { Softness = (int)v }),
         new ColorParam("color", "顏色", o => ((ObjectOutlineEffect)o).Color,
             (o, v) => ((ObjectOutlineEffect)o) with { Color = v }) { UsePrimaryByDefault = true },
+        new BoolParam("gradient", "漸層外框", o => ((ObjectOutlineEffect)o).Gradient,
+            (o, v) => ((ObjectOutlineEffect)o) with { Gradient = v }),
+        new ColorParam("gradientEnd", "漸層結束色", o => ((ObjectOutlineEffect)o).GradientEnd,
+            (o, v) => ((ObjectOutlineEffect)o) with { GradientEnd = v }),
+        new AngleParam("gradientAngle", "漸層角度", 0, 360, o => ((ObjectOutlineEffect)o).GradientAngle,
+            (o, v) => ((ObjectOutlineEffect)o) with { GradientAngle = (float)v }),
     ];
     public IReadOnlyList<ParamDef> Parameters => Params;
 
@@ -78,6 +94,19 @@ public sealed record ObjectOutlineEffect : IEffect
         var dw = ctx.Width + pad * 2;
         var soft = Math.Max(0.5f, width * Softness / 100f);
         var color = Color;
+
+        // 漸層：以「內容外接框外擴外框寬度」為漸層框，沿角度由 Color 到 GradientEnd
+        GradientRamp? ramp = null;
+        if (Gradient)
+        {
+            var bbox = ContentBox(ctx);
+            if (!bbox.IsEmpty)
+            {
+                bbox.Inflate(width, width);
+                ramp = new GradientRamp(bbox, GradientAngle, radial: false, Color, GradientEnd);
+            }
+        }
+
         ctx.ForRows(y =>
         {
             for (var x = 0; x < ctx.Width; x++)
@@ -87,10 +116,73 @@ public sealed record ObjectOutlineEffect : IEffect
                 var coverage = soft <= 0.5f
                     ? Math.Clamp(width - d + 0.5f, 0f, 1f)
                     : Math.Clamp((width - d + 0.5f) / soft, 0f, 1f);
-                var outline = FromColor(color, (int)(color.Alpha * coverage));
+                if (coverage <= 0f)
+                {
+                    ctx.Dst[y * ctx.Width + x] = src;
+                    continue;
+                }
+                var c = ramp?.At(x, y) ?? color;
+                var outline = FromColor(c, (int)(c.Alpha * coverage));
                 ctx.Dst[y * ctx.Width + x] = Over(src, outline);
             }
         });
+    }
+
+    /// <summary>來源內容（alpha > 0）的外接框，目標座標。</summary>
+    internal static SKRectI ContentBox(EffectContext ctx)
+    {
+        int minX = int.MaxValue, minY = int.MaxValue, maxX = -1, maxY = -1;
+        for (var y = 0; y < ctx.Height; y++)
+        for (var x = 0; x < ctx.Width; x++)
+        {
+            if (A(ctx.SrcAt(x, y)) == 0) continue;
+            if (x < minX) minX = x;
+            if (x > maxX) maxX = x;
+            if (y < minY) minY = y;
+            if (y > maxY) maxY = y;
+        }
+        return maxX < 0 ? SKRectI.Empty : new SKRectI(minX, minY, maxX + 1, maxY + 1);
+    }
+}
+
+/// <summary>兩色漸層取樣：給定漸層框、角度（或放射狀），回傳某像素的顏色（未預乘 SKColor）。</summary>
+internal sealed class GradientRamp
+{
+    private readonly float _cx, _cy, _dx, _dy, _half, _maxR;
+    private readonly bool _radial;
+    private readonly SKColor[] _lut = new SKColor[257];
+
+    public GradientRamp(SKRectI box, float angleDeg, bool radial, SKColor start, SKColor end)
+    {
+        var bw = Math.Max(1, box.Width);
+        var bh = Math.Max(1, box.Height);
+        _cx = box.Left + bw / 2f;
+        _cy = box.Top + bh / 2f;
+        var rad = angleDeg * MathF.PI / 180f;
+        _dx = MathF.Cos(rad);
+        _dy = MathF.Sin(rad);
+        _half = Math.Abs(_dx) * bw / 2f + Math.Abs(_dy) * bh / 2f;
+        _maxR = MathF.Sqrt(bw * bw + bh * bh) / 2f;
+        _radial = radial;
+        for (var i = 0; i <= 256; i++)
+        {
+            var t = i / 256f;
+            _lut[i] = new SKColor(
+                (byte)(start.Red + (end.Red - start.Red) * t),
+                (byte)(start.Green + (end.Green - start.Green) * t),
+                (byte)(start.Blue + (end.Blue - start.Blue) * t),
+                (byte)(start.Alpha + (end.Alpha - start.Alpha) * t));
+        }
+    }
+
+    public SKColor At(int x, int y)
+    {
+        var px = x + 0.5f - _cx;
+        var py = y + 0.5f - _cy;
+        float t;
+        if (_radial) t = MathF.Sqrt(px * px + py * py) / Math.Max(1f, _maxR);
+        else t = _half <= 0 ? 0.5f : (px * _dx + py * _dy) / (2 * _half) + 0.5f;
+        return _lut[(int)(Math.Clamp(t, 0f, 1f) * 256)];
     }
 }
 
@@ -241,8 +333,9 @@ public sealed record ObjectGradientEffect : IEffect
 
     public string Name => "物件漸層";
     public string Category => "物件";
-    public int SourceMargin => 0;
-    public bool IsPositionIndependent => false; // 以內容外接框為準
+
+    /// <summary>以內容外接框為準：任何一處變了整層重算，但與畫布位置無關（圖層平移不重算）。</summary>
+    public int SourceMargin => EffectContext.WholeLayer;
 
     private static readonly ParamDef[] Params =
     [

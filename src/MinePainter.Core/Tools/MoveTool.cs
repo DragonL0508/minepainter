@@ -164,10 +164,10 @@ public sealed class MoveTool : ITool
             foreach (var l in _moveLayers)
             {
                 _startOffsets.Add(l.Offset);
-                // 單一圖層平移只動像素、不帶文字物件（使用者明示）：像素走覆疊快路徑零重合成，
-                // 文字每步 ReplaceElement 卻得重合成，兩者步調不同看起來就是一直閃。
-                // 群組仍是「所有東西一起動」（像素＋各層文字）。
-                _startElements.Add(_movingGroup && l.HasElements
+                // 群組＝「所有東西一起動」（像素＋各層文字）。單一圖層：文字圖層的內容就是文字，
+                // 整層拖曳自然要帶著走 —— 走覆疊時文字已渲染進覆疊快照，拖曳中不逐步 ReplaceElement
+                // （那會每步重合成、和覆疊步調不同看起來一直閃），放開才一次搬到定位。
+                _startElements.Add((_movingGroup || l.IsTextLayer) && l.HasElements
                     ? l.Elements.ToArray()
                     : Array.Empty<VectorElement>());
             }
@@ -307,19 +307,24 @@ public sealed class MoveTool : ITool
                             SKRectI dirty;
                             lock (doc.SyncRoot)
                             {
-                                var before = layer.ContentBounds;
+                                var before = layer.DisplayContentBounds;
                                 layer.Offset = newOffset;
-                                var after = layer.ContentBounds;
+                                var after = layer.DisplayContentBounds;
                                 dirty = before.IsEmpty ? after
                                     : after.IsEmpty ? before : SKRectI.Union(before, after);
                             }
-                            if (!dirty.IsEmpty) layer.Invalidate(dirty);
+                            // 純平移：效果快取是圖層座標、與 Offset 無關 —— 只重新合成，不重算效果
+                            if (!dirty.IsEmpty) layer.InvalidateComposite(dirty);
                         }
                     }
 
-                    // 文字物件跟著整層移動；一律從起始快照換算，避免逐步累積誤差
+                    // 文字物件跟著整層移動；一律從起始快照換算，避免逐步累積誤差。
+                    // 覆疊中的單一圖層：文字已在覆疊快照裡跟著動，放開才落地（見 OnPointerUp）。
                     var startEls = _startElements[i];
-                    if (startEls.Length > 0)
+                    var deferred = layer == _layer &&
+                                   session.LayerOverlay is { HandingOver: false, IncludesElements: true } ov &&
+                                   ov.Layer == layer;
+                    if (startEls.Length > 0 && !deferred)
                     {
                         lock (doc.SyncRoot)
                         {
@@ -387,6 +392,20 @@ public sealed class MoveTool : ITool
 
             case Mode.Layer when _moveLayers.Count > 0 && _lastMoveDelta != SKPointI.Empty:
             {
+                // 覆疊中延後的文字：現在一次搬到定位（覆疊層交還時合成器會把它們畫在新位置）
+                if (_layer != null && _startElements.Count == 1 && _startElements[0].Length > 0 &&
+                    session.LayerOverlay is { HandingOver: false, IncludesElements: true } ov && ov.Layer == _layer)
+                {
+                    lock (session.Document.SyncRoot)
+                    {
+                        foreach (var el in _startElements[0])
+                        {
+                            if (_layer.FindElement(el.Id) != null)
+                                _layer.ReplaceElement(el.Translated(_lastMoveDelta.X, _lastMoveDelta.Y));
+                        }
+                    }
+                }
+
                 var layers = _moveLayers.ToArray();
                 var oldOffsets = _startOffsets.ToArray();
                 var oldElements = _startElements.ToArray();
@@ -405,7 +424,7 @@ public sealed class MoveTool : ITool
                                 if (layers[i].FindElement(el.Id) != null)
                                     layers[i].ReplaceElement(el);
                             }
-                            layers[i].InvalidateAll();
+                            layers[i].InvalidateComposite(layers[i].Document?.Bounds ?? SKRectI.Empty); // 平移不重算效果
                         }
                     },
                     redo: _ =>
@@ -418,7 +437,7 @@ public sealed class MoveTool : ITool
                                 if (layers[i].FindElement(el.Id) != null)
                                     layers[i].ReplaceElement(el.Translated(delta.X, delta.Y));
                             }
-                            layers[i].InvalidateAll();
+                            layers[i].InvalidateComposite(layers[i].Document?.Bounds ?? SKRectI.Empty);
                         }
                     }));
                 break;

@@ -532,8 +532,11 @@ public sealed class TransformSession : IDisposable
 
             if (!external && !item.LastStamp.IsEmpty)
             {
-                item.Layer.Invalidate(SKRectI.Union(
-                    OffsetRect(item.LastStamp, old), OffsetRect(item.LastStamp, delta)));
+                // 純平移只改 Offset：效果快取是圖層座標、不必重算，只重新合成（含效果外擴）
+                var pad = Effects.LayerEffectRenderer.TotalMargin(item.Layer);
+                var dirty = SKRectI.Union(OffsetRect(item.LastStamp, old), OffsetRect(item.LastStamp, delta));
+                dirty.Inflate(pad, pad);
+                item.Layer.InvalidateComposite(dirty);
             }
         }
     }

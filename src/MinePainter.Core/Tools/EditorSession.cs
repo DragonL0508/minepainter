@@ -1,5 +1,6 @@
 using MinePainter.Core.Compositing;
 using MinePainter.Core.Documents;
+using MinePainter.Core.Effects;
 using MinePainter.Core.History;
 using MinePainter.Core.Layers;
 using MinePainter.Core.Selections;
@@ -448,23 +449,40 @@ public sealed class EditorSession : IDisposable
     public ElementDragOverlay? ElementOverlay => _elementOverlay;
 
     /// <summary>開始物件拖曳覆疊（在 Document.SyncRoot 內呼叫）。</summary>
-    public void BeginElementOverlayLocked(RasterLayer layer, Vectors.VectorElement element)
+    public unsafe void BeginElementOverlayLocked(RasterLayer layer, Vectors.VectorElement element)
     {
         EndElementOverlayLocked(discardGhost: true);
         var bounds = element.Bounds;
         if (bounds.Width <= 0 || bounds.Height <= 0) return;
-        bounds.Inflate(1, 1);
 
-        var info = new SKImageInfo(bounds.Width, bounds.Height, SKColorType.Bgra8888, SKAlphaType.Premul);
-        using var surface = SKSurface.Create(info);
-        if (surface == null) return;
-        var canvas = surface.Canvas;
-        canvas.Clear(SKColors.Transparent);
-        canvas.Translate(-bounds.Left, -bounds.Top);
-        element.Render(canvas);
-        canvas.Flush();
+        SKImage image;
+        if (RenderEffectsWhileDragging && layer.HasActiveEffects)
+        {
+            // 帶效果拖曳：物件單獨跑一遍這層的效果堆疊（外框／陰影／漸層跟著走）
+            var pixels = LayerEffectRenderer.RenderElementPreview(layer, element, out bounds);
+            if (bounds.Width <= 0 || bounds.Height <= 0) return;
+            var info = new SKImageInfo(bounds.Width, bounds.Height, SKColorType.Bgra8888, SKAlphaType.Premul);
+            fixed (uint* ptr = pixels)
+            {
+                image = SKImage.FromPixelCopy(info, (IntPtr)ptr, bounds.Width * 4);
+            }
+            if (image == null) return;
+        }
+        else
+        {
+            bounds.Inflate(1, 1);
+            var info = new SKImageInfo(bounds.Width, bounds.Height, SKColorType.Bgra8888, SKAlphaType.Premul);
+            using var surface = SKSurface.Create(info);
+            if (surface == null) return;
+            var canvas = surface.Canvas;
+            canvas.Clear(SKColors.Transparent);
+            canvas.Translate(-bounds.Left, -bounds.Top);
+            element.Render(canvas);
+            canvas.Flush();
+            image = surface.Snapshot();
+        }
 
-        _elementOverlay = new ElementDragOverlay(layer, element.Id, surface.Snapshot(), bounds);
+        _elementOverlay = new ElementDragOverlay(layer, element.Id, image, bounds);
         layer.HiddenElementId = element.Id; // 原件先藏起來（合成器重畫一次少了它的樣子）
     }
 
@@ -508,8 +526,15 @@ public sealed class EditorSession : IDisposable
     /// </summary>
     public LayerDragOverlay? LayerOverlay => _layerOverlay;
 
-    /// <summary>合成器要跳過的圖層（拆下來的那個；交還階段就不跳了）。</summary>
-    private Guid? DetachedLayerId => _layerOverlay is { HandingOver: false } o ? o.Layer.Id : null;
+    /// <summary>合成器要跳過的圖層（拆下來的那個；交還階段就不跳了）＋覆疊層是否已含物件。</summary>
+    private (Guid? Id, bool IncludesElements) DetachedLayer =>
+        _layerOverlay is { HandingOver: false } o ? (o.Layer.Id, o.IncludesElements) : (null, false);
+
+    /// <summary>
+    /// 拖曳（移動工具）期間覆疊層要不要帶著效果堆疊的結果一起走（外框、陰影、漸層在拖曳中看得到）。
+    /// 關掉則拖曳中只畫基底像素，放開才看到效果 —— 給效能吃緊的機器用（App 設定）。
+    /// </summary>
+    public static bool RenderEffectsWhileDragging { get; set; } = true;
 
     /// <summary>
     /// 把整個圖層從合成結果裡拆下來，改由畫面覆疊（拖曳整個圖層用）。
@@ -528,9 +553,31 @@ public sealed class EditorSession : IDisposable
         lock (Document.SyncRoot)
         {
             if (!FloatingSelection.CanOverlay(layer)) return false;
-            region = layer.ContentBounds;
+            var withEffects = RenderEffectsWhileDragging && layer.HasActiveEffects;
+            if (withEffects && layer.FxCache.HasPending)
+                LayerEffectRenderer.RenderLayerNow(Document, layer); // 快照要是最新的（通常閒置時早算完了）
+            withEffects &= layer.EffectsRendered;
+            region = withEffects ? layer.DisplayContentBounds : layer.ContentBounds;
             if (region.Width <= 0 || region.Height <= 0) return false;
-            _layerOverlay = new LayerDragOverlay(layer, layer.Surface.Snapshot(), region);
+
+            // 覆疊層的像素：效果快取（已含物件與外框／陰影）；否則基底像素＋物件（文字圖層整層拖曳文字要跟著走）
+            TileSnapshot snapshot;
+            var includesElements = false;
+            if (withEffects)
+            {
+                snapshot = layer.FxCache.Surface.Snapshot();
+                includesElements = true;
+            }
+            else if (layer.HasElements)
+            {
+                snapshot = SnapshotWithElements(layer);
+                includesElements = true;
+            }
+            else
+            {
+                snapshot = layer.Surface.Snapshot();
+            }
+            _layerOverlay = new LayerDragOverlay(layer, snapshot, region, includesElements);
         }
 
         // 讓合成器把這一層從結果裡拿掉（整趟拖曳只有這一次）
@@ -548,9 +595,42 @@ public sealed class EditorSession : IDisposable
         if (overlay == null || overlay.HandingOver) return;
 
         SKRectI region;
-        lock (Document.SyncRoot) region = overlay.Layer.ContentBounds;
+        lock (Document.SyncRoot) region = SKRectI.Union(overlay.Layer.DisplayContentBounds, overlay.Region);
         overlay.BeginHandover(region);
-        overlay.Layer.Invalidate(region);
+        // 純平移：效果快取是圖層座標、與 Offset 無關，只要重新合成，不必重算效果
+        overlay.Layer.InvalidateComposite(region);
+    }
+
+    /// <summary>基底像素（COW 共享）＋物件渲染進去的快照（圖層座標）。在 SyncRoot 內呼叫。</summary>
+    private static unsafe TileSnapshot SnapshotWithElements(RasterLayer layer)
+    {
+        using var temp = new TileSurface();
+        foreach (var (idx, tile) in layer.Surface.Tiles)
+        {
+            var dst = temp.GetTileForWrite(idx);
+            new ReadOnlySpan<uint>((uint*)tile.Pixels, Tile.Size * Tile.Size)
+                .CopyTo(new Span<uint>((uint*)dst.Pixels, Tile.Size * Tile.Size));
+        }
+        foreach (var el in layer.Elements)
+        {
+            if (el.Id == layer.HiddenElementId) continue;
+            var b = el.Bounds;
+            if (b.IsEmpty) continue;
+            var layerRect = new SKRectI(b.Left - layer.Offset.X, b.Top - layer.Offset.Y,
+                b.Right - layer.Offset.X, b.Bottom - layer.Offset.Y);
+            foreach (var idx in TileIndex.CoveringRect(layerRect))
+            {
+                var tile = temp.GetTileForWrite(idx);
+                using var surface = SKSurface.Create(Tile.Info, tile.Pixels, Tile.RowBytes);
+                if (surface == null) continue;
+                var tileRect = idx.ToPixelRect();
+                var canvas = surface.Canvas;
+                canvas.Translate(-tileRect.Left - layer.Offset.X, -tileRect.Top - layer.Offset.Y);
+                el.Render(canvas);
+                canvas.Flush();
+            }
+        }
+        return temp.Snapshot(); // 快照 AddRef 後 temp 可釋放
     }
 
     /// <summary>
@@ -565,11 +645,12 @@ public sealed class EditorSession : IDisposable
         private readonly TileSnapshot _snapshot;
         private readonly Dictionary<TileIndex, SKImage> _images;
 
-        internal LayerDragOverlay(RasterLayer layer, TileSnapshot snapshot, SKRectI region)
+        internal LayerDragOverlay(RasterLayer layer, TileSnapshot snapshot, SKRectI region, bool includesElements = false)
         {
             Layer = layer;
             _snapshot = snapshot;
             Region = region;
+            IncludesElements = includesElements;
             _images = new Dictionary<TileIndex, SKImage>(snapshot.Tiles.Count);
             foreach (var (idx, tile) in snapshot.Tiles)
             {
@@ -579,6 +660,9 @@ public sealed class EditorSession : IDisposable
         }
 
         public RasterLayer Layer { get; }
+
+        /// <summary>覆疊像素已含這層的物件（合成器拆下這層時連物件也不畫）。</summary>
+        public bool IncludesElements { get; }
 
         /// <summary>交接中：合成器已經把圖層算回去了，只補畫還沒重畫完的格子。</summary>
         public bool HandingOver { get; private set; }
@@ -1068,7 +1152,7 @@ public sealed class EditorSession : IDisposable
     {
         Document = document;
         Compositor = new Compositor(document, StrokeBuffer,
-            () => FloatingForCompositor, () => DetachedLayerId);
+            () => FloatingForCompositor, () => DetachedLayer);
         History = new HistoryManager(document);
         RegisterPendingEdit(new FloatingPendingEdit(this));
         RegisterPendingEdit(new TransformPendingEdit(this));
