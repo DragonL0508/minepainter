@@ -235,7 +235,15 @@ public sealed class BarSlider : Control
     protected override void OnPointerPressed(PointerPressedEventArgs e)
     {
         base.OnPointerPressed(e);
-        if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
+        var props = e.GetCurrentPoint(this).Properties;
+        if (props.IsRightButtonPressed)
+        {
+            // 右鍵＝直接輸入數值（拉條很難拉到精確的小數值時用）
+            ShowInputFlyout();
+            e.Handled = true;
+            return;
+        }
+        if (!props.IsLeftButtonPressed) return;
 
         // 雙擊＝回到預設值（第一下已經把值拉到指標處，這一下要蓋掉它）
         if (e.ClickCount == 2 && DefaultValue is { } def)
@@ -280,6 +288,50 @@ public sealed class BarSlider : Control
         SetAndNotify(Value + Math.Sign(e.Delta.Y) * step);
         DragCompleted?.Invoke(Value);
         e.Handled = true;
+    }
+
+    /// <summary>右鍵輸入數值：小視窗一個文字框，Enter 套用（夾在範圍內）、Esc 關閉。</summary>
+    private void ShowInputFlyout()
+    {
+        var box = new TextBox
+        {
+            Text = Value.ToString(Decimals > 0 ? "F" + Decimals : "0"),
+            Width = 90,
+            FontSize = 12,
+            Padding = new Thickness(6, 2),
+        };
+        var hint = new TextBlock
+        {
+            Text = $"{Minimum.ToString(Decimals > 0 ? "F" + Decimals : "0")} ～ {Maximum.ToString(Decimals > 0 ? "F" + Decimals : "0")}{Suffix}",
+            FontSize = 10,
+            Foreground = AppTheme.TextMutedBrush,
+        };
+        var panel = new StackPanel { Spacing = 4, Children = { box, hint } };
+        if (!string.IsNullOrEmpty(Label))
+            panel.Children.Insert(0, new TextBlock { Text = Label, FontSize = 12 });
+        var flyout = new Flyout { Content = panel, Placement = PlacementMode.Bottom, ShowMode = FlyoutShowMode.Transient };
+
+        void Apply()
+        {
+            if (double.TryParse(box.Text?.Trim(), System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out var v))
+            {
+                SetAndNotify(v);
+                DragCompleted?.Invoke(Value);
+            }
+            flyout.Hide();
+        }
+        box.KeyDown += (_, ke) =>
+        {
+            if (ke.Key == Key.Enter) { Apply(); ke.Handled = true; }
+            else if (ke.Key == Key.Escape) { flyout.Hide(); ke.Handled = true; }
+        };
+        flyout.Opened += (_, _) =>
+        {
+            box.Focus();
+            box.SelectAll();
+        };
+        flyout.ShowAt(this);
     }
 
     private void ApplyPointer(Point p)

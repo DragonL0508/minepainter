@@ -111,7 +111,7 @@ internal static class DistanceTransform
 /// <summary>物件外框：在不透明內容外圍描一圈顏色（文字外框就是這個；疊多筆 = 多層外框）。</summary>
 public sealed record ObjectOutlineEffect : IEffect
 {
-    public int Width { get; init; } = 5;     // 1..200
+    public int Width { get; init; } = 5;     // 1..60（滑桿；內部上限 100）
     public int Softness { get; init; } = 0;  // 0..100
     public SKColor Color { get; init; } = SKColors.Black;
 
@@ -131,7 +131,7 @@ public sealed record ObjectOutlineEffect : IEffect
 
     private static readonly ParamDef[] Params =
     [
-        new SliderParam("width", "寬度", 1, 200, o => ((ObjectOutlineEffect)o).Width,
+        new SliderParam("width", "寬度", 1, 60, o => ((ObjectOutlineEffect)o).Width,
             (o, v) => ((ObjectOutlineEffect)o) with { Width = (int)v }),
         new SliderParam("softness", "柔邊", 0, 100, o => ((ObjectOutlineEffect)o).Softness,
             (o, v) => ((ObjectOutlineEffect)o) with { Softness = (int)v }),
@@ -266,11 +266,11 @@ public sealed record ObjectShadowEffect : IEffect
 
     private static readonly ParamDef[] Params =
     [
-        new SliderParam("ox", "位移 X", -100, 100, o => ((ObjectShadowEffect)o).OffsetX,
+        new SliderParam("ox", "位移 X", -50, 50, o => ((ObjectShadowEffect)o).OffsetX,
             (o, v) => ((ObjectShadowEffect)o) with { OffsetX = (int)v }),
-        new SliderParam("oy", "位移 Y", -100, 100, o => ((ObjectShadowEffect)o).OffsetY,
+        new SliderParam("oy", "位移 Y", -50, 50, o => ((ObjectShadowEffect)o).OffsetY,
             (o, v) => ((ObjectShadowEffect)o) with { OffsetY = (int)v }),
-        new SliderParam("thickness", "厚度", 0, 100, o => ((ObjectShadowEffect)o).Thickness,
+        new SliderParam("thickness", "厚度", 0, 50, o => ((ObjectShadowEffect)o).Thickness,
             (o, v) => ((ObjectShadowEffect)o) with { Thickness = (int)v }),
         new SliderParam("blur", "模糊", 0, 50, o => ((ObjectShadowEffect)o).Blur,
             (o, v) => ((ObjectShadowEffect)o) with { Blur = (int)v }),
@@ -393,7 +393,7 @@ public sealed record ObjectGlowEffect : IEffect
 
     private static readonly ParamDef[] Params =
     [
-        new SliderParam("size", "大小", 1, 100, o => ((ObjectGlowEffect)o).Size,
+        new SliderParam("size", "大小", 1, 50, o => ((ObjectGlowEffect)o).Size,
             (o, v) => ((ObjectGlowEffect)o) with { Size = (int)v }),
         new SliderParam("spread", "擴散", 0, 30, o => ((ObjectGlowEffect)o).Spread,
             (o, v) => ((ObjectGlowEffect)o) with { Spread = (int)v }),
@@ -529,7 +529,7 @@ public sealed record ObjectFeatherEffect : IEffect
 
     private static readonly ParamDef[] Params =
     [
-        new SliderParam("radius", "半徑", 1, 100, o => ((ObjectFeatherEffect)o).Radius,
+        new SliderParam("radius", "半徑", 1, 50, o => ((ObjectFeatherEffect)o).Radius,
             (o, v) => ((ObjectFeatherEffect)o) with { Radius = (int)v }, "px"),
         new SliderParam("strength", "強度", 0, 100, o => ((ObjectFeatherEffect)o).Strength,
             (o, v) => ((ObjectFeatherEffect)o) with { Strength = (int)v }, "%"),
@@ -597,7 +597,7 @@ public sealed record InnerGlowEffect : IEffect
 
     private static readonly ParamDef[] Params =
     [
-        new SliderParam("size", "大小", 1, 100, o => ((InnerGlowEffect)o).Size,
+        new SliderParam("size", "大小", 1, 50, o => ((InnerGlowEffect)o).Size,
             (o, v) => ((InnerGlowEffect)o) with { Size = (int)v }, "px"),
         new SliderParam("spread", "擴散", 0, 30, o => ((InnerGlowEffect)o).Spread,
             (o, v) => ((InnerGlowEffect)o) with { Spread = (int)v }, "px"),
