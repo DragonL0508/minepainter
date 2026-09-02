@@ -1632,7 +1632,7 @@ public partial class MainWindow : Window
         var dialog = new BackgroundRemovalWindow(session, layer, models);
         await dialog.ShowDialog(this);
         if (dialog.Error != null) Toasts.Show("AI 去背失敗：" + dialog.Error);
-        else if (dialog.Applied) Toasts.Show("AI 去背完成");
+        else if (dialog.Applied) Toasts.Show(dialog.Note == null ? "AI 去背完成" : "AI 去背完成：" + dialog.Note);
         _layersContent.Refresh();
         RefreshUiState();
     }

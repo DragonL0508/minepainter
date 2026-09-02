@@ -32,7 +32,7 @@ public class BackgroundRemovalDebugDump
         }
 
         var model = new OnnxModelInfo(modelName, Path.Combine(models, modelName + ".onnx"));
-        var raw = BackgroundRemover.Infer(model, src, w, h, gpu: true, CancellationToken.None);
+        var raw = BackgroundRemover.Infer(model, src, w, h, gpu: Environment.GetEnvironmentVariable("MINEPAINTER_DUMP_GPU") != "0", CancellationToken.None);
         var scale = Math.Max(1, (int)MathF.Ceiling(Math.Max(w, h) / 1024f));
         var radius = Math.Max(16, 6 * scale);
         var refined = GuidedFilter.Refine(raw, src, w, h, radius);

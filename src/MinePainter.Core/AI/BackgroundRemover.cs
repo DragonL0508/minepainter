@@ -67,10 +67,36 @@ public static class OnnxModels
         }
     }
 
+    /// <summary>丟掉快取的 session：推論因記憶體不足失敗後要放掉 VRAM／系統記憶體，否則下一次更擠。</summary>
+    public static void DropCache()
+    {
+        lock (Gate)
+        {
+            _cached?.Session.Dispose();
+            _cached = null;
+        }
+    }
+
     private static InferenceSession Create(string path, bool gpu)
     {
         if (gpu)
         {
+            // 筆電常見雙顯卡：DirectML 的裝置 0 多半是內顯（VRAM 只有幾百 MB，大模型會 OOM），
+            // 先要求「高效能」偏好挑獨顯；舊版 runtime 不認這組選項時再退回裝置 0。
+            try
+            {
+                var opts = new SessionOptions { LogSeverityLevel = OrtLoggingLevel.ORT_LOGGING_LEVEL_FATAL };
+                opts.AppendExecutionProvider("DML", new Dictionary<string, string>
+                {
+                    ["performance_preference"] = "high_performance",
+                    ["device_filter"] = "gpu",
+                });
+                return new InferenceSession(path, opts);
+            }
+            catch
+            {
+                // 不支援選項或沒有獨顯：往下試裝置 0
+            }
             try
             {
                 var opts = new SessionOptions { LogSeverityLevel = OrtLoggingLevel.ORT_LOGGING_LEVEL_FATAL };
@@ -111,15 +137,24 @@ public static class BackgroundRemover
         lock (InferGate)
         {
             ct.ThrowIfCancellationRequested();
-            return InferCore(model, src, width, height, gpu, ct);
+            // 開算前先確定這台機器撐得住：不夠就直接丟 InsufficientMemoryException，不要跑到一半把系統拖死
+            var plan = InferenceBudget.Plan(model, model.Preset.Size, gpu);
+            LastPlanNote = plan.Note;
+            return InferCore(model, src, width, height, plan, ct);
         }
     }
 
-    private static unsafe byte[] InferCore(OnnxModelInfo model, uint[] src, int width, int height, bool gpu,
-        CancellationToken ct)
+    /// <summary>
+    /// 最近一次推論的計畫說明（例如「模型太大，改用 CPU」）；沒有話說時是 null。
+    /// 給 UI 在完成後顯示用。
+    /// </summary>
+    public static string? LastPlanNote { get; private set; }
+
+    private static unsafe byte[] InferCore(OnnxModelInfo model, uint[] src, int width, int height,
+        InferencePlan plan, CancellationToken ct)
     {
         var (size, mean, std, minMax) = model.Preset;
-        var session = OnnxModels.GetSession(model.Path, gpu);
+        var session = OnnxModels.GetSession(model.Path, plan.Provider == InferenceProvider.DirectMl);
 
         // 模型若是固定尺寸就用它的
         var inputName = session.InputMetadata.Keys.First();
@@ -155,8 +190,12 @@ public static class BackgroundRemover
 
         float[] pred;
         int outH, outW;
-        using (var results = session.Run(runOptions, new Dictionary<string, OrtValue> { [inputName] = inValue }, [outputName]))
+        // 推論全程盯著記憶體，超標就中止（見 MemoryWatchdog）；跑完把實測峰值記進成本表，
+        // 下一次就能在開算前判斷這台機器撐不撐得住、要不要用 GPU。
+        using var watchdog = new MemoryWatchdog(plan.BudgetBytes, () => runOptions.Terminate = true);
+        try
         {
+            using var results = session.Run(runOptions, new Dictionary<string, OrtValue> { [inputName] = inValue }, [outputName]);
             ct.ThrowIfCancellationRequested();
             var outValue = results[0];
             var shape = outValue.GetTensorTypeAndShape().Shape;
@@ -164,6 +203,25 @@ public static class BackgroundRemover
             outW = (int)shape[^1];
             pred = outValue.GetTensorDataAsSpan<float>().Slice(0, outH * outW).ToArray();
         }
+        catch (Exception e) when (watchdog.Tripped && e is not OperationCanceledException)
+        {
+            ModelCostStore.Record(model, plan.Provider, size, watchdog.PeakGrowthBytes, failed: true);
+            OnnxModels.DropCache();
+            throw new InsufficientMemoryException(
+                $"記憶體不足，去背已中止：{model.Name} 在" +
+                $"{(plan.Provider == InferenceProvider.DirectMl ? " GPU" : " CPU")}上用掉超過 " +
+                $"{plan.BudgetBytes / (double)(1L << 30):0.0} GB。" +
+                "已記下這個結果，下次會自動避開；請改用較輕的模型（例如 isnet-general-use）或先關掉一些程式。", e);
+        }
+        catch (OnnxRuntimeException) when (plan.Provider == InferenceProvider.DirectMl)
+        {
+            // DirectML 自己回報配置失敗（VRAM 不夠）：跟看門狗中止一樣要記下來，別再選 GPU
+            ModelCostStore.Record(model, InferenceProvider.DirectMl, size, watchdog.PeakGrowthBytes, failed: true);
+            OnnxModels.DropCache();
+            throw;
+        }
+        watchdog.Dispose(); // 先停，峰值才含推論最後一刻
+        ModelCostStore.Record(model, plan.Provider, size, watchdog.PeakGrowthBytes, failed: false);
 
         // 後處理：不在 0..1 → sigmoid；u2net 系 → min-max 正規化
         float min = float.MaxValue, max = float.MinValue;

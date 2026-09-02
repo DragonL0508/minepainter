@@ -43,6 +43,8 @@ public sealed class BackgroundRemovalWindow : ModalDialog
     public bool Applied { get; private set; }
     /// <summary>失敗訊息（null = 沒失敗）。</summary>
     public string? Error { get; private set; }
+    /// <summary>成功但有話要說（例如「模型太大，改用 CPU」）；沒有回 null。</summary>
+    public string? Note { get; private set; }
 
     public BackgroundRemovalWindow(EditorSession session, RasterLayer layer, IReadOnlyList<OnnxModelInfo> models)
         : base("AI 去背", 380)
@@ -62,6 +64,11 @@ public sealed class BackgroundRemovalWindow : ModalDialog
         ToolTip.SetTip(_solidCheck, "模型的機率圖在物件內部常只有六、七成，會讓內部變半透明；勾選後離邊界夠遠的內部一律不透明，半透明只留在邊緣（髮絲、毛邊）");
         ToolTip.SetTip(_contrastBar, "遮罩對比：拉高可去掉半透明的殘影，但也會失去柔邊");
         ToolTip.SetTip(_shiftBar, "邊緣收縮（負）／擴張（正）：收縮可吃掉殘留的背景色邊");
+        // 選好模型就先講清楚這台機器會怎麼跑（GPU／CPU、要多少記憶體、跑不跑得動），
+        // 而不是按下去才發現記憶體不夠
+        _modelCombo.SelectionChanged += (_, _) => UpdatePlanHint();
+        _gpuCheck.IsCheckedChanged += (_, _) => UpdatePlanHint();
+        UpdatePlanHint();
 
         var hint = new TextBlock
         {
@@ -94,6 +101,14 @@ public sealed class BackgroundRemovalWindow : ModalDialog
         SetBody(body, ButtonRow(_okButton, _cancelButton));
 
         Closing += (_, _) => _cts?.Cancel();
+    }
+
+    /// <summary>把「這台機器會怎麼跑這個模型」寫進狀態列。</summary>
+    private void UpdatePlanHint()
+    {
+        if (_running || _models.Count == 0) return;
+        var model = _models[Math.Clamp(_modelCombo.SelectedIndex, 0, _models.Count - 1)];
+        _status.Text = InferenceBudget.Describe(model, model.Preset.Size, _gpuCheck.IsChecked == true);
     }
 
     /// <summary>「確定」= 開始跑；跑完自己關窗。回傳 false 讓對話框留著。</summary>
@@ -142,6 +157,7 @@ public sealed class BackgroundRemovalWindow : ModalDialog
                     {
                         Applied = t.Result;
                         if (!Applied) Error = "圖層沒有內容";
+                        else Note = BackgroundRemover.LastPlanNote;
                     }
                     _running = false;
                     Confirmed = Applied;
