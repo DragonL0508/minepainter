@@ -1581,7 +1581,7 @@ public partial class MainWindow : Window
         using var fx = new EffectSession(session, layer);
         if (fx.IsEmpty) return;
         var levels = LevelsAdjustment.FromHistogram(fx.Histogram());
-        if (Services.AppSettings.Instance.NonDestructiveEffects)
+        if (Services.AppSettings.Instance.NonDestructiveEffects || layer.IsTextLayer)
         {
             var effect = new AdjustmentEffect(levels);
             LayerEffectCommands.Add(session.Document, session.History, layer,
@@ -1608,8 +1608,10 @@ public partial class MainWindow : Window
             Toasts.Show("請先選擇一個點陣圖層");
             return;
         }
-        if (Services.AppSettings.Instance.NonDestructiveEffects)
+        if (Services.AppSettings.Instance.NonDestructiveEffects || layer.IsTextLayer)
         {
+            // 文字圖層永遠不含像素：效果一律記錄在堆疊（破壞性套用會把效果寫成像素）
+            if (!Services.AppSettings.Instance.NonDestructiveEffects) Toasts.Show("文字圖層的效果一律記錄在圖層效果堆疊");
             await ApplyToLayerStackAsync(session, layer, effect, name, showDialog);
             return;
         }

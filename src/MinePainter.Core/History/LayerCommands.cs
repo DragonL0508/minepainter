@@ -250,31 +250,29 @@ public static class LayerCommands
         if (index <= 0) return false;
         if (parent.Children[index - 1] is not RasterLayer target) return false;
 
+        // 合併結果一定是純像素圖層（文字圖層不變式）：下層自己的文字先烙進像素，
+        // 上層的像素與文字再以上層的混合模式／不透明度烘上去；文字物件不搬家。
         TileDeltaEntry? pixelEntry;
+        VectorElement[] targetElements;
         lock (doc.SyncRoot)
         {
             using var before = target.Surface.Snapshot();
-            var affected = MergeInto(source, target);
+            targetElements = target.Elements.ToArray();
+            var affected = MergeInto(source, target, targetElements);
             pixelEntry = affected.IsEmpty
                 ? null
                 : TileDeltaEntry.Capture("合併圖層", target, before, affected);
-        }
-
-        // 上層的物件搬到下層
-        var movedElements = source.Elements.ToList();
-        lock (doc.SyncRoot)
-        {
-            foreach (var element in movedElements) target.AddElement(element);
+            foreach (var element in targetElements) target.RemoveElement(element.Id);
         }
 
         var elementEntry = new ActionHistoryEntry("合併物件", SKRectI.Empty,
             undo: _ =>
             {
-                foreach (var element in movedElements) target.RemoveElement(element.Id);
+                foreach (var element in targetElements) target.AddElement(element);
             },
             redo: _ =>
             {
-                foreach (var element in movedElements) target.AddElement(element);
+                foreach (var element in targetElements) target.RemoveElement(element.Id);
             });
 
         lock (doc.SyncRoot)
@@ -369,14 +367,26 @@ public static class LayerCommands
         return true;
     }
 
-    /// <summary>把 source 的像素（含其 opacity/blend）畫進 target；回傳受影響範圍（target 圖層座標）。</summary>
-    private static SKRectI MergeInto(RasterLayer source, RasterLayer target)
+    /// <summary>
+    /// 把 target 自己的文字、再把 source 的像素與文字（含 source 的 opacity/blend）畫進 target 像素；
+    /// 回傳受影響範圍（target 圖層座標）。
+    /// </summary>
+    private static SKRectI MergeInto(RasterLayer source, RasterLayer target, VectorElement[] targetElements)
     {
         var docBounds = source.Surface.ContentBounds;
+        if (!docBounds.IsEmpty)
+        {
+            docBounds = new SKRectI(
+                docBounds.Left + source.Offset.X, docBounds.Top + source.Offset.Y,
+                docBounds.Right + source.Offset.X, docBounds.Bottom + source.Offset.Y);
+        }
+        foreach (var el in source.Elements.Concat(targetElements))
+        {
+            var b = el.Bounds;
+            if (b.IsEmpty) continue;
+            docBounds = docBounds.IsEmpty ? b : SKRectI.Union(docBounds, b);
+        }
         if (docBounds.IsEmpty) return SKRectI.Empty;
-        docBounds = new SKRectI(
-            docBounds.Left + source.Offset.X, docBounds.Top + source.Offset.Y,
-            docBounds.Right + source.Offset.X, docBounds.Bottom + source.Offset.Y);
 
         var targetRect = new SKRectI(
             docBounds.Left - target.Offset.X, docBounds.Top - target.Offset.Y,
@@ -387,23 +397,49 @@ public static class LayerCommands
             Color = SKColors.White.WithAlpha((byte)(source.Opacity * 255)),
             BlendMode = source.BlendMode.ToSkia(),
         };
+        var sourceElements = source.Elements.ToArray();
 
         foreach (var idx in TileIndex.CoveringRect(targetRect))
         {
+            var tileRect = idx.ToPixelRect();
+            var tileDoc = new SKRectI(
+                tileRect.Left + target.Offset.X, tileRect.Top + target.Offset.Y,
+                tileRect.Right + target.Offset.X, tileRect.Bottom + target.Offset.Y);
+            var touched = source.Surface.Tiles.Keys.Any(s =>
+            {
+                var r = s.ToPixelRect();
+                return new SKRectI(r.Left + source.Offset.X, r.Top + source.Offset.Y,
+                    r.Right + source.Offset.X, r.Bottom + source.Offset.Y).IntersectsWith(tileDoc);
+            }) || sourceElements.Concat(targetElements).Any(el => el.Bounds.IntersectsWith(tileDoc));
+            if (!touched) continue; // 沒東西落在這格：別建空 tile（會白進 undo）
+
             var tile = target.Surface.GetTileForWrite(idx);
             using var surface = SKSurface.Create(Tile.Info, tile.Pixels, Tile.RowBytes);
             var canvas = surface.Canvas;
-            var tileRect = idx.ToPixelRect();
             canvas.Translate(-tileRect.Left - target.Offset.X, -tileRect.Top - target.Offset.Y);
 
+            // 1) 下層自己的文字（原本就合成在它像素之上）
+            foreach (var el in targetElements)
+            {
+                if (el.Bounds.IntersectsWith(tileDoc)) el.Render(canvas);
+            }
+
+            // 2) 上層（像素＋文字）以上層的 opacity/blend 整體疊上（隔離層：物件與像素重疊處不算兩次）
+            canvas.SaveLayer(paint);
             foreach (var (srcIdx, srcTile) in source.Surface.Tiles)
             {
                 var srcRect = srcIdx.ToPixelRect();
                 using var pixmap = srcTile.AsPixmap();
                 using var img = SKImage.FromPixels(pixmap);
-                canvas.DrawImage(img, srcRect.Left + source.Offset.X, srcRect.Top + source.Offset.Y, paint);
+                canvas.DrawImage(img, srcRect.Left + source.Offset.X, srcRect.Top + source.Offset.Y);
             }
+            foreach (var el in sourceElements)
+            {
+                if (el.Bounds.IntersectsWith(tileDoc)) el.Render(canvas);
+            }
+            canvas.Restore();
             canvas.Flush();
+            if (tile.IsBlank()) target.Surface.RemoveTile(idx);
         }
         return targetRect;
     }

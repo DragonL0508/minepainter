@@ -57,6 +57,14 @@ public sealed class Document : IDisposable
     public LayerNode? FindLayer(Guid id) => FindRecursive(Root, id);
 
     /// <summary>深度優先枚舉所有節點（不含 root）。</summary>
+    /// <summary>第一個違反「文字圖層不能有像素」不變式的圖層（null = 文件乾淨）。</summary>
+    public Layers.RasterLayer? FindMixedLayer()
+    {
+        foreach (var node in Descendants())
+            if (node is Layers.RasterLayer { ViolatesTextLayerInvariant: true } r) return r;
+        return null;
+    }
+
     public IEnumerable<LayerNode> Descendants() => DescendantsOf(Root);
 
     private static IEnumerable<LayerNode> DescendantsOf(GroupLayer group)

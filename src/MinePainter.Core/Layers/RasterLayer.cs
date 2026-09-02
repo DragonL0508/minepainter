@@ -104,6 +104,13 @@ public sealed class RasterLayer : LayerNode, IDisposable
     /// </summary>
     public bool IsTextLayer => _elements.Count > 0;
 
+    /// <summary>
+    /// 文字圖層不變式：有物件的圖層不能同時有像素（反之亦然）。
+    /// 所有會把像素寫進圖層或把物件放進圖層的入口都得維持這條；
+    /// 測試以此驗證整份文件（<see cref="Documents.Document.FindMixedLayer"/>）。
+    /// </summary>
+    public bool ViolatesTextLayerInvariant => _elements.Count > 0 && !Surface.ExactContentBounds().IsEmpty;
+
     /// <summary>物件層的 tile 快取（compositor 專用）。</summary>
     internal GroupCache ElementCache { get; } = new();
 

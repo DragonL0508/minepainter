@@ -901,7 +901,7 @@ public sealed class EditorSession : IDisposable
         {
             // 整層內容的縮放不是選取操作：之前沒有選取、之後也不該多出一個
             ApplySelection(null);
-            if (pixelEntry != null) History.Push(pixelEntry);
+            if (pixelEntry != null) History.Push(WithPasteLayer(layer, pixelEntry, label));
         }
         else
         {
@@ -924,6 +924,7 @@ public sealed class EditorSession : IDisposable
             IHistoryEntry entry = pixelEntry != null
                 ? new CompositeHistoryEntry(label, pixelEntry, selectionEntry)
                 : selectionEntry;
+            entry = WithPasteLayer(layer, entry, label);
             History.Push(entry);
 
             // 縮放過才留續接點（純平移的像素本來就無損）；要在 Push 之後（Push 會清掉舊的）
@@ -962,6 +963,7 @@ public sealed class EditorSession : IDisposable
                 LeaveGhost(floating, new SKRect(src.Left, src.Top, src.Right, src.Bottom), overlaid);
             }
             layer.Invalidate(floating.AffectedBounds); // 貼上也要重繪：浮動預覽要從畫面上消失
+            if (floating.IsPasted) DropPasteLayer(layer); // 貼到文字圖層時臨時插入的圖層一起收掉
         }
         // 貼上：原圖層根本沒被動過，只要清掉貼上時建立的選取框。
         // 整層內容：提起前本來就沒有選取，取消後也不該多出一個。
@@ -969,19 +971,80 @@ public sealed class EditorSession : IDisposable
         floating.Dispose();
     }
 
+    /// <summary>貼到文字圖層時臨時插入的新圖層＋它的 history 條目：落地時併進貼上那一步，取消時整個收掉。</summary>
+    private (RasterLayer Layer, ActionHistoryEntry Entry)? _pasteLayerEntry;
+
+    /// <summary>浮動內容落地：把「貼上時新增的圖層」那條併進來（同一步 undo）。</summary>
+    private IHistoryEntry WithPasteLayer(RasterLayer layer, IHistoryEntry entry, string label)
+    {
+        if (_pasteLayerEntry is not { } pending || !ReferenceEquals(pending.Layer, layer)) return entry;
+        _pasteLayerEntry = null;
+        return new CompositeHistoryEntry(label, pending.Entry, entry);
+    }
+
+    /// <summary>貼上取消：貼上時臨時插入的圖層一起拿掉（沒進 history，直接釋放）。</summary>
+    private void DropPasteLayer(RasterLayer layer)
+    {
+        if (_pasteLayerEntry is not { } pending || !ReferenceEquals(pending.Layer, layer)) return;
+        _pasteLayerEntry = null;
+        lock (Document.SyncRoot)
+        {
+            var parent = layer.Parent;
+            if (parent == null) return;
+            var index = parent.IndexOf(layer);
+            parent.Remove(layer);
+            if (ReferenceEquals(Document.ActiveLayer, layer) || Document.ActiveLayer == null)
+                Document.ActiveLayer = index > 0 && index - 1 < parent.Children.Count ? parent.Children[index - 1] : parent;
+        }
+        layer.Dispose();
+        Document.NotifyChanged(Document.Bounds);
+    }
+
     /// <summary>
     /// 把外部影像貼成浮動內容（貼上）。選取框設為貼上矩形，
     /// 之後移動/縮放/提交都走既有的浮動選取流程。接手 <paramref name="pixels"/> 的擁有權。
+    /// 作用中是文字圖層時貼到它上方的新圖層（文字圖層永遠不含像素）。
     /// </summary>
     public bool PasteImage(SKImage pixels, SKPointI position)
     {
         CommitPendingEdits(); // 先落地現有的浮動內容/編輯，貼上才不會蓋在半空中的狀態上
 
-        if (Document.ActiveLayer is not RasterLayer layer)
+        RasterLayer layer;
+        switch (Document.ActiveLayer)
         {
-            Notify("請先選擇一般圖層再貼上");
-            pixels.Dispose();
-            return false;
+            case RasterLayer { IsTextLayer: true } textLayer:
+            {
+                // 文字圖層不收像素（不變式）：貼到它上方的新圖層，落地時與貼上合成同一步 undo
+                var parent = textLayer.Parent ?? Document.Root;
+                var index = parent.IndexOf(textLayer) + 1;
+                layer = new RasterLayer { Name = "貼上的圖層" };
+                var inserted = layer;
+                lock (Document.SyncRoot)
+                {
+                    parent.Insert(index, inserted);
+                    Document.ActiveLayer = inserted;
+                }
+                _pasteLayerEntry = (inserted, new ActionHistoryEntry("新增圖層", Document.Bounds,
+                    undo: d =>
+                    {
+                        if (ReferenceEquals(d.ActiveLayer, inserted)) d.ActiveLayer = textLayer;
+                        parent.Remove(inserted);
+                    },
+                    redo: _ => parent.Insert(Math.Min(index, parent.Children.Count), inserted),
+                    onDispose: () =>
+                    {
+                        if (inserted.Document == null) inserted.Dispose();
+                    }));
+                Notify("文字圖層不能貼上像素，已貼到新圖層");
+                break;
+            }
+            case RasterLayer raster:
+                layer = raster;
+                break;
+            default:
+                Notify("請先選擇一般圖層再貼上");
+                pixels.Dispose();
+                return false;
         }
 
         var bounds = SKRectI.Create(position.X, position.Y, pixels.Width, pixels.Height);
