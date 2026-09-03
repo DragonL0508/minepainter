@@ -10,12 +10,16 @@ namespace MinePainter.Core.History;
 /// 上限是「所有開啟中的文件共用」（<see cref="GlobalMemoryLimit"/>）而不是每份文件各自一份 ——
 /// 每份各 1 GB 的話，開五個分頁的 undo 就能吃掉 5 GB。每份文件分到 1/N，
 /// 但不低於 <see cref="MinimumShareBytes"/>，開再多分頁每一份都還留得住幾步。
+///
+/// 「開新分頁時把既有文件也縮到新的份額」意味著會從別的執行緒動到別份文件的堆疊，
+/// 所以兩個堆疊的存取都用 <c>_gate</c> 保護（進 Document.SyncRoot 之前才拿，沒有反向路徑）。
 /// </summary>
 public sealed class HistoryManager : IDisposable
 {
     private readonly Document _document;
     private readonly List<IHistoryEntry> _undo = new();
     private readonly List<IHistoryEntry> _redo = new();
+    private readonly object _gate = new();
 
     /// <summary>這份文件自己的上限（實際生效值還會再取「全域預算 ÷ 文件數」的較小者）。</summary>
     public long MemoryLimit { get; set; } = 1L << 30; // 1 GB
@@ -79,10 +83,10 @@ public sealed class HistoryManager : IDisposable
         foreach (var m in all) m.EvictIfNeeded();
     }
 
-    public bool CanUndo => _undo.Count > 0;
-    public bool CanRedo => _redo.Count > 0;
-    public string? UndoLabel => _undo.Count > 0 ? _undo[^1].Label : null;
-    public string? RedoLabel => _redo.Count > 0 ? _redo[^1].Label : null;
+    public bool CanUndo { get { lock (_gate) return _undo.Count > 0; } }
+    public bool CanRedo { get { lock (_gate) return _redo.Count > 0; } }
+    public string? UndoLabel { get { lock (_gate) return _undo.Count > 0 ? _undo[^1].Label : null; } }
+    public string? RedoLabel { get { lock (_gate) return _redo.Count > 0 ? _redo[^1].Label : null; } }
     public IReadOnlyList<IHistoryEntry> UndoStack => _undo;
     public IReadOnlyList<IHistoryEntry> RedoStack => _redo;
 
@@ -92,33 +96,41 @@ public sealed class HistoryManager : IDisposable
     /// </summary>
     internal void JumpTo(int undoDepth)
     {
-        while (_undo.Count > undoDepth && Undo())
+        while (UndoDepth > undoDepth && Undo())
         {
         }
-        while (_undo.Count < undoDepth && Redo())
+        while (UndoDepth < undoDepth && Redo())
         {
         }
     }
+
+    private int UndoDepth { get { lock (_gate) return _undo.Count; } }
 
     public long TotalMemoryCost
     {
         get
         {
-            long total = 0;
-            foreach (var e in _undo) total += e.MemoryCost;
-            foreach (var e in _redo) total += e.MemoryCost;
-            return total;
+            lock (_gate)
+            {
+                long total = 0;
+                foreach (var e in _undo) total += e.MemoryCost;
+                foreach (var e in _redo) total += e.MemoryCost;
+                return total;
+            }
         }
     }
 
     /// <summary>記錄一步已執行完的操作（清空 redo）。</summary>
     public void Push(IHistoryEntry entry)
     {
-        foreach (var e in _redo) e.Dispose();
-        _redo.Clear();
+        lock (_gate)
+        {
+            foreach (var e in _redo) e.Dispose();
+            _redo.Clear();
 
-        _undo.Add(entry);
-        EvictIfNeeded();
+            _undo.Add(entry);
+            EvictLocked();
+        }
         Changed?.Invoke();
     }
 
@@ -137,25 +149,31 @@ public sealed class HistoryManager : IDisposable
     /// </summary>
     public void CollapseLast(int count, string? label = null)
     {
-        if (count <= 1 || count > _undo.Count) return;
-        var steps = _undo.GetRange(_undo.Count - count, count);
-        _undo.RemoveRange(_undo.Count - count, count);
-        _undo.Add(new CompositeHistoryEntry(label ?? steps[^1].Label, steps.ToArray()));
+        lock (_gate)
+        {
+            if (count <= 1 || count > _undo.Count) return;
+            var steps = _undo.GetRange(_undo.Count - count, count);
+            _undo.RemoveRange(_undo.Count - count, count);
+            _undo.Add(new CompositeHistoryEntry(label ?? steps[^1].Label, steps.ToArray()));
+        }
         Changed?.Invoke();
     }
 
     internal bool Undo()
     {
-        if (_undo.Count == 0) return false;
-        var entry = _undo[^1];
-        _undo.RemoveAt(_undo.Count - 1);
-
-        lock (_document.SyncRoot)
+        lock (_gate)
         {
-            entry.Undo(_document);
-        }
+            if (_undo.Count == 0) return false;
+            var entry = _undo[^1];
+            _undo.RemoveAt(_undo.Count - 1);
 
-        _redo.Add(entry);
+            lock (_document.SyncRoot)
+            {
+                entry.Undo(_document);
+            }
+
+            _redo.Add(entry);
+        }
         Changed?.Invoke();
         return true;
     }
@@ -163,24 +181,34 @@ public sealed class HistoryManager : IDisposable
     /// <summary>internal：UI 一律走 <see cref="Tools.EditorSession.Redo"/>。</summary>
     internal bool Redo()
     {
-        if (_redo.Count == 0) return false;
-        var entry = _redo[^1];
-        _redo.RemoveAt(_redo.Count - 1);
-
-        lock (_document.SyncRoot)
+        lock (_gate)
         {
-            entry.Redo(_document);
-        }
+            if (_redo.Count == 0) return false;
+            var entry = _redo[^1];
+            _redo.RemoveAt(_redo.Count - 1);
 
-        _undo.Add(entry);
+            lock (_document.SyncRoot)
+            {
+                entry.Redo(_document);
+            }
+
+            _undo.Add(entry);
+        }
         Changed?.Invoke();
         return true;
     }
 
     private void EvictIfNeeded()
     {
+        lock (_gate) EvictLocked();
+    }
+
+    private void EvictLocked()
+    {
         var limit = EffectiveMemoryLimit;
-        var total = TotalMemoryCost;
+        long total = 0;
+        foreach (var e in _undo) total += e.MemoryCost;
+        foreach (var e in _redo) total += e.MemoryCost;
         while (total > limit && _undo.Count > 1)
         {
             var oldest = _undo[0];
@@ -193,9 +221,12 @@ public sealed class HistoryManager : IDisposable
     public void Dispose()
     {
         lock (Live) Live.Remove(this);
-        foreach (var e in _undo) e.Dispose();
-        foreach (var e in _redo) e.Dispose();
-        _undo.Clear();
-        _redo.Clear();
+        lock (_gate)
+        {
+            foreach (var e in _undo) e.Dispose();
+            foreach (var e in _redo) e.Dispose();
+            _undo.Clear();
+            _redo.Clear();
+        }
     }
 }

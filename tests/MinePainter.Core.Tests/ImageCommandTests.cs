@@ -1,4 +1,4 @@
-using MinePainter.Core.History;
+﻿using MinePainter.Core.History;
 using MinePainter.Core.IO;
 using MinePainter.Core.Layers;
 using MinePainter.Core.Tiles;
@@ -179,16 +179,52 @@ public class TextTransformResetTests
         var helper = new ElementDragHelper();
         Assert.True(helper.TryBegin(session, new SKPoint(frame.Right, frame.Bottom), 6f, allowInsideMove: false));
         helper.Continue(session, new SKPoint(frame.Right + 60, frame.Bottom + 60), ToolModifiers.Shift);
+        // 手勢中只動覆疊圖（帶效果的文字每步重算太慢），原件放開才改
+        Assert.Equal(1.5f, ((TextElement)layer.Elements[0]).ScaleX, 3);
+        Assert.NotNull(session.ElementOverlay);
+        Assert.True(session.ElementOverlay!.CurrentRect.Width > session.ElementOverlay.Bounds.Width);
+
+        helper.End(session);
         var resized = Assert.IsType<TextElement>(layer.Elements[0]);
         Assert.Equal(1f, resized.ScaleX, 3); // Shift＝原始比例：ScaleX 歸 1，字級等比
         Assert.True(resized.FontSize > 40f);
         Assert.Equal(40f, resized.BaseFontSize);
-        helper.End(session);
     }
 }
 
 public class ElementDragOverlayTests
 {
+    [Fact]
+    public void RotateText_UsesOverlayDuringGesture_AndCommitsOnEnd()
+    {
+        using var doc = ImageCodec.CreateBlankDocument(300, 200, SKColors.White);
+        var layer = (RasterLayer)doc.ActiveLayer!;
+        var text = new TextElement { Text = "Spin", FontSize = 32, Position = new SKPoint(40, 40) };
+        lock (doc.SyncRoot) layer.AddElement(text);
+        using var session = new EditorSession(doc);
+        ElementDragHelper.SetSelected(session, layer, text);
+
+        var frame = text.FrameBounds;
+        var center = new SKPoint(frame.MidX, frame.MidY);
+        var helper = new ElementDragHelper();
+        Assert.True(helper.TryBeginRotate(session, new SKPoint(center.X + 50, center.Y)));
+        Assert.NotNull(session.ElementOverlay); // 手勢一開始就換成覆疊圖
+
+        helper.ContinueRotate(session, new SKPoint(center.X, center.Y + 50)); // +90°
+        Assert.Equal(0f, ((TextElement)layer.FindElement(text.Id)!).Rotation, 3); // 原件還沒動
+        Assert.Equal(90f, session.ElementOverlay!.Rotation, 1);                   // 只有覆疊圖在轉
+        Assert.Equal(90f, session.SelectionHandlesRotation, 1);                   // 把手框跟著轉
+
+        helper.End(session);
+        Assert.Null(session.ElementOverlay);
+        Assert.Equal(90f, ((TextElement)layer.FindElement(text.Id)!).Rotation, 1); // 放開才真的改
+        Assert.NotNull(session.Ghost);
+        Assert.Equal(90f, session.Ghost!.Rotation, 1); // 殘影同姿態，放開不會閃回原角度
+        Assert.True(session.History.CanUndo);
+        Assert.True(session.Undo());
+        Assert.Equal(0f, ((TextElement)layer.FindElement(text.Id)!).Rotation, 3);
+    }
+
     [Fact]
     public void MoveText_UsesOverlayDuringDrag_AndCommitsOnEnd()
     {
@@ -205,7 +241,7 @@ public class ElementDragOverlayTests
 
         helper.Continue(session, new SKPoint(80, 70));
         Assert.Equal(40f, ((TextElement)layer.FindElement(text.Id)!).Position.X); // 拖曳中原件不動
-        Assert.Equal(30f, session.ElementOverlay!.OffsetX, 3);
+        Assert.Equal(session.ElementOverlay!.Bounds.Left + 30f, session.ElementOverlay.CurrentRect.Left, 3);
         var handles = session.SelectionHandles!.Value;
         Assert.True(handles.Left > text.FrameBounds.Left + 25); // 把手跟著覆疊走
 

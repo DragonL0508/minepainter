@@ -282,15 +282,41 @@ public sealed class CanvasDrawOperation : ICustomDrawOperation
 
         if (_session.Ghost is { } ghost)
         {
-            using var paint = new SKPaint { FilterQuality = quality };
+            using var paint = new SKPaint
+            {
+                FilterQuality = ghost.Rotation != 0 ? SKFilterQuality.Low : quality,
+                IsAntialias = ghost.Rotation != 0,
+            };
+            if (ghost.Rotation != 0)
+            {
+                canvas.Save();
+                canvas.RotateDegrees(ghost.Rotation, ghost.Rect.MidX, ghost.Rect.MidY);
+            }
             canvas.DrawImage(ghost.Image, ghost.Rect, paint);
+            if (ghost.Rotation != 0) canvas.Restore();
         }
 
-        // 拖曳中的文字物件：一張圖跟著滑鼠走（原件已隱藏）
+        // 手勢中的文字物件：一張圖跟著滑鼠走／轉／縮（原件已隱藏）
         if (_session.ElementOverlay is { } element)
         {
-            using var paint = new SKPaint { FilterQuality = quality };
-            canvas.DrawImage(element.Image, element.CurrentRect, paint);
+            var elementRect = element.CurrentRect; // 只讀一次：UI thread 正在改它
+            var rotation = element.Rotation;
+            var transformed = rotation != 0 ||
+                              elementRect.Width != element.Bounds.Width ||
+                              elementRect.Height != element.Bounds.Height;
+            using var paint = new SKPaint
+            {
+                // 縮放／旋轉中的預覽用 Low（放開後合成器會用完整品質重畫）
+                FilterQuality = transformed ? SKFilterQuality.Low : quality,
+                IsAntialias = transformed,
+            };
+            if (rotation != 0)
+            {
+                canvas.Save();
+                canvas.RotateDegrees(rotation, elementRect.MidX, elementRect.MidY);
+            }
+            canvas.DrawImage(element.Image, elementRect, paint);
+            if (rotation != 0) canvas.Restore();
         }
 
         if (_session.FloatingOverlay is not { } floating) return;

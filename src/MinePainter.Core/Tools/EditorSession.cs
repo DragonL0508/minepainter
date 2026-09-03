@@ -164,11 +164,15 @@ public sealed class EditorSession : IDisposable
         lock (Document.SyncRoot)
         {
             var frame = HandleDragController.GetFrame(this);
-            // 物件拖曳覆疊中：把手跟著覆疊圖走（原件還在原位）
+            // 物件手勢覆疊中：把手跟著覆疊圖的變換走（原件還在原位、還沒改）
+            var overlayRotation = 0f;
             if (frame is { } f && _elementOverlay is { } overlay && SelectedElement?.ElementId == overlay.ElementId)
-                frame = SKRect.Create(f.Left + overlay.OffsetX, f.Top + overlay.OffsetY, f.Width, f.Height);
+            {
+                frame = overlay.MapFrame(f);
+                overlayRotation = overlay.Rotation;
+            }
             SelectionHandles = frame;
-            SelectionHandlesRotation = Transform?.DisplayRotation ?? 0f;
+            SelectionHandlesRotation = Transform?.DisplayRotation ?? overlayRotation;
             SelectionHandlesWarp = Transform?.Warp;
             SelectionHandlesQuad = SelectionHandlesWarp == null ? Transform?.Quad : null;
 
@@ -479,7 +483,7 @@ public sealed class EditorSession : IDisposable
     /// 覆疊路徑下，快取裡的舊 tile 本來就不含浮動內容，少了這層畫面會閃一下
     /// 「東西不見了」再跳出來。合成器追上（<see cref="Compositor.IsRegionClean"/>）就收掉。
     /// </summary>
-    public sealed class OverlayGhost(SKImage image, SKRect rect, SKRectI region)
+    public sealed class OverlayGhost(SKImage image, SKRect rect, SKRectI region, float rotation = 0f)
     {
         public SKImage Image { get; } = image;
 
@@ -488,6 +492,10 @@ public sealed class EditorSession : IDisposable
 
         /// <summary>等這塊合成完就可以收掉。</summary>
         public SKRectI Region { get; } = region;
+
+        /// <summary>以 <see cref="Rect"/> 中心為軸的角度：旋轉手勢的殘影要跟覆疊圖同一個姿態，
+        /// 否則放開的瞬間會閃一下轉回原角度。</summary>
+        public float Rotation { get; } = rotation;
     }
 
     private volatile OverlayGhost? _ghost;
@@ -516,8 +524,12 @@ public sealed class EditorSession : IDisposable
     }
 
     /// <summary>
-    /// 拖曳中的文字物件覆疊：拖曳開始時把物件渲染成一張圖、隱藏原件，
-    /// 拖曳期間只挪這張圖（不重排版、不逐格重畫文字），放開才真正改物件。
+    /// 手勢中的文字物件覆疊：手勢開始時把物件（含效果）渲染成一張圖、隱藏原件，
+    /// 手勢期間只變換這張圖 —— 不重排版、不逐格重畫、更不重算效果堆疊，放開才真正改物件。
+    ///
+    /// 移動、旋轉、縮放共用同一張圖：4K 帶外框／陰影的文字，效果堆疊算一次要 0.26 秒，
+    /// 每個 pointer-move 都重算就是「怎麼拖都跟不上」。代價是手勢中的效果跟著整張圖轉／縮
+    /// （陰影角度、外框粗細會暫時失真），放開重算一次就校正回來 —— PS 的變形預覽也是這樣。
     /// </summary>
     public sealed class ElementDragOverlay(RasterLayer layer, Guid elementId, SKImage image, SKRectI bounds)
     {
@@ -528,11 +540,45 @@ public sealed class EditorSession : IDisposable
         /// <summary>物件原本的（含效果外擴的）外框，doc 座標。</summary>
         public SKRectI Bounds { get; } = bounds;
 
-        /// <summary>目前位移（render thread 讀；UI thread 寫）。</summary>
-        public volatile float OffsetX;
-        public volatile float OffsetY;
+        // 目前的目標框與角度（render thread 讀、UI thread 寫；float 讀寫是原子的，
+        // 中間狀態最多讓某一幀的框差一點點，下一幀就對上了）
+        private volatile float _left = bounds.Left;
+        private volatile float _top = bounds.Top;
+        private volatile float _width = bounds.Width;
+        private volatile float _height = bounds.Height;
+        private volatile float _rotation;
 
-        public SKRect CurrentRect => SKRect.Create(Bounds.Left + OffsetX, Bounds.Top + OffsetY, Bounds.Width, Bounds.Height);
+        /// <summary>覆疊圖現在要畫在哪（doc 座標）。</summary>
+        public SKRect CurrentRect => new(_left, _top, _left + _width, _top + _height);
+
+        /// <summary>以 <see cref="CurrentRect"/> 中心為軸的角度（度）。</summary>
+        public float Rotation => _rotation;
+
+        /// <summary>設定目標框與角度（UI thread）。</summary>
+        public void SetTarget(SKRect rect, float rotationDeg)
+        {
+            _left = rect.Left;
+            _top = rect.Top;
+            _width = rect.Width;
+            _height = rect.Height;
+            _rotation = rotationDeg;
+        }
+
+        /// <summary>
+        /// 把「原始框裡的一個框」（例如把手框）依覆疊目前的變換映射過去 ——
+        /// 覆疊在縮放時把手要跟著縮，不然框跟畫面上的圖對不起來。
+        /// </summary>
+        public SKRect MapFrame(SKRect f)
+        {
+            var cur = CurrentRect;
+            var sx = Bounds.Width > 0 ? cur.Width / Bounds.Width : 1f;
+            var sy = Bounds.Height > 0 ? cur.Height / Bounds.Height : 1f;
+            return new SKRect(
+                cur.Left + (f.Left - Bounds.Left) * sx,
+                cur.Top + (f.Top - Bounds.Top) * sy,
+                cur.Left + (f.Right - Bounds.Left) * sx,
+                cur.Top + (f.Bottom - Bounds.Top) * sy);
+        }
     }
 
     private volatile ElementDragOverlay? _elementOverlay;
@@ -548,7 +594,20 @@ public sealed class EditorSession : IDisposable
         if (bounds.Width <= 0 || bounds.Height <= 0) return;
 
         SKImage image;
-        if (RenderEffectsWhileDragging && layer.HasActiveEffects)
+        if (RenderEffectsWhileDragging && layer.HasActiveEffects &&
+            TryReadEffectCache(layer, element, ref bounds) is { } cached)
+        {
+            // 快路徑：效果快取就是「這層算好的樣子」，直接裁一塊出來 —— 重跑一遍堆疊在 4K
+            // 要 0.26 秒，手勢一開始就卡在那裡。只有「這層只有這一個物件」時才行，
+            // 否則裁出來的那塊會夾帶隔壁物件的像素。
+            var info = new SKImageInfo(bounds.Width, bounds.Height, SKColorType.Bgra8888, SKAlphaType.Premul);
+            fixed (uint* ptr = cached)
+            {
+                image = SKImage.FromPixelCopy(info, (IntPtr)ptr, bounds.Width * 4);
+            }
+            if (image == null) return;
+        }
+        else if (RenderEffectsWhileDragging && layer.HasActiveEffects)
         {
             // 帶效果拖曳：物件單獨跑一遍這層的效果堆疊（外框／陰影／漸層跟著走）
             var pixels = LayerEffectRenderer.RenderElementPreview(layer, element, out bounds);
@@ -578,12 +637,59 @@ public sealed class EditorSession : IDisposable
         layer.HiddenElementId = element.Id; // 原件先藏起來（合成器重畫一次少了它的樣子）
     }
 
+    /// <summary>
+    /// 從效果快取裁出這個物件那一塊（圖層座標 → doc 座標）。
+    /// 快取不是最新的、或這層還有別的物件（裁出來會夾帶到）就回 null，交給完整重算那條路。
+    /// </summary>
+    private static uint[]? TryReadEffectCache(RasterLayer layer, Vectors.VectorElement element, ref SKRectI bounds)
+    {
+        if (!layer.FxCache.Rendered || layer.Elements.Count != 1) return null;
+        var margin = LayerEffectRenderer.TotalMargin(layer);
+        var docRect = element.Bounds;
+        docRect.Inflate(margin + 1, margin + 1);
+        if (docRect.Width <= 0 || docRect.Height <= 0) return null;
+
+        var layerRect = new SKRectI(
+            docRect.Left - layer.Offset.X, docRect.Top - layer.Offset.Y,
+            docRect.Right - layer.Offset.X, docRect.Bottom - layer.Offset.Y);
+        bounds = docRect;
+        return LayerEffectRenderer.ReadPixels(layer.FxCache.Surface, layerRect);
+    }
+
     public void MoveElementOverlay(float dx, float dy)
     {
         var overlay = _elementOverlay;
         if (overlay == null) return;
-        overlay.OffsetX = dx;
-        overlay.OffsetY = dy;
+        overlay.SetTarget(SKRect.Create(overlay.Bounds.Left + dx, overlay.Bounds.Top + dy,
+            overlay.Bounds.Width, overlay.Bounds.Height), 0f);
+        RefreshSelectionHandles();
+    }
+
+    /// <summary>手勢中的旋轉預覽：只轉覆疊圖（以框中心為軸），原件放開才改。</summary>
+    public void RotateElementOverlay(float degrees)
+    {
+        var overlay = _elementOverlay;
+        if (overlay == null) return;
+        overlay.SetTarget(overlay.CurrentRect, degrees);
+        RefreshSelectionHandles();
+    }
+
+    /// <summary>
+    /// 手勢中的縮放預覽：物件的框從 <paramref name="oldFrame"/> 變成 <paramref name="newFrame"/>，
+    /// 覆疊圖（比框大一圈的效果外擴）依同一個仿射一起走。
+    /// </summary>
+    public void ScaleElementOverlay(SKRect oldFrame, SKRect newFrame)
+    {
+        var overlay = _elementOverlay;
+        if (overlay == null || oldFrame.Width <= 0 || oldFrame.Height <= 0) return;
+        var sx = newFrame.Width / oldFrame.Width;
+        var sy = newFrame.Height / oldFrame.Height;
+        var b = overlay.Bounds;
+        overlay.SetTarget(new SKRect(
+            newFrame.Left + (b.Left - oldFrame.Left) * sx,
+            newFrame.Top + (b.Top - oldFrame.Top) * sy,
+            newFrame.Left + (b.Right - oldFrame.Left) * sx,
+            newFrame.Top + (b.Bottom - oldFrame.Top) * sy), overlay.Rotation);
         RefreshSelectionHandles();
     }
 
@@ -604,10 +710,30 @@ public sealed class EditorSession : IDisposable
             return;
         }
         var final = overlay.CurrentRect;
-        var region = SKRectI.Union(overlay.Bounds, SKRectI.Ceiling(final));
+        // 旋轉中的殘影範圍要用轉過之後的外接框，不然合成器判斷「這塊乾淨了」會少算一塊
+        var region = SKRectI.Union(overlay.Bounds, SKRectI.Ceiling(RotatedBounds(final, overlay.Rotation)));
         var old = _ghost;
-        _ghost = new OverlayGhost(overlay.Image, final, region);
+        _ghost = new OverlayGhost(overlay.Image, final, region, overlay.Rotation);
         if (old != null) Compositor.Retire(old.Image);
+    }
+
+    /// <summary>矩形繞中心旋轉後的外接框。</summary>
+    private static SKRect RotatedBounds(SKRect rect, float degrees)
+    {
+        if (degrees == 0f) return rect;
+        var m = SKMatrix.CreateRotationDegrees(degrees, rect.MidX, rect.MidY);
+        Span<SKPoint> pts =
+        [
+            m.MapPoint(rect.Left, rect.Top), m.MapPoint(rect.Right, rect.Top),
+            m.MapPoint(rect.Right, rect.Bottom), m.MapPoint(rect.Left, rect.Bottom),
+        ];
+        float l = pts[0].X, t = pts[0].Y, r = pts[0].X, b = pts[0].Y;
+        for (var i = 1; i < 4; i++)
+        {
+            l = Math.Min(l, pts[i].X); t = Math.Min(t, pts[i].Y);
+            r = Math.Max(r, pts[i].X); b = Math.Max(b, pts[i].Y);
+        }
+        return new SKRect(l, t, r, b);
     }
 
     private volatile LayerDragOverlay? _layerOverlay;

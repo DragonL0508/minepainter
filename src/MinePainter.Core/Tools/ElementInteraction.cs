@@ -1,4 +1,4 @@
-using MinePainter.Core.Documents;
+﻿using MinePainter.Core.Documents;
 using MinePainter.Core.History;
 using MinePainter.Core.Layers;
 using MinePainter.Core.Vectors;
@@ -47,6 +47,7 @@ public sealed class ElementDragHelper
     private float _origWidth;
     private float _framePad;      // 使用者看到的框比排版框多出的效果外擴量（每邊）
     private SKPoint _rotateCenter;   // rotate 時的軸心（起始框中心，整趟固定）
+    private VectorElement? _preview; // 手勢中算好、但還沒套到原件上的樣子（覆疊路徑；End 時才套）
     private float _rotateAnchorDeg;  // 右鍵按下時指標相對軸心的角度
 
     public bool IsActive => _mode != Mode.None;
@@ -76,12 +77,15 @@ public sealed class ElementDragHelper
                 _mode = Mode.Resize;
                 _layer = layer;
                 _original = element;
+                _preview = null;
                 _dragStart = p;
                 // 角：對角固定；邊：對邊中點固定、只動一軸
                 _anchor = MoveTool.IsEdgeHandle(hit) ? handles[4 + (hit - 4 + 2) % 4] : handles[(hit + 2) % 4];
                 _resizeAxis = hit switch { 4 or 6 => ResizeAxis.Vertical, 5 or 7 => ResizeAxis.Horizontal, _ => ResizeAxis.Both };
                 _origHeight = Math.Max(1, b.Height);
                 _origWidth = Math.Max(1, b.Width);
+                // 手勢期間只縮覆疊圖（同旋轉）
+                session.BeginElementOverlayLocked(layer, element);
                 return true;
             }
 
@@ -125,9 +129,12 @@ public sealed class ElementDragHelper
             _mode = Mode.Rotate;
             _layer = layer;
             _original = element;
+            _preview = null;
             var frame = element.FrameBounds;
             _rotateCenter = new SKPoint(frame.MidX, frame.MidY);
             _rotateAnchorDeg = AngleDeg(p, _rotateCenter);
+            // 手勢期間只轉覆疊圖：帶外框／陰影的文字每步重算效果堆疊在 4K 要 0.26 秒
+            session.BeginElementOverlayLocked(layer, element);
             return true;
         }
     }
@@ -149,6 +156,14 @@ public sealed class ElementDragHelper
             : (TextElement)original.TransformedBy(
                 SKMatrix.CreateRotationDegrees(delta, _rotateCenter.X, _rotateCenter.Y),
                 1f, 1f, delta);
+        _preview = updated;
+
+        // 覆疊中：只轉那張圖，原件放開才改（見 End）
+        if (session.ElementOverlay is { } overlay && overlay.ElementId == original.Id)
+        {
+            session.RotateElementOverlay(delta);
+            return;
+        }
 
         lock (session.Document.SyncRoot)
         {
@@ -255,6 +270,15 @@ public sealed class ElementDragHelper
                 return;
         }
 
+        _preview = updated;
+
+        // 覆疊中：只變換那張圖，原件放開才改（見 End）
+        if (session.ElementOverlay is { } scaleOverlay && scaleOverlay.ElementId == _original.Id)
+        {
+            session.ScaleElementOverlay(_original.FrameBounds, updated.FrameBounds);
+            return;
+        }
+
         lock (doc.SyncRoot)
         {
             _layer.ReplaceElement(updated);
@@ -272,18 +296,27 @@ public sealed class ElementDragHelper
         var layer = _layer;
         var original = _original;
         var mode = _mode;
+        var preview = _preview;
         _mode = Mode.None;
         _layer = null;
         _original = null;
+        _preview = null;
         if (layer == null || original == null) return;
 
         VectorElement? current;
         lock (session.Document.SyncRoot)
         {
-            if (mode == Mode.Move && session.ElementOverlay is { } overlay && overlay.ElementId == original.Id)
+            if (session.ElementOverlay is { } overlay && overlay.ElementId == original.Id)
             {
-                // 覆疊拖曳：現在才把原件搬到最後位置；覆疊圖轉殘影蓋到合成器追上
-                if (_moveDelta != SKPoint.Empty) layer.ReplaceElement(original.Translated(_moveDelta.X, _moveDelta.Y));
+                // 覆疊手勢：現在才把原件改成最後的樣子；覆疊圖轉殘影蓋到合成器追上
+                if (mode == Mode.Move)
+                {
+                    if (_moveDelta != SKPoint.Empty) layer.ReplaceElement(original.Translated(_moveDelta.X, _moveDelta.Y));
+                }
+                else if (preview != null && !ReferenceEquals(preview, original))
+                {
+                    layer.ReplaceElement(preview); // 旋轉／縮放：手勢中只動了覆疊圖
+                }
                 session.EndElementOverlayLocked();
             }
             current = layer.FindElement(original.Id);
