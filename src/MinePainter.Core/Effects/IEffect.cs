@@ -19,6 +19,13 @@ public interface IEffect : IParameterized
     int SourceMargin { get; }
 
     /// <summary>
+    /// 輸出會延伸到內容外多遠（效果快取的範圍用）。預設＝來源餘裕；
+    /// 來源要整層（<see cref="EffectContext.WholeLayer"/>）但輸出只長在內容周圍的效果
+    /// （例如漸層外框）必須另外回報，否則快取範圍沒留餘裕、外框會在內容框邊被切掉。
+    /// </summary>
+    int OutputMargin => Math.Max(0, SourceMargin);
+
+    /// <summary>
     /// 結果是否只取決於局部鄰域（與目標範圍的原點／大小無關）。
     /// true 的效果可以只重算髒區；以「範圍中心」或「格子對齊」為準的效果（暈影、像素化、碎形…）必須整層重算。
     /// </summary>

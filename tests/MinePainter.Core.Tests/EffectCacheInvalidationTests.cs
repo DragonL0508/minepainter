@@ -347,4 +347,36 @@ public class TextOutlineOverhangTests
         Assert.True(b.Left <= il && b.Right >= ir && b.Top <= it && b.Bottom >= ib,
             $"Bounds ({b.Left},{b.Top})-({b.Right},{b.Bottom}) must contain ink ({il},{it})-({ir},{ib})");
     }
+
+    [Fact]
+    public void GradientOutline_AroundLargeText_IsNotClippedLeftRight()
+    {
+        // 漸層外框的來源是整層（SourceMargin = WholeLayer）：快取範圍仍要留外框寬度的餘裕，
+        // 否則左右只剩排版框的 2px、外框在那裡被直線切掉（上下有行高餘裕所以看不出來）
+        var doc = ImageCodec.CreateBlankDocument(1600, 800, SKColors.Transparent);
+        using var session = new EditorSession(doc);
+        var layer = new RasterLayer { Name = "T" };
+        var el = new TextElement { Text = "HIH", FontFamily = "Arial", FontSize = 288, Position = new SKPoint(300, 150) };
+        lock (doc.SyncRoot) { doc.Root.Add(layer); layer.AddElement(el); doc.ActiveLayer = layer; }
+
+        using var bmp = new SKBitmap(new SKImageInfo(1600, 800, SKColorType.Bgra8888, SKAlphaType.Premul));
+        using (var c = new SKCanvas(bmp)) { c.Clear(SKColors.Transparent); el.Render(c); }
+        int il = int.MaxValue, it = int.MaxValue, ir = -1, ib = -1;
+        for (var y = 0; y < 800; y++)
+        for (var x = 0; x < 1600; x++)
+            if (bmp.GetPixel(x, y).Alpha > 0) { il = Math.Min(il, x); it = Math.Min(it, y); ir = Math.Max(ir, x); ib = Math.Max(ib, y); }
+
+        LayerEffectCommands.Add(doc, session.History, layer, LayerEffect.Create(new ObjectOutlineEffect
+        {
+            Width = 60, Gradient = true, Color = SKColors.Red, GradientEnd = SKColors.Blue,
+        }));
+        LayerEffectRenderer.RenderLayerNow(doc, layer);
+
+        int cl = int.MaxValue, ct = int.MaxValue, cr = -1, cb = -1;
+        for (var y = 0; y < 800; y++)
+        for (var x = 0; x < 1600; x++)
+            if ((CachePixel(layer, x, y) >> 24) > 0) { cl = Math.Min(cl, x); ct = Math.Min(ct, y); cr = Math.Max(cr, x); cb = Math.Max(cb, y); }
+        Assert.True(cl <= il - 59 && cr >= ir + 59 && ct <= it - 59 && cb >= ib + 59,
+            $"gradient outline cache ({cl},{ct})-({cr},{cb}) vs ink ({il},{it})-({ir},{ib})");
+    }
 }

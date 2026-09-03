@@ -174,14 +174,23 @@ public static class LayerEffectRenderer
     }
 
     /// <summary>作用中效果的總 margin（有限值相加；整層來源的效果不計）。</summary>
+    /// <summary>
+    /// 一個效果在快取上要留的餘裕：來源餘裕（讀得到足夠的鄰域）與輸出餘裕（結果長到內容外）取大。
+    /// 整層來源的效果（漸層外框）來源餘裕不算數，靠輸出餘裕撐住快取範圍。
+    /// </summary>
+    private static int EffectMargin(IEffect effect)
+    {
+        var src = effect.SourceMargin;
+        return Math.Max(src == EffectContext.WholeLayer ? 0 : Math.Max(0, src), effect.OutputMargin);
+    }
+
     public static int TotalMargin(RasterLayer layer)
     {
         var margin = 0;
         foreach (var e in layer.Effects)
         {
             if (!e.Enabled) continue;
-            var m = e.Effect.SourceMargin;
-            if (m > 0) margin += m;
+            margin += EffectMargin(e.Effect);
         }
         return margin;
     }
@@ -227,9 +236,8 @@ public static class LayerEffectRenderer
             var canvasDependent = false;
             foreach (var e in effects)
             {
-                var m = e.Effect.SourceMargin;
-                if (m == EffectContext.WholeLayer) wholeLayer = true;
-                else if (m > 0) margin += m;
+                if (e.Effect.SourceMargin == EffectContext.WholeLayer) wholeLayer = true;
+                margin += EffectMargin(e.Effect);
                 if (!e.Effect.IsPositionIndependent) canvasDependent = true;
             }
 
