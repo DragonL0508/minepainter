@@ -70,6 +70,21 @@ public sealed class HistoryManager : IDisposable
     /// 導致復原跳到上一步、畫面狀態互相矛盾。曾經有三個 UI 入口各自漏掉這件事，
     /// 所以乾脆把入口收掉 —— 讓 App 組件在編譯期就碰不到。
     /// </summary>
+    /// <summary>
+    /// 把最後 <paramref name="count"/> 步併成一步（<see cref="CompositeHistoryEntry"/>）。
+    /// 給「一個手勢被拆成很多幀」的操作收尾用 —— 方向鍵按住滑行時每幀壓一步，
+    /// 放開時併回一步，Ctrl+Z 才會一次回到滑行開始前。
+    /// count ≤ 1 或超過堆疊深度時不做事。
+    /// </summary>
+    public void CollapseLast(int count, string? label = null)
+    {
+        if (count <= 1 || count > _undo.Count) return;
+        var steps = _undo.GetRange(_undo.Count - count, count);
+        _undo.RemoveRange(_undo.Count - count, count);
+        _undo.Add(new CompositeHistoryEntry(label ?? steps[^1].Label, steps.ToArray()));
+        Changed?.Invoke();
+    }
+
     internal bool Undo()
     {
         if (_undo.Count == 0) return false;

@@ -526,12 +526,20 @@ public sealed class MoveTool : ITool
     /// 回傳 false＝沒有可微調的東西。
     /// </summary>
     /// <summary>
-    /// 這次微調會落在「不壓 undo」的路徑嗎（變形框／浮動內容／還沒提起的選取範圍）。
-    /// UI 用它決定能不能把位移拆成好幾幀平滑挪過去 —— 物件與圖層每一步都會壓一筆歷史，
-    /// 拆幀會灌爆 undo，只能一次到位。
+    /// 有沒有東西可以微調（變形框／浮動內容／可提起的選取／選中的物件／作用中的圖層）。
+    /// UI 用它決定要不要啟動按住滑行。
     /// </summary>
-    public static bool CanNudgeSmoothly(EditorSession session) =>
-        session.Transform != null || session.Floating != null || CanLiftForNudge(session);
+    public static bool HasNudgeTarget(EditorSession session) =>
+        session.Transform != null || session.Floating != null || CanLiftForNudge(session) ||
+        session.SelectedElement != null ||
+        session.Document.ActiveLayer is RasterLayer or GroupLayer;
+
+    /// <summary>
+    /// 這一步微調會不會壓一筆 undo（物件／圖層會，變形框與浮動內容不會）。
+    /// 按住滑行時 UI 靠它決定放開後要把幾步併回一步。
+    /// </summary>
+    public static bool NudgePushesHistory(EditorSession session) =>
+        session.Transform == null && session.Floating == null && !CanLiftForNudge(session);
 
     /// <summary>有選取範圍、作用中是一般點陣圖層、也沒有選中的物件 → 方向鍵該提起選取的像素。</summary>
     private static bool CanLiftForNudge(EditorSession session) =>

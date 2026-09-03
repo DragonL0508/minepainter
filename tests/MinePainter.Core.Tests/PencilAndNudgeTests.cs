@@ -99,7 +99,8 @@ public class PencilAndNudgeTests
 
         // 只選中左上角一小塊
         session.Selection = RectSelection(new SKRectI(4, 4, 12, 12), session.Document.Bounds);
-        Assert.True(MoveTool.CanNudgeSmoothly(session)); // 還沒提起，但方向鍵動的是選取的像素
+        Assert.True(MoveTool.HasNudgeTarget(session));
+        Assert.False(MoveTool.NudgePushesHistory(session)); // 提起的像素在 session 裡動，落地才記一步
 
         Assert.True(MoveTool.Nudge(session, 5, 0));
 
@@ -116,8 +117,30 @@ public class PencilAndNudgeTests
         layer.Surface.Fill(new SKRectI(10, 10, 20, 20), SKColors.Green);
         session.ActiveTool = session.Move;
 
-        Assert.False(MoveTool.CanNudgeSmoothly(session)); // 圖層路徑每步壓一筆 undo → 不補間
+        Assert.True(MoveTool.NudgePushesHistory(session)); // 圖層路徑每步壓一筆 undo（滑行結束時併回一步）
         Assert.True(MoveTool.Nudge(session, 3, -2));
         Assert.Equal(new SKPointI(3, -2), layer.Offset);
+    }
+
+    [Fact]
+    public void CollapseLast_MergesGlideSteps_IntoOneUndo()
+    {
+        using var session = new EditorSession(ImageCodec.CreateBlankDocument(64, 64, SKColors.Transparent));
+        var layer = (RasterLayer)session.Document.ActiveLayer!;
+        layer.Surface.Fill(new SKRectI(10, 10, 20, 20), SKColors.Green);
+        session.ActiveTool = session.Move;
+
+        var before = session.History.UndoStack.Count;
+        for (var i = 0; i < 5; i++) MoveTool.Nudge(session, 2, 0); // 滑行的五幀
+        Assert.Equal(before + 5, session.History.UndoStack.Count);
+        Assert.Equal(10, layer.Offset.X);
+
+        session.History.CollapseLast(session.History.UndoStack.Count - before);
+        Assert.Equal(before + 1, session.History.UndoStack.Count); // 併成一步
+
+        session.Undo();
+        Assert.Equal(0, layer.Offset.X); // 一次回到滑行前
+        session.Redo();
+        Assert.Equal(10, layer.Offset.X);
     }
 }
