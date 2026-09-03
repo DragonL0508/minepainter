@@ -1,4 +1,4 @@
-using MinePainter.Core.History;
+﻿using MinePainter.Core.History;
 using MinePainter.Core.IO;
 using MinePainter.Core.Layers;
 using MinePainter.Core.Tiles;
@@ -45,6 +45,65 @@ public class TextLayerInvariantTests
         Assert.True(text.IsTextLayer);
         Assert.Same(text, doc.ActiveLayer);
         return (session, pixels, text);
+    }
+
+    // ---- 像素選取在文字圖層上沒有意義 ----
+
+    [Fact]
+    public void SwitchingToTextLayer_DropsPixelSelection()
+    {
+        var (session, pixels, text) = NewDocWithText();
+        var doc = session.Document;
+
+        lock (doc.SyncRoot) doc.ActiveLayer = pixels;
+        EditCommands.SelectAll(session);
+        Assert.NotNull(session.Selection);
+
+        lock (doc.SyncRoot) doc.ActiveLayer = text;
+        // 留著只會是一圈沒有任何操作會理它、也清不掉的螞蟻線
+        Assert.Null(session.Selection);
+
+        lock (doc.SyncRoot) doc.ActiveLayer = pixels;
+        Assert.Null(session.Selection); // 換回來也不會自己冒出來
+    }
+
+    [Fact]
+    public void SelectionTools_DoNothingOnTextLayer()
+    {
+        var (session, _, text) = NewDocWithText();
+        Assert.Same(text, session.Document.ActiveLayer);
+
+        var down = new ToolPointerEvent(new SKPoint(10, 10), 1f);
+        var up = new ToolPointerEvent(new SKPoint(200, 200), 1f);
+
+        session.RectSelect.OnPointerDown(down, session);
+        session.RectSelect.OnPointerMove(up, session);
+        session.RectSelect.OnPointerUp(up, session);
+        Assert.Null(session.Selection);
+        Assert.Null(session.Preview); // 連拖曳中的虛線框都不該出現
+
+        session.Lasso.OnPointerDown(down, session);
+        session.Lasso.OnPointerMove(new ToolPointerEvent(new SKPoint(60, 60), 1f), session);
+        session.Lasso.OnPointerMove(up, session);
+        session.Lasso.OnPointerUp(up, session);
+        Assert.Null(session.Selection);
+        Assert.Null(session.Preview);
+
+        session.Wand.OnPointerDown(down, session);
+        Assert.Null(session.Selection);
+    }
+
+    [Fact]
+    public void SelectionTools_StillWorkOnNormalLayer()
+    {
+        var (session, pixels, _) = NewDocWithText();
+        lock (session.Document.SyncRoot) session.Document.ActiveLayer = pixels;
+
+        session.RectSelect.OnPointerDown(new ToolPointerEvent(new SKPoint(10, 10), 1f), session);
+        session.RectSelect.OnPointerUp(new ToolPointerEvent(new SKPoint(60, 70), 1f), session);
+
+        Assert.NotNull(session.Selection);
+        Assert.Equal(new SKRectI(10, 10, 60, 70), session.Selection!.Bounds);
     }
 
     [Fact]

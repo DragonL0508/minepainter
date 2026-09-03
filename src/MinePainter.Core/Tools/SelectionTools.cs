@@ -1,4 +1,4 @@
-using MinePainter.Core.History;
+﻿using MinePainter.Core.History;
 using MinePainter.Core.Layers;
 using MinePainter.Core.Selections;
 using SkiaSharp;
@@ -32,6 +32,18 @@ public static class SelectionCommands
     private static void Apply(EditorSession session, SelectionMask? selection) =>
         session.ApplySelection(selection);
 
+    /// <summary>
+    /// 文字圖層拒收像素選取。不變式是「有物件的圖層沒有像素」（<see cref="RasterLayer.IsTextLayer"/>），
+    /// 所以框出來的選取沒有任何操作會理它 —— 複製是空的、填滿/清除會被擋、移動改走整層平移，
+    /// 只剩一圈螞蟻線留在畫面上。乾脆按下去就不做，跟「全選」的處理一致。
+    /// </summary>
+    internal static bool RefusePixelSelection(EditorSession session)
+    {
+        if (session.Document.ActiveLayer is not RasterLayer { IsTextLayer: true }) return false;
+        session.Notify("文字圖層不能選取像素；要編輯像素請先「圖層文字平面化」");
+        return true;
+    }
+
     public static SelectionCombineMode ModeFrom(ToolModifiers mods)
     {
         var shift = mods.HasFlag(ToolModifiers.Shift);
@@ -54,6 +66,7 @@ public sealed class RectangleSelectTool : ITool
 
     public void OnPointerDown(ToolPointerEvent e, EditorSession session)
     {
+        if (SelectionCommands.RefusePixelSelection(session)) return;
         _anchor = e.DocPosition;
         _dragging = true;
         session.Preview = null;
@@ -126,6 +139,7 @@ public sealed class LassoSelectTool : ITool
 
     public void OnPointerDown(ToolPointerEvent e, EditorSession session)
     {
+        if (SelectionCommands.RefusePixelSelection(session)) return;
         _points.Clear();
         _points.Add(e.DocPosition);
         _dragging = true;
@@ -176,6 +190,7 @@ public sealed class MagicWandTool : ITool
 
     public void OnPointerDown(ToolPointerEvent e, EditorSession session)
     {
+        if (SelectionCommands.RefusePixelSelection(session)) return;
         if (session.Document.ActiveLayer is not RasterLayer layer) return;
 
         SelectionMask incoming;

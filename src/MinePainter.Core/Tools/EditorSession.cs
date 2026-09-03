@@ -1325,6 +1325,7 @@ public sealed class EditorSession : IDisposable
         RegisterPendingEdit(new FloatingPendingEdit(this));
         RegisterPendingEdit(new TransformPendingEdit(this));
         History.Changed += ReleaseStaleResumes; // 續接點只在「落地那步仍是最後一步」時有效
+        Document.ActiveLayerChanged += DropSelectionOnTextLayer;
 
         Brush = new BrushTool();
         Pencil = new PencilTool();
@@ -1342,8 +1343,21 @@ public sealed class EditorSession : IDisposable
         ActiveTool = Brush;
     }
 
+    /// <summary>
+    /// 換到文字圖層時放掉像素選取。文字圖層沒有可選的像素（有物件就沒有像素），
+    /// 留著的話畫面上就是一圈沒有任何操作會理它的螞蟻線 —— 而且移動工具在文字圖層
+    /// 走的是整層平移，連「在框外點一下取消選取」都碰不到，看起來就是清不掉。
+    /// 不推 history：換圖層不是一步編輯。
+    /// </summary>
+    private void DropSelectionOnTextLayer()
+    {
+        if (Selection == null) return;
+        if (Document.ActiveLayer is RasterLayer { IsTextLayer: true }) ApplySelection(null);
+    }
+
     public void Dispose()
     {
+        Document.ActiveLayerChanged -= DropSelectionOnTextLayer;
         Transform?.DisposeDeferred(Compositor); // 退役佇列由 Compositor.Dispose 清掉
         Transform = null;
         Floating?.Dispose();

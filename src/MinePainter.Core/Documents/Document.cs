@@ -1,4 +1,4 @@
-using MinePainter.Core.Layers;
+﻿using MinePainter.Core.Layers;
 using SkiaSharp;
 
 namespace MinePainter.Core.Documents;
@@ -33,8 +33,25 @@ public sealed class Document : IDisposable
         NotifyChanged(Bounds);
     }
 
+    private LayerNode? _activeLayer;
+
     /// <summary>目前作用中的圖層（工具的寫入目標）。</summary>
-    public LayerNode? ActiveLayer { get; set; }
+    public LayerNode? ActiveLayer
+    {
+        get => _activeLayer;
+        set
+        {
+            if (ReferenceEquals(_activeLayer, value)) return;
+            _activeLayer = value;
+            ActiveLayerChanged?.Invoke();
+        }
+    }
+
+    /// <summary>
+    /// 換了作用中圖層。設定 <see cref="ActiveLayer"/> 的地方散在圖層面板、工具、貼上、
+    /// 各種 undo entry 裡，要在「換層」時做的事只能掛在這裡才不會漏。
+    /// </summary>
+    public event Action? ActiveLayerChanged;
 
     public object SyncRoot { get; } = new();
 
