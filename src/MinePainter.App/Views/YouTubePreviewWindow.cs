@@ -17,7 +17,6 @@ public sealed class YouTubePreviewWindow : ModalDialog
     private static double _lastViews = 12345;
     private static int _lastUploaded = 2;
     private static string _lastDuration = "10:32";
-    private static int _lastPage;
     private static int _lastTheme;
     private static int _lastFit;
     private static bool _lastAvatar;
@@ -42,7 +41,6 @@ public sealed class YouTubePreviewWindow : ModalDialog
     };
     private readonly ComboBox _uploadedCombo = Combo(UploadedOptions);
     private readonly TextBox _durationBox = new() { FontSize = 12, Width = 70 };
-    private readonly ComboBox _pageCombo = Combo(["首頁", "搜尋結果", "觀看頁"]);
     private readonly ComboBox _themeCombo = Combo(["深色", "淺色"]);
     private readonly ComboBox _fitCombo = Combo(["裁切填滿 16:9", "完整顯示（留黑邊）"]);
     private readonly CheckBox _avatarCheck = new() { Content = "頻道頭像也用這張圖", FontSize = 12 };
@@ -56,7 +54,6 @@ public sealed class YouTubePreviewWindow : ModalDialog
         _viewsBox.Value = _lastViews;
         _uploadedCombo.SelectedIndex = _lastUploaded;
         _durationBox.Text = _lastDuration;
-        _pageCombo.SelectedIndex = _lastPage;
         _themeCombo.SelectedIndex = _lastTheme;
         _fitCombo.SelectedIndex = _lastFit;
         _avatarCheck.IsChecked = _lastAvatar;
@@ -87,7 +84,6 @@ public sealed class YouTubePreviewWindow : ModalDialog
                 LabeledRow("觀看數", viewsRow),
                 LabeledRow("長度", lengthRow),
                 new Separator { Margin = new Thickness(0, 3) },
-                LabeledRow("開啟頁", _pageCombo),
                 LabeledRow("主題", _themeCombo),
                 LabeledRow("縮圖", _fitCombo),
                 _avatarCheck,
@@ -107,7 +103,6 @@ public sealed class YouTubePreviewWindow : ModalDialog
                 Views = (long)_viewsBox.Value,
                 Uploaded = UploadedOptions[Math.Max(0, _uploadedCombo.SelectedIndex)],
                 Duration = Trimmed(_durationBox.Text, "10:32"),
-                Page = _pageCombo.SelectedIndex switch { 1 => "search", 2 => "watch", _ => "home" },
                 Dark = _themeCombo.SelectedIndex == 0,
                 Cover = _fitCombo.SelectedIndex == 0,
                 AvatarFromImage = _avatarCheck.IsChecked == true,
@@ -117,7 +112,6 @@ public sealed class YouTubePreviewWindow : ModalDialog
             _lastViews = _viewsBox.Value;
             _lastUploaded = _uploadedCombo.SelectedIndex;
             _lastDuration = Options.Duration;
-            _lastPage = _pageCombo.SelectedIndex;
             _lastTheme = _themeCombo.SelectedIndex;
             _lastFit = _fitCombo.SelectedIndex;
             _lastAvatar = Options.AvatarFromImage;

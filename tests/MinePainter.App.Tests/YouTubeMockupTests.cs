@@ -32,7 +32,6 @@ public class YouTubeMockupTests
             Views = 12345,
             Uploaded = "3 小時前",
             Duration = "10:32",
-            Page = "watch",
             Dark = false,
         });
 
@@ -40,7 +39,6 @@ public class YouTubeMockupTests
         Assert.Contains("data:image/png;base64,", html);
         Assert.Contains("測試標題", html);
         Assert.Contains("測試頻道", html);
-        Assert.Contains("data-page=\"watch\"", html);
         Assert.Contains("data-theme=\"light\"", html);
         Assert.DoesNotContain("__", html); // 佔位符全部被換掉了
         File.Delete(path);

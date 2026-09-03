@@ -14,9 +14,6 @@ public sealed record YouTubeMockupOptions
     public long Views { get; init; }
     public string Uploaded { get; init; } = "";
     public string Duration { get; init; } = "";
-
-    /// <summary>開啟時停在哪一頁：home／search／watch。</summary>
-    public string Page { get; init; } = "home";
     public bool Dark { get; init; } = true;
 
     /// <summary>true＝裁切填滿 16:9（cover），false＝完整顯示、留黑邊（contain）。</summary>
@@ -25,9 +22,13 @@ public sealed record YouTubeMockupOptions
 }
 
 /// <summary>
-/// 把目前文件的合成結果塞進一份「長得像 YouTube」的靜態網頁，丟給系統瀏覽器開。
+/// 把目前文件的合成結果塞進一份「長得像 YouTube 首頁」的靜態網頁，丟給系統瀏覽器開。
 /// 純本機檔案：不連任何網路、沒有外部資源，縮圖是內嵌的 data URI。
-/// 版面是自己刻的 HTML/CSS 仿製品（YouTube 本站是動態載入 + 混淆過的樣式，抓不下來也不該抓）。
+/// <para>
+/// 版面是自己刻的 HTML/CSS 仿製品（YouTube 本站動態載入 + 混淆過的樣式，抓不下來也不該抓），
+/// 但尺寸與色票取自 1920 寬深色實機的 getComputedStyle 量測，關鍵值都標在對應的 CSS 註解裡。
+/// 只做首頁：搜尋結果頁與觀看頁還沒有可信的量測，寧可不做也不要憑印象生一個不像的版面。
+/// </para>
 /// </summary>
 public static class YouTubeMockup
 {
@@ -118,10 +119,8 @@ public static class YouTubeMockup
             .Replace("__TITLE__", Escape(o.Title))
             .Replace("__CHANNEL__", Escape(o.Channel))
             .Replace("__VIEWS__", Escape(FormatViews(o.Views)))
-            .Replace("__VIEWS_RAW__", o.Views.ToString("N0", CultureInfo.InvariantCulture))
             .Replace("__UPLOADED__", Escape(o.Uploaded))
             .Replace("__DURATION__", Escape(o.Duration))
-            .Replace("__PAGE__", o.Page)
             .Replace("__THEME__", o.Dark ? "dark" : "light")
             .Replace("__FIT__", o.Cover ? "cover" : "contain");
     }
@@ -148,143 +147,123 @@ public static class YouTubeMockup
         .Replace("\"", "&quot;");
 
     /// <summary>
-    /// 仿 YouTube 的單頁版面：首頁網格／搜尋結果／觀看頁三種，右上角可即時切換與換深淺色。
-    /// 週邊影片全是假資料（CSS 漸層縮圖），只有主打那部用使用者的圖。
+    /// 仿 YouTube 首頁：頂列、側欄導覽、分類 chips、影片網格（中間夾一排 Shorts 架）。
+    /// 週邊影片全是假資料（CSS 漸層縮圖），只有第一格用使用者的圖。
+    /// 標「實測」的數字來自 1920 寬深色實機量測，要改先確認有新的量測資料。
     /// </summary>
     private const string Template = """
 <!doctype html>
-<html lang="zh-Hant" data-theme="__THEME__" data-page="__PAGE__">
+<html lang="zh-Hant" data-theme="__THEME__">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>縮圖預覽（MinePainter）</title>
 <style>
 :root {
-  --bg: #0f0f0f; --fg: #f1f1f1; --muted: #aaa; --chip: #272727; --chip-active: #f1f1f1;
-  --chip-active-fg: #0f0f0f; --line: #303030; --search: #121212; --search-line: #303030;
-  --hover: #272727; --btn: #272727;
+  /* 深色色票：實測 */
+  --bg: #0f0f0f; --fg: #f1f1f1; --muted: #aaa;
+  --chip: rgba(255,255,255,.1); --chip-active: #f1f1f1; --chip-active-fg: #0f0f0f;
+  --line: #303030; --search: #121212; --search-line: #303030; --hover: rgba(255,255,255,.1);
+  --guide-w: 240px;   /* #guide-content 實測 240 */
+  --grid-min: 480px;  /* 內容寬 1648 要排成 3 欄（卡片實測 533） */
 }
 html[data-theme="light"] {
-  --bg: #fff; --fg: #0f0f0f; --muted: #606060; --chip: #f2f2f2; --chip-active: #0f0f0f;
-  --chip-active-fg: #fff; --line: #e5e5e5; --search: #fff; --search-line: #ccc;
-  --hover: #f2f2f2; --btn: #f2f2f2;
+  --bg: #fff; --fg: #0f0f0f; --muted: #606060;
+  --chip: rgba(0,0,0,.05); --chip-active: #0f0f0f; --chip-active-fg: #fff;
+  --line: #e5e5e5; --search: #fff; --search-line: #ccc; --hover: rgba(0,0,0,.05);
 }
 * { box-sizing: border-box; }
 body {
   margin: 0; background: var(--bg); color: var(--fg);
-  font: 14px/1.4 "Roboto", "Noto Sans TC", "Microsoft JhengHei", system-ui, sans-serif;
+  font: 400 14px/20px "Roboto", "Noto Sans TC", "Microsoft JhengHei", system-ui, sans-serif;
 }
-a { color: inherit; text-decoration: none; }
 
-/* 頂列 */
+/* 頂列：ytd-masthead 實測高 56 */
 .top {
   position: sticky; top: 0; z-index: 5; background: var(--bg);
-  display: flex; align-items: center; gap: 16px; padding: 8px 16px; height: 56px;
+  display: flex; align-items: center; gap: 16px; padding: 0 16px; height: 56px;
 }
 .burger { width: 24px; display: grid; gap: 4px; cursor: pointer; }
 .burger i { display: block; height: 2px; background: var(--fg); }
-.logo { display: flex; align-items: center; gap: 5px; font-size: 20px; font-weight: 500; letter-spacing: -1px; }
-.logo .play {
-  width: 30px; height: 21px; border-radius: 6px; background: #f00;
-  display: grid; place-items: center;
-}
+/* ytd-topbar-logo-renderer 實測 129 寬 */
+.logo { display: flex; align-items: center; gap: 5px; width: 129px; font-size: 20px; font-weight: 500; letter-spacing: -1px; }
+.logo .play { width: 30px; height: 21px; border-radius: 6px; background: #f00; display: grid; place-items: center; }
 .logo .play::after { content: ""; border-left: 8px solid #fff; border-top: 5px solid transparent; border-bottom: 5px solid transparent; margin-left: 2px; }
-.search { flex: 1; max-width: 640px; margin: 0 auto; display: flex; }
+/* #center 實測 732 × 40 */
+.search { flex: 1; max-width: 732px; margin: 0 auto; display: flex; height: 40px; }
 .search input {
-  flex: 1; height: 38px; border: 1px solid var(--search-line); border-right: 0;
-  border-radius: 19px 0 0 19px; background: var(--search); color: var(--fg);
-  padding: 0 16px; font-size: 15px; outline: none;
+  flex: 1; height: 40px; border: 1px solid var(--search-line); border-right: 0;
+  border-radius: 40px 0 0 40px; background: var(--search); color: var(--fg);
+  padding: 0 16px; font-size: 16px; outline: none;
 }
 .search button {
-  width: 62px; height: 38px; border: 1px solid var(--search-line); border-radius: 0 19px 19px 0;
+  width: 64px; height: 40px; border: 1px solid var(--search-line); border-radius: 0 40px 40px 0;
   background: var(--chip); color: var(--fg); cursor: pointer; font-size: 15px;
 }
 .top .avatar { margin-left: auto; }
 
-/* 頭像 */
 .avatar {
   width: 32px; height: 32px; border-radius: 50%; overflow: hidden; flex: none;
   background: #3ea6ff; color: #0f0f0f; display: grid; place-items: center;
   font-weight: 700; font-size: 15px;
 }
 .avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.avatar.big { width: 40px; height: 40px; font-size: 18px; }
 
-/* 版面 */
+/* 側欄：#guide-content 實測 240 寬、項目高 40 */
 .shell { display: flex; }
-.side { width: 210px; flex: none; padding: 10px 6px; }
-.side .item { display: flex; align-items: center; gap: 22px; padding: 9px 12px; border-radius: 10px; font-size: 14px; }
+.side { width: var(--guide-w); flex: none; padding: 12px 12px 0; }
+.side .item { display: flex; align-items: center; gap: 24px; height: 40px; padding: 0 12px; border-radius: 10px; }
 .side .item.on, .side .item:hover { background: var(--hover); }
-.side .dot { width: 22px; height: 22px; border-radius: 5px; background: var(--muted); opacity: .45; flex: none; }
+.side .dot { width: 24px; height: 24px; border-radius: 5px; background: var(--muted); opacity: .45; flex: none; }
 .side hr { border: 0; border-top: 1px solid var(--line); margin: 12px 8px; }
-.main { flex: 1; padding: 0 24px 60px; min-width: 0; }
+/* 內容區左右邊距：#contents 實測 margin 0 16px */
+.main { flex: 1; padding: 0 16px 60px; min-width: 0; }
 
-/* 分類 chips */
-.chips { display: flex; gap: 12px; padding: 12px 0 20px; overflow: hidden; }
-.chip { background: var(--chip); border-radius: 8px; padding: 7px 12px; font-size: 13px; white-space: nowrap; }
+/* chips：實測高 32、圓角 8、14px/20 weight 500、padding 0 12 */
+.chips { display: flex; gap: 12px; padding: 12px 0; overflow: hidden; }
+.chip {
+  background: var(--chip); border-radius: 8px; padding: 0 12px; height: 32px;
+  display: flex; align-items: center; font: 500 14px/20px inherit; white-space: nowrap;
+}
 .chip.on { background: var(--chip-active); color: var(--chip-active-fg); }
 
-/* 縮圖 */
 .thumb { position: relative; aspect-ratio: 16/9; border-radius: 12px; overflow: hidden; background: #000; }
 .thumb img { width: 100%; height: 100%; object-fit: __FIT__; display: block; }
 .thumb .dur {
   position: absolute; right: 8px; bottom: 8px; background: rgba(0,0,0,.8); color: #fff;
-  font-size: 12px; font-weight: 500; padding: 1px 4px; border-radius: 4px;
+  font: 500 12px/18px inherit; padding: 0 4px; border-radius: 4px;
 }
-.fake { background: linear-gradient(135deg, #3b4a6b, #6b3b52); }
+.fake { width: 100%; height: 100%; background: linear-gradient(135deg, #3b4a6b, #6b3b52); }
 .fake.b { background: linear-gradient(135deg, #2d5a4a, #1f3c56); }
 .fake.c { background: linear-gradient(135deg, #6b5a2d, #7a3a2a); }
 .fake.d { background: linear-gradient(135deg, #4a2d6b, #2a4a7a); }
 .fake.e { background: linear-gradient(135deg, #2a4a3a, #5a5a2a); }
 
-/* 首頁網格 */
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 40px 16px; }
-.card .meta { display: flex; gap: 12px; padding-top: 12px; }
-.card .title { font-size: 16px; font-weight: 500; line-height: 1.35; max-height: 2.7em; overflow: hidden; }
-.card .sub { color: var(--muted); font-size: 13px; margin-top: 4px; }
-
-/* 搜尋結果 */
-.rows { display: flex; flex-direction: column; gap: 16px; padding-top: 12px; }
-.row { display: flex; gap: 16px; }
-.row .thumb { width: 360px; flex: none; }
-.row .title { font-size: 18px; font-weight: 400; }
-.row .sub { color: var(--muted); font-size: 12px; margin-top: 4px; }
-.row .by { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; margin: 12px 0 6px; }
-.row .by .avatar { width: 24px; height: 24px; font-size: 12px; }
-.row .desc { color: var(--muted); font-size: 12px; max-height: 3em; overflow: hidden; }
-
-/* 觀看頁 */
-.watch { display: flex; gap: 24px; padding-top: 16px; }
-.watch .primary { flex: 1; min-width: 0; }
-.player { position: relative; aspect-ratio: 16/9; border-radius: 12px; overflow: hidden; background: #000; }
-.player img { width: 100%; height: 100%; object-fit: __FIT__; display: block; }
-.player .play {
-  position: absolute; inset: 0; margin: auto; width: 68px; height: 48px; border-radius: 10px;
-  background: rgba(0,0,0,.55); display: grid; place-items: center;
+/* 網格：#contents 實測 padding-top 24；卡片 533×400、margin 0 8px 32px（＝欄距 16、列距 32） */
+.grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--grid-min), 1fr));
+  gap: 32px 16px; padding-top: 24px;
 }
-.player .play::after { content: ""; border-left: 20px solid #fff; border-top: 12px solid transparent; border-bottom: 12px solid transparent; margin-left: 4px; }
-.player .bar { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: rgba(255,255,255,.25); }
-.player .bar i { display: block; width: 28%; height: 100%; background: #f00; }
-.watch h1 { font-size: 20px; margin: 12px 0 12px; line-height: 1.35; }
-.owner { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-.owner .name { font-weight: 500; }
-.owner .subs { color: var(--muted); font-size: 12px; }
-.pill { background: var(--btn); border-radius: 18px; padding: 8px 16px; font-size: 14px; font-weight: 500; }
-.pill.sub { background: var(--fg); color: var(--bg); }
-.owner .actions { margin-left: auto; display: flex; gap: 8px; }
-.desc-box { background: var(--chip); border-radius: 12px; padding: 12px; margin-top: 16px; font-size: 14px; }
-.desc-box .head { font-weight: 500; margin-bottom: 6px; }
-.desc-box .body { color: var(--fg); opacity: .85; white-space: pre-line; }
-.rail { width: 402px; flex: none; display: flex; flex-direction: column; gap: 8px; }
-.rail .r { display: flex; gap: 8px; }
-.rail .thumb { width: 168px; flex: none; }
-.rail .title { font-size: 14px; font-weight: 500; line-height: 1.3; max-height: 2.6em; overflow: hidden; }
-.rail .sub { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.card .meta { display: flex; gap: 12px; padding-top: 12px; }
+.card .meta .avatar { width: 36px; height: 36px; }
+.card .title {
+  font: 500 16px/22px inherit; max-height: 44px; overflow: hidden;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+}
+.card .sub { color: var(--muted); font: 400 12px/18px inherit; }
 
-/* 頁面切換 */
-html[data-page="home"] .p-search, html[data-page="home"] .p-watch,
-html[data-page="search"] .p-home, html[data-page="search"] .p-watch,
-html[data-page="watch"] .p-home, html[data-page="watch"] .p-search { display: none; }
+/* Shorts 架：實測卡片 314×549、margin 0 8px、架身 padding 12px 0 */
+.shelf { padding: 12px 0 32px; }
+.shelf .head { display: flex; align-items: center; gap: 8px; font: 500 16px/22px inherit; padding-bottom: 12px; }
+.shelf .head .mark { color: #f00; font-size: 18px; }
+.shelf .row { display: flex; gap: 16px; overflow: hidden; }
+.shelf .s { width: 314px; flex: none; }
+.shelf .s .cover { aspect-ratio: 9/16; max-height: 480px; border-radius: 12px; overflow: hidden; }
+.shelf .s .title {
+  font: 500 14px/20px inherit; padding-top: 8px; max-height: 40px; overflow: hidden;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+}
+.shelf .s .sub { color: var(--muted); font: 400 12px/18px inherit; }
 
 /* MinePainter 自己的控制列（不是 YouTube 的一部分） */
 .mp-bar {
@@ -297,9 +276,8 @@ html[data-page="watch"] .p-home, html[data-page="watch"] .p-search { display: no
   background: #2c2c2c; color: #eee; border: 1px solid #444; border-radius: 6px;
   padding: 5px 9px; font-size: 12px; cursor: pointer; font-family: inherit;
 }
-.mp-bar button.on { background: #d94b3a; border-color: #d94b3a; color: #fff; }
-@media (max-width: 1100px) { .side { display: none; } .rail { width: 320px; } }
-@media (max-width: 900px) { .watch { flex-direction: column; } .rail { width: auto; } .row .thumb { width: 240px; } }
+@media (max-width: 1300px) { :root { --grid-min: 320px; } }
+@media (max-width: 1100px) { .side { display: none; } }
 </style>
 </head>
 <body>
@@ -328,66 +306,23 @@ html[data-page="watch"] .p-home, html[data-page="watch"] .p-search { display: no
   </nav>
 
   <main class="main">
-    <!-- 首頁 -->
-    <section class="p-home">
-      <div class="chips">
-        <span class="chip on">全部</span><span class="chip">遊戲</span><span class="chip">Minecraft</span>
-        <span class="chip">音樂</span><span class="chip">直播</span><span class="chip">實況</span>
-        <span class="chip">最新上傳</span><span class="chip">已觀看</span>
-      </div>
-      <div class="grid" id="homeGrid"></div>
+    <div class="chips">
+      <span class="chip on">全部</span><span class="chip">遊戲</span><span class="chip">Minecraft</span>
+      <span class="chip">音樂</span><span class="chip">直播</span><span class="chip">實況</span>
+      <span class="chip">最新上傳</span><span class="chip">已觀看</span>
+    </div>
+    <div class="grid" id="gridTop"></div>
+    <section class="shelf">
+      <div class="head"><span class="mark">▶</span>Shorts</div>
+      <div class="row" id="shortsRow"></div>
     </section>
-
-    <!-- 搜尋結果 -->
-    <section class="p-search">
-      <div class="chips">
-        <span class="chip on">篩選器</span><span class="chip">影片</span><span class="chip">頻道</span>
-        <span class="chip">播放清單</span><span class="chip">本週上傳</span>
-      </div>
-      <div class="rows" id="searchRows"></div>
-    </section>
-
-    <!-- 觀看頁 -->
-    <section class="p-watch">
-      <div class="watch">
-        <div class="primary">
-          <div class="player">
-            <img src="__THUMB__" alt="">
-            <span class="play"></span>
-            <div class="bar"><i></i></div>
-          </div>
-          <h1>__TITLE__</h1>
-          <div class="owner">
-            <div class="avatar big" data-avatar>__AVATAR_LETTER__</div>
-            <div>
-              <div class="name">__CHANNEL__</div>
-              <div class="subs">1.7 萬位訂閱者</div>
-            </div>
-            <span class="pill sub">訂閱</span>
-            <div class="actions">
-              <span class="pill">👍 1.2 萬　👎</span>
-              <span class="pill">分享</span>
-              <span class="pill">⋯</span>
-            </div>
-          </div>
-          <div class="desc-box">
-            <div class="head">__VIEWS__　__UPLOADED__</div>
-            <div class="body">這是 MinePainter 的本機縮圖預覽，網頁與周邊影片都是假的，只有這張縮圖是你的作品。
-用來檢查縮圖在小尺寸、深淺色背景下還讀不讀得出來。</div>
-          </div>
-        </div>
-        <aside class="rail" id="rail"></aside>
-      </div>
-    </section>
+    <div class="grid" id="gridRest"></div>
   </main>
 </div>
 
 <div class="mp-bar">
   <b>MinePainter 預覽</b>
-  <button data-page="home">首頁</button>
-  <button data-page="search">搜尋</button>
-  <button data-page="watch">觀看頁</button>
-  <button id="themeBtn">深／淺</button>
+  <button id="themeBtn">深／淺色</button>
 </div>
 
 <script>
@@ -408,68 +343,52 @@ const FAKE = [
   ["用命令方塊做出會追人的雕像", "指令實驗室", "3.9萬次觀看", "9 天前", "7:44", "c"],
   ["整理了一份 1.21 全自動農場清單", "礦坑筆記", "89萬次觀看", "2 個月前", "31:16", "d"],
 ];
+const SHORTS = [
+  ["一格紅石省下半座機器", "12 萬次觀看", "b"],
+  ["這樣挖礦快三倍", "48 萬次觀看", "c"],
+  ["最短的自動門", "9.7 萬次觀看", "d"],
+  ["村民抓不到的原因", "23 萬次觀看", "e"],
+  ["三秒判斷礦脈方向", "6.1 萬次觀看", ""],
+];
 
 const thumbHtml = (f) => f
-  ? `<div class="thumb"><div class="fake ${f[5]}" style="width:100%;height:100%"></div><span class="dur">${f[4]}</span></div>`
+  ? `<div class="thumb"><div class="fake ${f[5]}"></div><span class="dur">${f[4]}</span></div>`
   : `<div class="thumb"><img src="${MINE.thumb}" alt=""><span class="dur">${MINE.duration}</span></div>`;
 
-const avatarHtml = (letter) => `<div class="avatar">${letter}</div>`;
-
-// 首頁：使用者的影片排第一格，後面接假的
-document.getElementById("homeGrid").innerHTML = [null, ...FAKE].map((f) => `
+const cardHtml = (f) => `
   <article class="card">
     ${thumbHtml(f)}
     <div class="meta">
-      ${avatarHtml(f ? f[1].slice(0, 1) : MINE.letter)}
+      <div class="avatar" data-own-avatar="${f ? 0 : 1}">${f ? f[1].slice(0, 1) : MINE.letter}</div>
       <div>
         <div class="title">${f ? f[0] : MINE.title}</div>
         <div class="sub">${f ? f[1] : MINE.channel}</div>
         <div class="sub">${f ? `${f[2]}・${f[3]}` : `${MINE.views}・${MINE.uploaded}`}</div>
       </div>
     </div>
+  </article>`;
+
+// 使用者的影片排第一格，Shorts 架前後各放幾部假的（跟真的首頁一樣）
+document.getElementById("gridTop").innerHTML = [null, ...FAKE.slice(0, 5)].map(cardHtml).join("");
+document.getElementById("gridRest").innerHTML = FAKE.slice(5).map(cardHtml).join("");
+document.getElementById("shortsRow").innerHTML = SHORTS.map((s) => `
+  <article class="s">
+    <div class="cover"><div class="fake ${s[2]}"></div></div>
+    <div class="title">${s[0]}</div>
+    <div class="sub">${s[1]}</div>
   </article>`).join("");
 
-document.getElementById("searchRows").innerHTML = [null, ...FAKE.slice(0, 5)].map((f) => `
-  <article class="row">
-    ${thumbHtml(f)}
-    <div>
-      <div class="title">${f ? f[0] : MINE.title}</div>
-      <div class="sub">${f ? `${f[2]}・${f[3]}` : `${MINE.views}・${MINE.uploaded}`}</div>
-      <div class="by">${avatarHtml(f ? f[1].slice(0, 1) : MINE.letter)}${f ? f[1] : MINE.channel}</div>
-      <div class="desc">這是假的搜尋結果內文，只是把版面撐到跟真的一樣密，好判斷縮圖在這個尺寸下還看不看得清楚。</div>
-    </div>
-  </article>`).join("");
-
-document.getElementById("rail").innerHTML = FAKE.map((f) => `
-  <article class="r">
-    ${thumbHtml(f)}
-    <div>
-      <div class="title">${f[0]}</div>
-      <div class="sub">${f[1]}</div>
-      <div class="sub">${f[2]}・${f[3]}</div>
-    </div>
-  </article>`).join("");
-
-// 頻道頭像：選了「用這張圖」就把所有頭像換成縮圖
+// 頻道頭像：選了「用這張圖」只換自己的（頂列與第一格），假影片維持字母
 if ("__AVATAR_MODE__" === "image") {
-  document.querySelectorAll("[data-avatar]").forEach((el) => {
+  document.querySelectorAll("[data-avatar], [data-own-avatar='1']").forEach((el) => {
     el.innerHTML = `<img src="__AVATAR__" alt="">`;
   });
 }
 
-const root = document.documentElement;
-const syncButtons = () => {
-  document.querySelectorAll(".mp-bar button[data-page]").forEach((b) => {
-    b.classList.toggle("on", b.dataset.page === root.dataset.page);
-  });
-};
-document.querySelectorAll(".mp-bar button[data-page]").forEach((b) => {
-  b.onclick = () => { root.dataset.page = b.dataset.page; syncButtons(); };
-});
 document.getElementById("themeBtn").onclick = () => {
+  const root = document.documentElement;
   root.dataset.theme = root.dataset.theme === "dark" ? "light" : "dark";
 };
-syncButtons();
 </script>
 </body>
 </html>
