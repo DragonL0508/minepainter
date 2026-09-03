@@ -2685,8 +2685,8 @@ public partial class MainWindow : Window
                 : t.Quad != null && t.IsQuadChanged;
             if (needsCommit) session.CommitTransform();
             if (mode != TransformMode.Free) session.EnterTransformMode(mode);
-            session.RefreshSelectionHandles();
         }
+        session.RefreshSelectionHandles(); // 沒在變形也要換把手（4 角／16 控制點／8 把手）
         RefreshUiState();
     }
 

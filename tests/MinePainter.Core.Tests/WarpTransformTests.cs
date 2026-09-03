@@ -172,3 +172,46 @@ public class WarpTransformTests
         session.CommitTransform();
     }
 }
+
+public class TransformModeHandlePreviewTests
+{
+    [Fact]
+    public void SwitchingMode_WithoutSession_ShowsModeHandles_AndDragStartsSession()
+    {
+        using var session = new EditorSession(ImageCodec.CreateBlankDocument(512, 512, SKColors.Transparent));
+        var doc = session.Document;
+        var layer = (RasterLayer)doc.ActiveLayer!;
+        lock (doc.SyncRoot) layer.Surface.Fill(new SKRectI(100, 100, 300, 300), new SKColor(0, 255, 0));
+        session.ActiveTool = session.Move;
+        session.RefreshSelectionHandles();
+        Assert.Null(session.SelectionHandlesQuad);
+        Assert.Null(session.SelectionHandlesWarp);
+
+        session.Move.TransformMode = TransformMode.Perspective;
+        session.RefreshSelectionHandles();
+        Assert.Null(session.Transform);                        // 還沒開 session
+        Assert.NotNull(session.SelectionHandlesQuad);           // 但已是 4 角把手
+        Assert.Null(session.SelectionHandlesWarp);
+
+        session.Move.TransformMode = TransformMode.Warp;
+        session.RefreshSelectionHandles();
+        Assert.NotNull(session.SelectionHandlesWarp);           // 16 控制點
+        Assert.Null(session.SelectionHandlesQuad);
+        Assert.Equal(16, session.SelectionHandlesWarp!.Points.Length);
+
+        // 拖第 5 號控制點（上邊第二個把手）→ 開 session 並沿用同一個索引
+        var p = session.SelectionHandlesWarp.Points[1];
+        var handles = new HandleDragController();
+        Assert.True(handles.TryBegin(session, p, 6f));
+        Assert.NotNull(session.Transform?.Warp);
+        handles.Continue(session, new SKPoint(p.X, p.Y + 40), ToolModifiers.None);
+        Assert.Equal(p.Y + 40, session.Transform!.Warp!.Points[1].Y, 1);
+        handles.End(session);
+        session.CancelTransform();
+
+        session.Move.TransformMode = TransformMode.Free;
+        session.RefreshSelectionHandles();
+        Assert.Null(session.SelectionHandlesQuad);
+        Assert.Null(session.SelectionHandlesWarp);
+    }
+}

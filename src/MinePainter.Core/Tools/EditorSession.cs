@@ -172,6 +172,18 @@ public sealed class EditorSession : IDisposable
             SelectionHandlesRotation = Transform?.DisplayRotation ?? 0f;
             SelectionHandlesWarp = Transform?.Warp;
             SelectionHandlesQuad = SelectionHandlesWarp == null ? Transform?.Quad : null;
+
+            // 還沒開始變形、移動工具在透視／扭曲模式：框就先畫成該模式的把手（4 角／16 控制點），
+            // 不必先拖一下才換（使用者明示）。拖任一把手時才真的開 session（HandleDragController）。
+            if (Transform == null && frame is { } pf && ActiveTool == Move &&
+                Floating == null && Selection is not { IsEmpty: false })
+            {
+                switch (Move.TransformMode)
+                {
+                    case TransformMode.Perspective: SelectionHandlesQuad = QuadGeometry.Corners(pf); break;
+                    case TransformMode.Warp: SelectionHandlesWarp = WarpMesh.Flat(pf); break;
+                }
+            }
         }
     }
 

@@ -39,20 +39,21 @@ public sealed class HandleDragController
     private bool _freeCorner; // 透視模式按住 Ctrl：該角自由拖（PS 的「扭曲」）
 
     /// <summary>四角／彎曲模式下的把手命中與拖曳開始；沒命中回 false。</summary>
-    private bool BeginMeshDrag(TransformSession transform, SKPoint p, float tolerance, ToolModifiers modifiers)
+    private bool BeginMeshDrag(TransformSession transform, SKPoint p, float tolerance, ToolModifiers modifiers,
+        int forcedIndex = -1)
     {
         _startQuad = null;
         _startWarp = null;
         if (transform.Warp is { } warp)
         {
-            var index = warp.HitPoint(p, tolerance);
+            var index = forcedIndex >= 0 ? forcedIndex : warp.HitPoint(p, tolerance);
             if (index < 0) return false;
             _startWarp = warp;
             _corner = index;
         }
         else if (transform.Quad is { } quad)
         {
-            var handle = QuadGeometry.HitHandle(quad, p, tolerance, includeEdges: false);
+            var handle = forcedIndex >= 0 ? forcedIndex : QuadGeometry.HitHandle(quad, p, tolerance, includeEdges: false);
             if (handle < 0) return false;
             _startQuad = quad;
             _corner = handle;
@@ -254,6 +255,19 @@ public sealed class HandleDragController
             _startRect = shownRect;
             transform.BeginGesturePreview(); // 拖曳期間 render thread 直接畫，不逐步蓋章
             return true;
+        }
+
+        // 移動工具在透視／扭曲模式、還沒開始變形：框已經畫成該模式的把手（EditorSession.RefreshSelectionHandles），
+        // 點中哪個把手就以它開 session（含文字的圖層會先自動平面化），沿用同一個索引繼續拖
+        if (session.Move.TransformMode != TransformMode.Free && session.ActiveTool == session.Move &&
+            session.Floating == null && session.Selection is not { IsEmpty: false })
+        {
+            var index = -1;
+            if (session.SelectionHandlesWarp is { } previewWarp) index = previewWarp.HitPoint(p, tolerance);
+            else if (session.SelectionHandlesQuad is { } previewQuad) index = QuadGeometry.HitHandle(previewQuad, p, tolerance, includeEdges: false);
+            if (index < 0) return false;
+            if (session.EnterTransformMode(session.Move.TransformMode) is not { IsMeshMode: true } entered) return false;
+            return BeginMeshDrag(entered, p, tolerance, modifiers, index);
         }
 
         // 浮動內容
