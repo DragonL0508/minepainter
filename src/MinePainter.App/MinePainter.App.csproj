@@ -13,6 +13,12 @@
     <!-- 啟動音效：內嵌資源（啟動畫面出現時 Avalonia 尚未初始化，不能走 avares） -->
     <EmbeddedResource Include="Assets\Sounds\*.wav" />
     <!--
+      小工具「YouTube 縮圖預覽」的週邊影片縮圖：檔名＝影片標題（見該資料夾的 README）。
+      LogicalName 保留原檔名（含中文），程式靠 ytthumb/ 前綴掃出來；沒放圖也編得起來。
+    -->
+    <EmbeddedResource Include="Assets\YouTubePreview\*.png;Assets\YouTubePreview\*.jpg;Assets\YouTubePreview\*.jpeg;Assets\YouTubePreview\*.webp"
+                      LogicalName="ytthumb/%(Filename)%(Extension)" />
+    <!--
       檔案總管的 .mpp 縮圖處理常式：publish.bat 會先把 MinePainter.Thumbnails 用
       NativeAOT 編成原生 DLL 放到這裡，再嵌進 exe（發佈的仍然是單一檔案），安裝時
       才寫進安裝資料夾並註冊。開發建置沒有這個檔，條件式讓它照樣編得起來。

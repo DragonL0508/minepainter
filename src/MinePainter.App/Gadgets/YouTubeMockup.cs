@@ -122,8 +122,17 @@ public static class YouTubeMockup
             .Replace("__VIEWS__", Escape(FormatViews(o.Views)))
             .Replace("__UPLOADED__", Escape(o.Uploaded))
             .Replace("__DURATION__", Escape(o.Duration))
+            .Replace("__THUMBS__", BuildThumbLibrary())
             .Replace("__THEME__", o.Dark ? "dark" : "light")
             .Replace("__FIT__", o.Cover ? "cover" : "contain");
+    }
+
+    /// <summary>把內建圖庫排成頁面吃的陣列字面：t＝標題（＝檔名）、s＝WebP 的 data URI。</summary>
+    private static string BuildThumbLibrary()
+    {
+        var items = YouTubeThumbLibrary.All.Select(t =>
+            $$"""{ t: "{{Escape(t.Title)}}", s: "data:image/webp;base64,{{Convert.ToBase64String(t.Webp)}}" }""");
+        return "[" + string.Join(",\n", items) + "]";
     }
 
     private static string FirstGlyph(string text)
@@ -149,7 +158,8 @@ public static class YouTubeMockup
 
     /// <summary>
     /// 仿 YouTube 首頁：頂列、側欄導覽、分類 chips、影片網格。
-    /// 3 欄 × 6 列共 18 部，週邊全是假資料（CSS 漸層縮圖），使用者的圖每次落在隨機一格。
+    /// 3 欄 × 6 列共 18 部：週邊縮圖與標題取自內建圖庫（<see cref="YouTubeThumbLibrary"/>），
+    /// 頻道與數字每次重新整理隨機配，使用者的圖每次落在隨機一格。
     /// 標「實測」的數字來自 1920 寬深色實機量測，要改先確認有新的量測資料。
     /// </summary>
     private const string Template = """
@@ -238,8 +248,9 @@ body {
   position: absolute; right: 8px; bottom: 8px; background: rgba(0,0,0,.8); color: #fff;
   font: 500 12px/18px inherit; padding: 0 4px; border-radius: 4px;
 }
-/* 假影片的縮圖是當場畫的 SVG（見腳本的 fakeThumb），撐滿整個縮圖框 */
-.thumb svg { display: block; width: 100%; height: 100%; }
+/* 週邊影片的縮圖：內建圖庫的圖一律裁切填滿（只有使用者自己那張跟著 --FIT 走） */
+.thumb > img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.thumb > .own { object-fit: __FIT__; }
 
 /* 網格：#contents 實測 padding-top 24；卡片 533×400、margin 0 8px 32px（＝欄距 16、列距 32）。
    固定 3 欄 × 6 列＝18 部，跟 1920 寬實機一樣；窄視窗才降欄避免溢出 */
@@ -322,7 +333,7 @@ const MINE = {
   // 頻道名可能被轉成 &quot; 之類的實體，取首字不能自己 slice，用 C# 算好的
   letter: "__AVATAR_LETTER__",
 };
-// ── 假影片：標題、頻道、頭像、縮圖全部當場生成，每次重新整理都不一樣 ──────────
+// ── 週邊假影片：縮圖與標題來自內建圖庫，其餘每次重新整理隨機配 ────────────────
 const rand = (n) => Math.floor(Math.random() * n);
 const pick = (a) => a[rand(a.length)];
 const pad2 = (n) => String(n).padStart(2, "0");
@@ -330,26 +341,6 @@ const pad2 = (n) => String(n).padStart(2, "0");
 const CHANNELS = [
   "紅石小教室", "方塊建築師", "像素工坊", "礦坑筆記", "指令實驗室",
   "綠寶石頻道", "一格工程部", "夜視玩家", "苦力怕日常", "建築藍圖社",
-];
-// [題材, 縮圖上的大字]：大字跟標題同一個題材，看起來才像同一部影片
-const TOPICS = [
-  ["紅石電路", "紅石"], ["刷怪塔", "刷怪塔"], ["附魔", "附魔"], ["村民交易", "村民"],
-  ["自動農場", "農場"], ["下界交通", "下界"], ["生存基地", "基地"], ["地形建築", "地形"],
-  ["指令方塊", "指令"], ["資源包", "材質"], ["礦車軌道", "礦車"], ["水電站", "水電"],
-];
-const TITLES = [
-  (t) => `${t}這樣做，效率直接翻倍`,
-  (t) => `我用 ${5 + rand(60)} 天做了一座${t}`,
-  (t) => `【實況】生存日記 EP.${1 + rand(40)}：${t}`,
-  (t) => `新手最常搞錯的 ${3 + rand(9)} 個${t}細節`,
-  (t) => `${t}完全指南，一支影片講完`,
-  (t) => `把${t}做到極限會發生什麼事`,
-  (t) => `這個${t}設計讓我不想再手動蓋`,
-  (t) => `${t}實測：五種做法一次比完`,
-  (t) => `${t}只用一格空間能做到什麼程度`,
-  (t) => `${t}的隱藏機制，官方從來沒說`,
-  (t) => `${t}改了第四版，這次終於滿意`,
-  (t) => `${t}翻車紀錄，別學我`,
 ];
 const AGES = [
   "3 小時前", "7 小時前", "1 天前", "2 天前", "4 天前", "6 天前",
@@ -376,57 +367,40 @@ const randomDuration = () => (rand(10) === 0
 const hashOf = (text) => [...text].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);
 const avatarBg = (name) => `hsl(${hashOf(name) % 360} 55% 42%)`;
 
-// 假縮圖：四種常見的 YouTube 縮圖構圖，當場畫成 SVG（零外部資源）
-const PALETTES = [
-  ["#f4511e", "#7b1fa2"], ["#1565c0", "#00acc1"], ["#2e7d32", "#9e9d24"],
-  ["#c62828", "#ad1457"], ["#4527a0", "#1e88e5"], ["#ef6c00", "#c62828"],
-  ["#00695c", "#33691e"], ["#37474f", "#546e7a"], ["#5d4037", "#bf360c"],
-];
-let svgUid = 0;
-const fakeThumb = (word) => {
-  const [c1, c2] = pick(PALETTES);
-  const id = `g${svgUid++}`;
-  const big = (x, y, anchor, size) =>
-    `<text x="${x}" y="${y}" text-anchor="${anchor}" font-size="${size}" font-weight="900"` +
-    ` fill="#fff" stroke="#000" stroke-width="7" paint-order="stroke">${word}</text>`;
-  // 右側的人頭剪影：真實縮圖十張有六張都有一顆頭
-  const face = '<circle cx="250" cy="104" r="58" fill="rgba(0,0,0,.3)" />' +
-    '<circle cx="250" cy="86" r="27" fill="#f0c8a0" />' +
-    '<rect x="214" y="116" width="72" height="52" rx="24" fill="#f0c8a0" />';
-  const arrow = '<path d="M148 120 h46 v-15 l28 23 -28 23 v-15 h-46 z" fill="#ffdd00" stroke="#000" stroke-width="4" />';
-  const grid16 = [...Array(12)].map((_, i) =>
-    `<rect x="${(i % 6) * 54}" y="${i < 6 ? 0 : 126}" width="54" height="54" fill="rgba(255,255,255,.07)" />`).join("");
-  const body = [
-    face + big(22, 112, "start", 46),
-    '<path d="M0 0 H320 L0 180 Z" fill="rgba(0,0,0,.35)" />' + big(160, 106, "middle", 52) +
-      '<rect x="98" y="124" width="124" height="10" fill="#ff2b2b" />',
-    grid16 + big(20, 150, "start", 44) +
-      '<rect x="230" y="16" width="72" height="30" rx="6" fill="#ff2b2b" />' +
-      '<text x="266" y="39" text-anchor="middle" font-size="19" font-weight="900" fill="#fff">NEW</text>',
-    arrow + big(20, 106, "start", 44) + '<rect x="0" y="0" width="320" height="180" fill="none" stroke="#ffdd00" stroke-width="8" />',
-  ][rand(4)];
-  return `<svg viewBox="0 0 320 180" preserveAspectRatio="xMidYMid slice">` +
-    `<defs><linearGradient id="${id}" x1="0" y1="0" x2="1" y2="1">` +
-    `<stop offset="0" stop-color="${c1}" /><stop offset="1" stop-color="${c2}" /></linearGradient></defs>` +
-    `<rect width="320" height="180" fill="url(#${id})" />${body}</svg>`;
+// 內建縮圖庫（C# 從 Assets/YouTubePreview/ 內嵌進來；t＝標題＝檔名、s＝WebP data URI）
+const THUMBS = __THUMBS__;
+// 圖庫是空的就退回純色底，其餘功能照常
+const BLANKS = ["#3b4a6b", "#2d5a4a", "#6b5a2d", "#4a2d6b", "#2a4a3a"];
+
+// 每次 render 重發一副牌：不夠 17 張才輪到重複，避免同一頁出現兩張一樣的圖
+const dealThumbs = (count) => {
+  if (THUMBS.length === 0) return [...Array(count)].map(() => null); // 沒放圖：整排退回純色底
+  const out = [];
+  while (out.length < count) {
+    const deck = THUMBS.slice();
+    for (let i = deck.length - 1; i > 0; i--) {
+      const j = rand(i + 1);
+      [deck[i], deck[j]] = [deck[j], deck[i]];
+    }
+    out.push(...deck.slice(0, count - out.length));
+  }
+  return out;
 };
 
-const makeFake = () => {
-  const [topic, word] = pick(TOPICS);
-  const channel = pick(CHANNELS);
-  return {
-    title: pick(TITLES)(topic),
-    channel,
-    views: formatViews(randomViews()),
-    age: pick(AGES),
-    duration: randomDuration(),
-    thumb: fakeThumb(word),
-  };
-};
+const makeFake = (thumb) => ({
+  title: thumb ? thumb.t : "（Assets/YouTubePreview 還沒有圖）",
+  channel: pick(CHANNELS),
+  views: formatViews(randomViews()),
+  age: pick(AGES),
+  duration: randomDuration(),
+  thumb: thumb
+    ? `<img src="${thumb.s}" alt="">`
+    : `<div style="width:100%;height:100%;background:${pick(BLANKS)}"></div>`,
+});
 
 const thumbHtml = (f) => f
   ? `<div class="thumb">${f.thumb}<span class="dur">${f.duration}</span></div>`
-  : `<div class="thumb"><img src="${MINE.thumb}" alt=""><span class="dur">${MINE.duration}</span></div>`;
+  : `<div class="thumb"><img class="own" src="${MINE.thumb}" alt=""><span class="dur">${MINE.duration}</span></div>`;
 
 const cardHtml = (f) => `
   <article class="card">
@@ -446,7 +420,7 @@ const cardHtml = (f) => `
 // 使用者那部每次落在隨機的一格：縮圖在角落、在中間、被別人夾住看起來差很多
 const grid = document.getElementById("grid");
 const render = () => {
-  const cards = [...Array(17)].map(makeFake);
+  const cards = dealThumbs(17).map(makeFake);
   cards.splice(rand(cards.length + 1), 0, null);
   grid.innerHTML = cards.map(cardHtml).join("");
   // 頻道頭像：選了「用這張圖」只換自己那格，假影片維持首字
