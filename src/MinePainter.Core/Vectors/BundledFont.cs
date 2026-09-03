@@ -1,4 +1,4 @@
-using SkiaSharp;
+﻿using SkiaSharp;
 
 namespace MinePainter.Core.Vectors;
 
@@ -41,6 +41,27 @@ public static class BundledFont
         _typeface != null && string.Equals(family, _typeface.FamilyName, StringComparison.OrdinalIgnoreCase)
             ? _typeface
             : null;
+
+    /// <summary>
+    /// 解析某個家族＋字重的字面：**系統裝了就用系統的**（才有 Bold／Black 等各種字重），
+    /// 系統沒有這支才退回內嵌的那份。
+    ///
+    /// 不能反過來先問內嵌字型 —— 內嵌的只有 Regular 一個字重，家族名一撞就把整個家族接走，
+    /// 選 Bold／Black 也還是畫 Regular（使用者 2026-09-04 回報「只有 Noto Sans TC 選不了字重」）。
+    /// 也不能只靠 <see cref="SKTypeface.FromFamilyName(string, SKFontStyle)"/>：家族不存在時
+    /// Skia 不回 null，而是悄悄給一支預設字面，那樣內嵌的保底字型永遠輪不到。
+    /// </summary>
+    public static SKTypeface? Resolve(string family, SKFontStyle style)
+    {
+        var system = SKTypeface.FromFamilyName(family, style);
+        if (system != null &&
+            string.Equals(system.FamilyName, family, StringComparison.OrdinalIgnoreCase))
+        {
+            return system;
+        }
+        system?.Dispose();
+        return ForFamily(family);
+    }
 
     /// <summary>保底字面含這個碼位就給它，否則 null。</summary>
     public static SKTypeface? Match(int codepoint) =>

@@ -1,4 +1,4 @@
-using SkiaSharp;
+﻿using SkiaSharp;
 
 namespace MinePainter.Core.Vectors;
 
@@ -717,8 +717,9 @@ public sealed record TextElement : VectorElement
             _bold = bold;
             _italic = italic;
             _letterSpacing = letterSpacing;
-            // 保底字型不在系統裡（是內嵌的），FromFamilyName 找不到它；它也全程共用一份，不進 _owned
-            var primary = BundledFont.ForFamily(family) ?? SKTypeface.FromFamilyName(family, style);
+            // 系統有這支就用系統的（字重才選得到），沒有才用內嵌的保底字型；
+            // 內嵌那份全程共用一份，不進 _owned（見 BundledFont.Resolve）
+            var primary = BundledFont.Resolve(family, style) ?? SKTypeface.FromFamilyName(family, style);
             if (primary != null && primary != BundledFont.Typeface) _owned.Add(primary);
             _primary = primary ?? BundledFont.Typeface ?? SKTypeface.Default;
         }

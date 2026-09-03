@@ -1,4 +1,4 @@
-using Avalonia.Controls;
+﻿using Avalonia.Controls;
 using Avalonia.Controls.Templates;
 using Avalonia.Media;
 using SkiaSharp;
@@ -113,8 +113,10 @@ public static class FontCatalog
     {
         try
         {
-            // 內嵌字型不在系統裡，只能以 avares 位址取用
-            var family = string.Equals(name, EmbeddedFonts.FamilyName, StringComparison.OrdinalIgnoreCase)
+            // 內嵌字型不在系統裡，只能以 avares 位址取用 —— 但系統裝了同名家族時要用系統那份，
+            // 內嵌的只有 Regular 一個字重，接走家族名就選不到 Bold／Black
+            var family = string.Equals(name, EmbeddedFonts.FamilyName, StringComparison.OrdinalIgnoreCase) &&
+                         !SystemHasFamily(name)
                 ? new FontFamily(EmbeddedFonts.FamilyUri)
                 : new FontFamily(name);
             _ = new Typeface(family).GlyphTypeface;
@@ -123,6 +125,20 @@ public static class FontCatalog
         catch
         {
             return FontFamily.Default;
+        }
+    }
+
+    /// <summary>系統實際安裝了這個家族嗎（Skia 列得出字型樣式就是有）。</summary>
+    private static bool SystemHasFamily(string name)
+    {
+        try
+        {
+            using var set = SKFontManager.Default.GetFontStyles(name);
+            return set.Count > 0;
+        }
+        catch
+        {
+            return false;
         }
     }
 
