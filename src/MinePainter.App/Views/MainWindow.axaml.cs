@@ -2479,6 +2479,11 @@ public partial class MainWindow : Window
         Services.AppSettings.Instance.Save();
     }
 
+    private async void OnFileAssociationsClicked(object? sender, RoutedEventArgs e)
+    {
+        await new FileAssociationsWindow().ShowDialog(this);
+    }
+
     // ---- 工具選項 ----
 
     private void WireToolOptionBars()

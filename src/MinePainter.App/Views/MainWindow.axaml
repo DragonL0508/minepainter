@@ -125,6 +125,7 @@
           <MenuItem Header="設定(_S)">
             <MenuItem Header="快捷鍵(_K)…" Click="OnShortcutsClicked" />
             <MenuItem Header="主題(_T)…" Click="OnThemeClicked" />
+            <MenuItem Header="檔案關聯(_A)…" Click="OnFileAssociationsClicked" />
             <MenuItem x:Name="StartupSoundMenuItem" Header="啟動音效" ToggleType="CheckBox"
                       Click="OnToggleStartupSoundClicked" />
             <Separator />
