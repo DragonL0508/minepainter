@@ -175,7 +175,7 @@ public static class UpdateService
     }
 
     /// <summary>cmd 讀 .bat 用 OEM 字碼頁（繁中 Windows 是 950）；路徑含中文時得用它寫，不然 copy 找不到檔。</summary>
-    private static System.Text.Encoding BatchEncoding()
+    internal static System.Text.Encoding BatchEncoding()
     {
         try
         {

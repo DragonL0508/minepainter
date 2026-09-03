@@ -41,15 +41,22 @@ public static class FileAssociations
     public static string ExePath =>
         Environment.ProcessPath ?? Process.GetCurrentProcess().MainModule?.FileName ?? "";
 
+    /// <summary>
+    /// 關聯要指向的執行檔：裝過就指安裝位置（使用者不會去搬那裡），沒裝才指現在這份。
+    /// 兩份同時存在時也因此不會互搶 —— 它們算出來的目標是同一個。
+    /// </summary>
+    public static string TargetExe =>
+        AppInstaller.IsInstalled ? AppInstaller.InstalledExe : ExePath;
+
     private static string ProgId(string ext) => "MinePainter" + ext;
 
     /// <summary>這個副檔名有沒有登記過（不代表它就是預設程式）。</summary>
     public static bool IsRegistered(string ext) =>
         CommandOf(ext) is not null;
 
-    /// <summary>登記的路徑是不是還指向現在這個執行檔（搬過位置就會是 false）。</summary>
+    /// <summary>登記的路徑是不是還指向該指的執行檔（搬過位置就會是 false）。</summary>
     public static bool IsStale(string ext) =>
-        CommandOf(ext) is { } cmd && !cmd.Contains(ExePath, StringComparison.OrdinalIgnoreCase);
+        CommandOf(ext) is { } cmd && !cmd.Contains(TargetExe, StringComparison.OrdinalIgnoreCase);
 
     private static string? CommandOf(string ext)
     {
@@ -61,7 +68,7 @@ public static class FileAssociations
     /// <summary>把指定副檔名登記給 MinePainter；沒列到的副檔名會被取消登記。</summary>
     public static void Apply(IReadOnlyCollection<string> extensions)
     {
-        var exe = ExePath;
+        var exe = TargetExe;
         if (string.IsNullOrEmpty(exe)) return;
 
         foreach (var kind in All)
@@ -180,7 +187,7 @@ public static class FileAssociations
         // 開發建置會指到 bin\Debug 底下的 exe，別讓它污染使用者的關聯
         if (optedOut || UpdateService.IsDevBuild) return false;
 
-        var exe = ExePath;
+        var exe = TargetExe;
         if (string.IsNullOrEmpty(exe)) return false;
 
         var registered = RegisteredExtensions();
@@ -195,8 +202,10 @@ public static class FileAssociations
         var path = Capability<string>("InstalledPath");
         if (string.Equals(path, exe, StringComparison.OrdinalIgnoreCase)) return false;
 
-        // 同一台電腦上還留著更新的版本，而且它還在原地：這次跑的是舊版，不要把關聯搶過來
-        if (Version.TryParse(Capability<string>("InstalledVersion"), out var registeredVersion) &&
+        // 都沒安裝、只是解了好幾份 zip 的情況：更新的那份還在原地就不搶
+        // （有安裝的話 TargetExe 兩邊算出來一樣，根本走不到這裡）
+        if (!AppInstaller.IsInstalled &&
+            Version.TryParse(Capability<string>("InstalledVersion"), out var registeredVersion) &&
             registeredVersion > UpdateService.CurrentVersion &&
             path is not null && File.Exists(path))
         {

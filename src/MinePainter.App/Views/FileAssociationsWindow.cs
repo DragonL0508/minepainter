@@ -61,6 +61,16 @@ public sealed class FileAssociationsWindow : ModalDialog
                     Foreground = AppTheme.TextMutedBrush,
                     TextWrapping = TextWrapping.Wrap,
                 },
+                new TextBlock
+                {
+                    Text = AppInstaller.IsInstalled
+                        ? $"開啟時執行：{AppInstaller.InstalledExe}"
+                          + "（要完全移除請到「設定 → 應用程式」解除安裝 MinePainter）"
+                        : $"開啟時執行：{FileAssociations.TargetExe}",
+                    FontSize = 11,
+                    Foreground = AppTheme.TextMutedBrush,
+                    TextWrapping = TextWrapping.Wrap,
+                },
             },
         };
 
@@ -113,6 +123,8 @@ public sealed class FileAssociationsWindow : ModalDialog
         // 手動勾成空的＝跟按「全部移除」同一件事，啟動時不要再自動塞回去
         var settings = AppSettings.Instance;
         settings.FileAssociationsOptOut = chosen.Count == 0;
+        // 解除安裝過的人在這裡重新登記＝明確要回來，自動安裝也一起打開
+        if (chosen.Count > 0) settings.AutoInstall = true;
         settings.FileAssociationsRegistered = true;
     }
 

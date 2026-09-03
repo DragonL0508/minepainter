@@ -7,6 +7,13 @@ internal static class Program
     [STAThread]
     public static void Main(string[] args)
     {
+        // 控制台的「解除安裝」會帶這個旗標進來：清完就走，不要開視窗
+        if (args.Contains(Services.AppInstaller.UninstallFlag))
+        {
+            Services.AppInstaller.Uninstall();
+            return;
+        }
+
         // 第一件事就是秀啟動畫面（純 Win32、自己的執行緒），Avalonia 初始化在它後面跑
         Platform.NativeSplash.Show();
         Services.StartupSounds.SplashShown();
