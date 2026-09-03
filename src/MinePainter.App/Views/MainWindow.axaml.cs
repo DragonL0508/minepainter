@@ -12,6 +12,7 @@ using Avalonia.VisualTree;
 using Material.Icons;
 using Material.Icons.Avalonia;
 using MinePainter.App.Controls;
+using MinePainter.App.Services;
 using MinePainter.Core.Adjustments;
 using MinePainter.Core.AI;
 using MinePainter.Core.Effects;
@@ -33,10 +34,12 @@ public partial class MainWindow : Window
     private readonly ToolsPanelContent _toolsContent = new();
     private readonly HistoryPanelContent _historyContent = new();
     private readonly PalettePanelContent _paletteContent = new();
+    private readonly PresetsPanelContent _presetsContent = new();
     private PanelWindow _toolsPanel = null!;
     private PanelWindow _historyPanel = null!;
     private PanelWindow _layersPanel = null!;
     private PanelWindow _palettePanel = null!;
+    private PanelWindow _presetsPanel = null!;
     private bool _panelsPlaced;
 
     private string _currentToolKey = "brush";
@@ -138,6 +141,27 @@ public partial class MainWindow : Window
         // 放開滑鼠才落地成一步 undo（拖色輪／滑桿途中的連續變化只做即時預覽）
         _paletteContent.ColorCommitted += _ => CommitTextEdit();
 
+        // 預設集面板：雙擊／右鍵套到目前圖層；拖到畫布的落點處理在 OnDrop
+        _presetsContent.SessionProvider = () => Canvas.Session;
+        _presetsContent.Notify += Toasts.Show;
+        _presetsContent.ApplyRequested += (preset, replace) =>
+        {
+            var session = CommitPending();
+            if (session == null)
+            {
+                Toasts.Show("先開一份文件");
+                return;
+            }
+            RasterLayer? layer;
+            lock (session.Document.SyncRoot) layer = session.Document.ActiveLayer as RasterLayer;
+            if (layer == null)
+            {
+                Toasts.Show("目前圖層不是點陣圖層（群組不能套效果）");
+                return;
+            }
+            ApplyPresetToLayer(session, layer, preset, replace);
+        };
+
         // 浮動面板黏著主視窗：移動、改變大小、最大化都跟著走
         PositionChanged += (_, _) => RepositionPanels();
         SizeChanged += (_, _) => RepositionPanels();
@@ -177,6 +201,23 @@ public partial class MainWindow : Window
 
             var debugTextFx = Environment.GetEnvironmentVariable("MINEPAINTER_DEBUG_TEXTFX");
             if (debugTextFx is "1" or "2") SeedDebugText();
+
+            // MINEPAINTER_DEBUG_PRESETS=1 或 =<資料夾>：啟動即打開預設集面板（搭配 MINEPAINTER_PRESETS_DIR 指到測試用的庫）；
+            // MINEPAINTER_DEBUG_PRESETS_DROP=<x>,<y>：1.5 秒後把庫裡第一個預設集當作丟在畫布那個 doc 座標（驗證落點套用）
+            if (Environment.GetEnvironmentVariable("MINEPAINTER_DEBUG_PRESETS") is { Length: > 0 } debugPresets)
+            {
+                PresetsToggle.IsChecked = true;
+                if (debugPresets != "1") _presetsContent.ShowFolder(debugPresets);
+                if (Environment.GetEnvironmentVariable("MINEPAINTER_DEBUG_PRESETS_DROP")?.Split(',') is [var xs, var ys] &&
+                    float.TryParse(xs, out var dx) && float.TryParse(ys, out var dy))
+                {
+                    Avalonia.Threading.DispatcherTimer.RunOnce(() =>
+                    {
+                        if (EffectPresetStore.LoadAll().FirstOrDefault() is { } first)
+                            DropPresetOnCanvas(first, new SKPoint(dx, dy));
+                    }, TimeSpan.FromMilliseconds(1500));
+                }
+            }
             if (debugTextFx == "3")
             {
                 // =3：切到文字工具、1.5 秒後把工具列的字型下拉打開（驗證下拉清單首次開啟的渲染）
@@ -187,6 +228,31 @@ public partial class MainWindow : Window
                     foreach (var popup in FontFamilyCombo.GetTemplateChildren().OfType<Popup>())
                         popup.IsLightDismissEnabled = false;
                     FontFamilyCombo.IsDropDownOpen = true;
+
+                    // MINEPAINTER_DEBUG_PERF=<檔案>：每秒把畫布 fps、主視窗與下拉 popup 的 layout／render 次數寫進去
+                    if (Environment.GetEnvironmentVariable("MINEPAINTER_DEBUG_PERF") is { Length: > 0 } perfFile)
+                    {
+                        int mainLayout = 0, popupLayout = 0, popupRender = 0;
+                        LayoutUpdated += (_, _) => mainLayout++;
+                        var popup = FontFamilyCombo.GetTemplateChildren().OfType<Popup>().FirstOrDefault();
+                        if (popup?.Child is { } child)
+                        {
+                            child.LayoutUpdated += (_, _) => popupLayout++;
+                            if (TopLevel.GetTopLevel(child) is { } popupRoot)
+                                popupRoot.LayoutUpdated += (_, _) => popupLayout++;
+                        }
+                        var perfTimer = new Avalonia.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+                        var lastFrame = Canvas.Stats.FrameIndex;
+                        perfTimer.Tick += (_, _) =>
+                        {
+                            var frames = Canvas.Stats.FrameIndex - lastFrame;
+                            lastFrame = Canvas.Stats.FrameIndex;
+                            File.AppendAllText(perfFile,
+                                $"{DateTime.Now:HH:mm:ss} fps={Canvas.Stats.Fps:F0} canvasFrames={frames} mainLayout={mainLayout} popupLayout={popupLayout} popupRender={popupRender}\n");
+                            mainLayout = popupLayout = popupRender = 0;
+                        };
+                        perfTimer.Start();
+                    }
                 }, TimeSpan.FromMilliseconds(1500));
             }
         };
@@ -410,6 +476,7 @@ public partial class MainWindow : Window
         Wire(() => _historyPanel, HistoryToggle);
         Wire(() => _layersPanel, LayersToggle);
         Wire(() => _palettePanel, PaletteToggle);
+        Wire(() => _presetsPanel, PresetsToggle);
 
         void Wire(Func<PanelWindow> panel, ToggleButton toggle)
         {
@@ -436,6 +503,7 @@ public partial class MainWindow : Window
         _historyPanel = Create(new PanelWindow("歷史記錄", _historyContent, 216, resizableHeight: 292), HistoryToggle);
         _layersPanel = Create(new PanelWindow("圖層", _layersContent, 330, resizableHeight: 436), LayersToggle);
         _palettePanel = Create(new PanelWindow("調色盤", _paletteContent, 330), PaletteToggle);
+        _presetsPanel = Create(new PanelWindow("預設集", _presetsContent, 440, resizableHeight: 400), PresetsToggle);
 
         PanelWindow Create(PanelWindow panel, ToggleButton toggle)
         {
@@ -482,6 +550,7 @@ public partial class MainWindow : Window
             Place(_palettePanel, new PanelAnchor(false, true, Px(18), Px(470)));
             Place(_layersPanel, new PanelAnchor(true, false, Px(348), Px(96)));
             Place(_historyPanel, new PanelAnchor(true, true, Px(286), Px(380)));
+            Place(_presetsPanel, new PanelAnchor(true, true, Px(810), Px(420)));
             RestorePanelLayout(frame); // 上次關掉時的位置／大小／開關蓋過預設排法
 
             void Place(PanelWindow panel, PanelAnchor anchor)
@@ -604,12 +673,13 @@ public partial class MainWindow : Window
         yield return (_historyPanel, HistoryToggle);
         yield return (_layersPanel, LayersToggle);
         yield return (_palettePanel, PaletteToggle);
+        yield return (_presetsPanel, PresetsToggle);
     }
 
     // ---- 面板配置的記憶（settings.json）----
 
     /// <summary>設定檔裡的面板 id（與 <see cref="PanelPairs"/> 同順序）。</summary>
-    private static readonly string[] PanelIds = ["tools", "history", "layers", "palette"];
+    private static readonly string[] PanelIds = ["tools", "history", "layers", "palette", "presets"];
 
     /// <summary>
     /// 套用上次關掉時記下的面板配置：貼哪一組邊、距離、大小、開關。
@@ -1129,12 +1199,33 @@ public partial class MainWindow : Window
 
     private void OnDragOver(object? sender, DragEventArgs e)
     {
+        if (PresetsPanelContent.PresetFrom(e.Data) != null)
+        {
+            // 預設集只能丟在畫布上（有文件時）
+            e.DragEffects = Canvas.Session != null && IsOverCanvas(e) ? DragDropEffects.Copy : DragDropEffects.None;
+            e.Handled = true;
+            return;
+        }
         e.DragEffects = DroppedPaths(e).Count > 0 ? DragDropEffects.Copy : DragDropEffects.None;
         e.Handled = true;
     }
 
+    private bool IsOverCanvas(DragEventArgs e)
+    {
+        var p = e.GetPosition(Canvas);
+        return p.X >= 0 && p.Y >= 0 && p.X < Canvas.Bounds.Width && p.Y < Canvas.Bounds.Height;
+    }
+
     private async void OnDrop(object? sender, DragEventArgs e)
     {
+        if (PresetsPanelContent.PresetFrom(e.Data) is { } preset)
+        {
+            e.Handled = true;
+            if (!IsOverCanvas(e)) return;
+            DropPresetOnCanvas(preset, Canvas.ViewToDoc(e.GetPosition(Canvas)));
+            return;
+        }
+
         var paths = DroppedPaths(e);
         if (paths.Count == 0) return;
         e.Handled = true;
@@ -1168,6 +1259,85 @@ public partial class MainWindow : Window
                 RefreshUiState();
                 break;
         }
+    }
+
+    // ---- 效果預設集拖進畫布 ----
+
+    /// <summary>
+    /// 預設集丟在畫布上：落點底下最上面「看得到且有像素」的點陣圖層就是目標
+    /// （像 Premiere 把預設集丟到剪輯上）；落在空白處就套到目前圖層。
+    /// </summary>
+    private void DropPresetOnCanvas(EffectPreset preset, SKPoint docPoint)
+    {
+        var session = CommitPending();
+        if (session == null) return;
+        var doc = session.Document;
+        RasterLayer? target;
+        bool hit;
+        lock (doc.SyncRoot)
+        {
+            target = LayerAtLocked(doc, docPoint);
+            hit = target != null;
+            target ??= doc.ActiveLayer as RasterLayer
+                       ?? doc.Descendants().OfType<RasterLayer>().LastOrDefault();
+        }
+        if (target == null)
+        {
+            Toasts.Show("文件裡沒有可以套效果的點陣圖層");
+            return;
+        }
+        if (hit)
+        {
+            lock (doc.SyncRoot) doc.ActiveLayer = target; // 套到哪層就選哪層，圖層面板看得到
+        }
+        ApplyPresetToLayer(session, target, preset, replace: false);
+    }
+
+    /// <summary>落點（doc 座標）附近 5×5 內有不透明像素的最上層點陣圖層（含效果輸出）；沒有就 null。</summary>
+    private static RasterLayer? LayerAtLocked(MinePainter.Core.Documents.Document doc, SKPoint p)
+    {
+        var x = (int)MathF.Floor(p.X);
+        var y = (int)MathF.Floor(p.Y);
+        if (x < 0 || y < 0 || x >= doc.Width || y >= doc.Height) return null;
+
+        foreach (var node in doc.Descendants().Reverse())
+        {
+            if (node is not RasterLayer layer || !IsShown(layer)) continue;
+            var lx = x - layer.Offset.X;
+            var ly = y - layer.Offset.Y;
+            var rect = new SKRectI(lx - 2, ly - 2, lx + 3, ly + 3);
+            var pixels = layer.EffectsRendered
+                ? LayerEffectRenderer.ReadPixels(layer.DisplaySurface, rect)
+                : LayerEffectRenderer.ReadPixelsWithElements(layer, rect);
+            if (pixels.Any(px => (px >> 24) != 0)) return layer;
+        }
+        return null;
+
+        static bool IsShown(LayerNode node)
+        {
+            for (LayerNode? n = node; n != null; n = n.Parent)
+            {
+                if (!n.IsVisible || n.Opacity <= 0f) return false;
+            }
+            return true;
+        }
+    }
+
+    /// <summary>套用預設集到某層（一步 undo），同步圖層面板／屬性視窗並回報。</summary>
+    private void ApplyPresetToLayer(EditorSession session, RasterLayer layer, EffectPreset preset, bool replace)
+    {
+        if (preset.Effects.Count == 0)
+        {
+            Toasts.Show($"預設集「{preset.Name}」是空的");
+            return;
+        }
+        EffectPresetStore.Apply(session, layer, preset, replace);
+        _layersContent.Refresh();
+        _layersContent.SyncPropertiesWindow();
+        RefreshUiState();
+        Toasts.Show(replace
+            ? $"已用預設集「{preset.Name}」取代「{layer.Name}」的效果堆疊"
+            : $"已把預設集「{preset.Name}」套到「{layer.Name}」");
     }
 
     /// <summary>把影像檔匯入成目前文件的一層（插在作用中圖層上方）。失敗以 toast 回報，回傳是否成功。</summary>

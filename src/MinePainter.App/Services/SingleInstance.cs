@@ -16,9 +16,11 @@ public static class SingleInstance
     private static Mutex? _mutex;
     // 注意：不能用 string.GetHashCode() —— .NET 每個程序的雜湊種子不同，兩邊會算出
     // 不一樣的名字，就永遠偵測不到彼此。要的是跨程序穩定的雜湊。
+    // 開發驗證（MINEPAINTER_DEBUG_OFFSCREEN）另起一組名字：驗證用的程序不該被使用者正在跑的那份接走
     private static readonly string Suffix = Convert.ToHexString(
         System.Security.Cryptography.SHA256.HashData(
-            System.Text.Encoding.UTF8.GetBytes(Environment.UserName)))[..8];
+            System.Text.Encoding.UTF8.GetBytes(Environment.UserName +
+                (Environment.GetEnvironmentVariable("MINEPAINTER_DEBUG_OFFSCREEN") is { Length: > 0 } ? "|debug" : ""))))[..8];
     private static string MutexName => "Local\\MinePainter.Instance." + Suffix;
     private static string PipeName => $"MinePainter.Open.{Suffix}";
 

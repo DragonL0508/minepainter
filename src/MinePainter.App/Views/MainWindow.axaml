@@ -27,6 +27,9 @@
           <ToggleButton x:Name="PaletteToggle" IsChecked="True" Padding="5,3" ToolTip.Tip="調色盤">
             <mi:MaterialIcon Kind="Palette" Width="16" Height="16" />
           </ToggleButton>
+          <ToggleButton x:Name="PresetsToggle" IsChecked="False" Padding="5,3" ToolTip.Tip="效果預設集">
+            <mi:MaterialIcon Kind="BookmarkMultipleOutline" Width="16" Height="16" />
+          </ToggleButton>
         </StackPanel>
 
         <controls:ClickSubmenuMenu x:Name="MainMenu" DockPanel.Dock="Left">

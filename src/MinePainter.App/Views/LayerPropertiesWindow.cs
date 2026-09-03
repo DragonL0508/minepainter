@@ -881,7 +881,7 @@ public sealed class LayerPropertiesWindow : Window
         foreach (var preset in presets)
         {
             var p = preset;
-            var item = new MenuItem { Header = p.Name };
+            var item = new MenuItem { Header = p.DisplayPath };
             var apply = new MenuItem { Header = "套用（加在現有堆疊之後）" };
             apply.Click += (_, _) => ApplyPreset(layer, p, replace: false);
             var replaceItem = new MenuItem { Header = "取代目前堆疊" };
@@ -924,12 +924,7 @@ public sealed class LayerPropertiesWindow : Window
 
     private void ApplyPreset(RasterLayer layer, EffectPreset preset, bool replace)
     {
-        var doc = _session.Document;
-        var before = layer.Effects;
-        var added = preset.Effects.Select(e =>
-            LayerEffect.Create(e.Effect, null, _session.Foreground) with { Enabled = e.Enabled }).ToList();
-        var after = replace ? added : before.Concat(added).ToList();
-        LayerEffectCommands.SetEffects(doc, _session.History, layer, before, after, $"套用預設集：{preset.Name}");
+        EffectPresetStore.Apply(_session, layer, preset, replace);
         StateChanged?.Invoke();
         SyncFromModel();
     }
