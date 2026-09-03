@@ -282,3 +282,45 @@ public class OutlineGrowTests
         Assert.Equal(0u, CachePixel(layer, 200 - 45, 230) >> 24);
     }
 }
+
+public class TextOutlineOverhangTests
+{
+    private static unsafe uint CachePixel(RasterLayer layer, int lx, int ly)
+    {
+        var tile = layer.FxCache.Surface.GetTileForRead(TileIndex.FromPixel(lx, ly));
+        if (tile == null) return 0;
+        return ((uint*)tile.Pixels)[(ly & 255) * Tile.Size + (lx & 255)];
+    }
+
+    [Fact]
+    public void Outline_AroundGlyphsExceedingEmBox_IsNotClipped()
+    {
+        // 「É」的重音、「|」的上下都超出 em box（行高算出來的框）：外框 40 在字面外 40px 處四邊都要有
+        var doc = ImageCodec.CreateBlankDocument(1000, 700, SKColors.Transparent);
+        using var session = new EditorSession(doc);
+        var layer = new RasterLayer { Name = "T" };
+        var el = new TextElement { Text = "Éjg|", FontFamily = "Arial", FontSize = 200, Position = new SKPoint(300, 250) };
+        lock (doc.SyncRoot) { doc.Root.Add(layer); layer.AddElement(el); doc.ActiveLayer = layer; }
+
+        using var bmp = new SKBitmap(new SKImageInfo(1000, 700, SKColorType.Bgra8888, SKAlphaType.Premul));
+        using (var c = new SKCanvas(bmp)) { c.Clear(SKColors.Transparent); el.Render(c); }
+        int il = int.MaxValue, it = int.MaxValue, ir = -1, ib = -1;
+        for (var y = 0; y < 700; y++)
+        for (var x = 0; x < 1000; x++)
+            if (bmp.GetPixel(x, y).Alpha > 0) { il = Math.Min(il, x); it = Math.Min(it, y); ir = Math.Max(ir, x); ib = Math.Max(ib, y); }
+        Assert.True(ir > il && ib > it);
+        var b = el.Bounds;
+        Assert.True(b.Top <= it && b.Bottom >= ib && b.Left <= il && b.Right >= ir, $"Bounds {b} must contain ink ({il},{it})-({ir},{ib})");
+
+        LayerEffectCommands.Add(doc, session.History, layer,
+            LayerEffect.Create(new ObjectOutlineEffect { Width = 40, Color = SKColors.Red }));
+        LayerEffectRenderer.RenderLayerNow(doc, layer);
+
+        int cl = int.MaxValue, ct = int.MaxValue, cr = -1, cb = -1;
+        for (var y = 0; y < 700; y++)
+        for (var x = 0; x < 1000; x++)
+            if ((CachePixel(layer, x, y) >> 24) > 0) { cl = Math.Min(cl, x); ct = Math.Min(ct, y); cr = Math.Max(cr, x); cb = Math.Max(cb, y); }
+        Assert.True(ct <= it - 39 && cb >= ib + 39 && cl <= il - 39 && cr >= ir + 39,
+            $"outline cache ({cl},{ct})-({cr},{cb}) vs ink ({il},{it})-({ir},{ib})");
+    }
+}

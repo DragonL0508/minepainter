@@ -213,15 +213,23 @@ public sealed record TextElement : VectorElement
     {
         get
         {
-            var doc = MapLocalToDoc(PaddedLocalBounds);
-            if (!HasDeform) return SKRectI.Ceiling(doc);
-            // 彎曲網格在框外是貝茲外插（三次成長），把含效果外擴的大框整個送進去會爆成離譜的範圍；
-            // 只映射排版框，效果外擴在變形後再往外加（效果本來就是在算繪結果上長出去的）
-            var deformed = Deform!.MapBounds(MapLocalToDoc(LocalBounds));
-            var pad = EffectPad + 2;
-            deformed.Inflate(pad, pad);
-            return SKRectI.Ceiling(deformed);
+            if (BoundsCache.TryGetValue(this, out var cached)) return cached.Value;
+            var result = ComputeBounds();
+            BoundsCache.AddOrUpdate(this, new StrongBox<SKRectI>(result));
+            return result;
         }
+    }
+
+    private SKRectI ComputeBounds()
+    {
+        var doc = MapLocalToDoc(PaddedLocalBounds);
+        if (!HasDeform) return SKRectI.Ceiling(doc);
+        // 彎曲網格在框外是貝茲外插（三次成長），把含效果外擴的大框整個送進去會爆成離譜的範圍；
+        // 只映射排版框（含著墨），效果外擴在變形後再往外加（效果本來就是在算繪結果上長出去的）
+        var deformed = Deform!.MapBounds(MapLocalToDoc(CoreLocalBounds));
+        var pad = EffectPad + 2;
+        deformed.Inflate(pad, pad);
+        return SKRectI.Ceiling(deformed);
     }
 
     /// <summary>沒有變形時的 doc 外框（透視／彎曲前；離線算繪文字用）。</summary>
@@ -238,16 +246,40 @@ public sealed record TextElement : VectorElement
 
     public TextElement WithoutDeform() => Deform == null ? this : this with { Deform = null };
 
-    private SKRect PaddedLocalBounds
+    /// <summary>
+    /// 排版框 ∪ 實際著墨框：CJK 展示字型（07TetsubinGothic 之類）的字面常超出 em box，
+    /// 只用行高算的框會少算，效果快取的餘裕就在那裡被吃掉 —— 外框拉大時被直線切掉就是這個。
+    /// </summary>
+    private SKRect CoreLocalBounds
     {
         get
         {
             var local = LocalBounds;
+            if (MeasureInkBounds() is { } ink)
+            {
+                ink.Inflate(2, 2);
+                local = new SKRect(Math.Min(local.Left, ink.Left), Math.Min(local.Top, ink.Top),
+                    Math.Max(local.Right, ink.Right), Math.Max(local.Bottom, ink.Bottom));
+            }
+            return local;
+        }
+    }
+
+    private SKRect PaddedLocalBounds
+    {
+        get
+        {
+            var local = CoreLocalBounds;
             var pad = EffectPad;
             if (pad > 0) local.Inflate(pad, pad);
             return local;
         }
     }
+
+    // Bounds 每格 tile 都會被問（合成器、效果快取、命中）；量測著墨要跑排版，同一個（immutable）實例只算一次
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<TextElement, StrongBox<SKRectI>> BoundsCache = new();
+
+    private sealed class StrongBox<T>(T value) { public T Value = value; }
 
     /// <summary>
     /// 使用者看到的框＝實際著墨範圍（逐行量測 ink bounds，含底線/刪除線），
