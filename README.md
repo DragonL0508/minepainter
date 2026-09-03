@@ -1,15 +1,16 @@
-# MinePainter
-
 <p align="center"><img src="docs/icon.png" width="96" alt="" /></p>
+<h1 align="center">MinePainter</h1>
+<p align="center">操作跟 paint.net 一樣，多了幾件事。</p>
+<p align="center"><a href="https://dragonl0508.github.io/minepainter/"><b>下載</b></a> · <a href="https://github.com/DragonL0508/minepainter/releases">所有版本</a></p>
 
-Windows 圖片編輯器。操作跟 paint.net 一樣，多了這些：
+<br />
 
-- 效果掛在圖層上，隨時能改
-- 文字存檔後還能改
-- 內建 AI 去背，離線
-- 開得了 `.pdn`
-
-**[下載](https://dragonl0508.github.io/minepainter/)** · [所有版本](https://github.com/DragonL0508/minepainter/releases)
+| | |
+| --- | --- |
+| **效果** | 掛在圖層上，隨時能改 |
+| **文字** | 存檔後還能改 |
+| **去背** | 內建 AI，離線 |
+| **格式** | 開得了 `.pdn` |
 
 ## 安裝
 
@@ -24,21 +25,23 @@ Windows 10 / 11 64 位元。
 
 | | |
 | --- | --- |
-| 開啟 | `.mpp` `.pdn` `.png` `.jpg` `.bmp` `.gif` `.webp` |
-| 儲存 | `.mpp` `.png` `.jpg` `.bmp` `.gif` `.webp` |
+| **開啟** | `.mpp` `.pdn` `.png` `.jpg` `.bmp` `.gif` `.webp` |
+| **儲存** | `.mpp` `.png` `.jpg` `.bmp` `.gif` `.webp` |
 
 ## 開發
 
 .NET 8 + Avalonia + SkiaSharp
 
-```bat
-run.bat                  建置並啟動
-dotnet test              測試
-publish.bat [sc|fd] [版本]  發佈到 dist\
-release.bat 1.4.2        推標籤，GitHub Actions 出 Release
+```
+run.bat                     建置並啟動
+dotnet test                 測試
+publish.bat [sc|fd] [版本]   發佈到 dist\
+release.bat 1.4.2           推標籤，GitHub Actions 出 Release
 ```
 
-- `src/MinePainter.Core` 核心邏輯
-- `src/MinePainter.App` 介面
-- `src/MinePainter.Thumbnails` 檔案總管縮圖（NativeAOT）
-- `tests/` 測試
+| | |
+| --- | --- |
+| `src/MinePainter.Core` | 核心邏輯 |
+| `src/MinePainter.App` | 介面 |
+| `src/MinePainter.Thumbnails` | 檔案總管縮圖（NativeAOT） |
+| `tests/` | 測試 |

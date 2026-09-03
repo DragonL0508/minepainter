@@ -96,23 +96,39 @@
 
   /* ---- 第二頁 ---- */
   .why {
-    max-width: 560px;
+    max-width: 1040px;
     margin: 0 auto;
-    padding: 96px 24px 140px;
+    padding: 160px 24px 180px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 96px;
+    align-items: start;
+  }
+  .eyebrow {
+    font: 400 13px/1 "Nightgazer", "Segoe UI", system-ui, sans-serif;
+    letter-spacing: 3px;
+    color: var(--accent);
   }
   .why h2 {
-    margin: 0 0 40px;
-    font-size: 28px; line-height: 1.3; font-weight: 700;
+    margin: 28px 0 0;
+    font-size: 40px; line-height: 1.3; font-weight: 700;
   }
-  .list { list-style: none; margin: 0; padding: 0; }
+  .why-note { margin: 28px 0 0; font-size: 15px; line-height: 1.8; color: var(--faint); }
+  .list { list-style: none; margin: 0; padding: 10px 0 0; }
   .list li {
-    padding: 18px 0;
+    display: grid;
+    grid-template-columns: 56px 88px minmax(0, 1fr);
+    align-items: baseline;
+    padding: 26px 0;
     border-top: 1px solid var(--line);
-    font-size: 17px; color: var(--text);
   }
   .list li:last-child { border-bottom: 1px solid var(--line); }
-  .list b { color: var(--accent); font-weight: 700; margin-right: 14px; }
-  .footnote { margin: 40px 0 0; font-size: 14px; color: var(--faint); }
+  .list i {
+    font: 400 14px/1 "Nightgazer", "Segoe UI", system-ui, sans-serif;
+    font-style: normal; color: var(--accent);
+  }
+  .list b { font-size: 18px; font-weight: 700; }
+  .list span { font-size: 17px; color: var(--muted); }
 
   /* 依序淡入上浮 */
   .rise { animation: rise .9s var(--ease) both; }
@@ -129,6 +145,10 @@
 
   @media (max-width: 860px) {
   }
+  @media (max-width: 860px) {
+    .why { grid-template-columns: 1fr; gap: 48px; padding: 96px 24px 120px; }
+    .why h2 { font-size: 30px; }
+  }
   @media (max-width: 480px) {
     .icon { width: 104px; height: 104px; }
     .icon-wrap { margin-bottom: 32px; }
@@ -136,8 +156,9 @@
     .tagline { font-size: 16px; margin-bottom: 40px; }
     .btn { width: 100%; justify-content: center; }
     .halo { width: 360px; height: 360px; margin: -220px 0 0 -180px; }
-    .why { padding: 64px 20px 96px; }
-    .why h2 { font-size: 24px; }
+    .why { padding: 72px 20px 96px; }
+    .why h2 { font-size: 26px; }
+    .list li { grid-template-columns: 44px 72px minmax(0, 1fr); padding: 20px 0; }
   }
   @media (prefers-reduced-motion: reduce) {
     .rise, .icon-wrap, .halo, .cue svg { animation: none; }
@@ -175,16 +196,19 @@
   </section>
 
   <section class="why" id="why">
-    <h2 class="reveal">操作跟 paint.net 一樣，多了這些。</h2>
+    <div class="reveal">
+      <div class="eyebrow">WHY</div>
+      <h2>操作跟 paint.net 一樣。<br />多了這些。</h2>
+      <p class="why-note">介面、快捷鍵、檔案格式都照 paint.net 學的。</p>
+    </div>
     <ul class="list">
-      <li class="reveal"><b>效果</b>掛在圖層上，隨時能改</li>
-      <li class="reveal"><b>文字</b>存檔後還能改</li>
-      <li class="reveal"><b>去背</b>內建 AI，離線</li>
-      <li class="reveal"><b>格式</b>開得了 .pdn</li>
-      <li class="reveal"><b>安裝</b>解壓就能跑</li>
-      <li class="reveal"><b>授權</b>開源、免費</li>
+      <li class="reveal"><i>01</i><b>效果</b><span>掛在圖層上，隨時能改</span></li>
+      <li class="reveal"><i>02</i><b>文字</b><span>存檔後還能改</span></li>
+      <li class="reveal"><i>03</i><b>去背</b><span>內建 AI，離線</span></li>
+      <li class="reveal"><i>04</i><b>格式</b><span>開得了 .pdn</span></li>
+      <li class="reveal"><i>05</i><b>安裝</b><span>解壓就能跑</span></li>
+      <li class="reveal"><i>06</i><b>授權</b><span>開源、免費</span></li>
     </ul>
-    <p class="footnote reveal">介面、快捷鍵、檔案格式都照 paint.net 學的。</p>
   </section>
 </main>
 
