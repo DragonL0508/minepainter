@@ -62,6 +62,39 @@ public static class AppInstaller
     }
 
     /// <summary>
+    /// 交棒：使用者還是從解壓的 zip 資料夾點 exe 時，直接把已安裝的那份叫起來、自己退場，
+    /// 那個 exe 等於自動變成捷徑。不刪使用者的檔案 —— 那是他自己下載的東西，而且
+    /// 「複製自己到 AppData 再刪掉原檔」是 dropper 的典型樣態，沒必要惹防毒。
+    ///
+    /// 在 Program.Main 開啟動畫面之前呼叫；回傳 true＝已經交棒，本程序該直接結束。
+    /// </summary>
+    public static bool TryHandOff(string[] args)
+    {
+        // 交棒過來的那份自己就是安裝版，不會再往下傳（這個環境變數只是多一道保險）
+        if (Environment.GetEnvironmentVariable(HandoffEnv) == "1") return false;
+        if (UpdateService.IsDevBuild || !UpdateService.IsSupported) return false;
+        if (IsRunningInstalled) return false;
+
+        // 我比較新：這次照常跑，等視窗開起來再把安裝的那份覆蓋成新版，下次才交棒
+        var installed = InstalledVersion;
+        if (installed is null || installed < UpdateService.CurrentVersion) return false;
+
+        try
+        {
+            var psi = new ProcessStartInfo(InstalledExe) { WorkingDirectory = InstallDir };
+            foreach (var a in args) psi.ArgumentList.Add(a); // 帶著要開的檔一起交棒
+            psi.Environment[HandoffEnv] = "1";
+            return Process.Start(psi) is not null;
+        }
+        catch
+        {
+            return false; // 叫不起來（檔案壞了之類）就自己跑，不要讓使用者開不了
+        }
+    }
+
+    private const string HandoffEnv = "MINEPAINTER_HANDOFF";
+
+    /// <summary>
     /// 啟動時跑一次（背景執行緒）：還沒安裝就裝，已安裝但比現在這份舊就更新它。
     /// 回傳 true＝這次真的複製了檔案（呼叫端拿去提示使用者）。
     /// </summary>

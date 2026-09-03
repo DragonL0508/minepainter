@@ -14,6 +14,10 @@ internal static class Program
             return;
         }
 
+        // 還是從解壓的 zip 點進來的：交給已安裝的那份跑，自己退場（要在啟動畫面之前，
+        // 不然使用者會看到兩次 splash）
+        if (Services.AppInstaller.TryHandOff(args)) return;
+
         // 第一件事就是秀啟動畫面（純 Win32、自己的執行緒），Avalonia 初始化在它後面跑
         Platform.NativeSplash.Show();
         Services.StartupSounds.SplashShown();
