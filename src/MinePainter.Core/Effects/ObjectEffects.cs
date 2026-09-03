@@ -1,4 +1,4 @@
-using SkiaSharp;
+﻿using SkiaSharp;
 using static MinePainter.Core.Effects.EffectMath;
 
 namespace MinePainter.Core.Effects;
@@ -24,9 +24,11 @@ internal static class DistanceTransform
         var w = ctx.Width + pad * 2;
         var h = ctx.Height + pad * 2;
         var d = new float[w * h];
-        for (var y = 0; y < h; y++)
-        for (var x = 0; x < w; x++)
-            d[y * w + x] = SeedFromCoverage(A(ctx.SrcOrTransparent(x - pad, y - pad)));
+        ParallelFor(0, h, y =>
+        {
+            for (var x = 0; x < w; x++)
+                d[y * w + x] = SeedFromCoverage(A(ctx.SrcOrTransparent(x - pad, y - pad)));
+        });
         Propagate(d, w, h);
         return d;
     }
@@ -106,7 +108,7 @@ internal static class DistanceTransform
         var tmp = new float[w * h];
         var dst = new float[w * h];
         var inv = 1f / (2 * r + 1);
-        for (var y = 0; y < h; y++)
+        ParallelFor(0, h, y =>  // 可分離：橫向每列獨立
         {
             var row = y * w;
             float sum = 0;
@@ -116,8 +118,8 @@ internal static class DistanceTransform
                 tmp[row + x] = sum * inv;
                 sum += src[row + Math.Clamp(x + r + 1, 0, w - 1)] - src[row + Math.Clamp(x - r, 0, w - 1)];
             }
-        }
-        for (var x = 0; x < w; x++)
+        });
+        ParallelFor(0, w, x => // 縱向每欄獨立
         {
             float sum = 0;
             for (var k = -r; k <= r; k++) sum += tmp[Math.Clamp(k, 0, h - 1) * w + x];
@@ -126,7 +128,7 @@ internal static class DistanceTransform
                 dst[y * w + x] = sum * inv;
                 sum += tmp[Math.Clamp(y + r + 1, 0, h - 1) * w + x] - tmp[Math.Clamp(y - r, 0, h - 1) * w + x];
             }
-        }
+        });
         return dst;
     }
 
@@ -136,13 +138,18 @@ internal static class DistanceTransform
     /// 偏移不參與包絡比較（最多差一格內的次優），換來邊界落在次像素位置。
     /// 外框／羽化的邊角是真正的圓弧，不像 chamfer 近似會出現八角形稜角。
     /// </summary>
+    /// <summary>
+    /// 兩趟法（Felzenszwalb）：第一趟每欄各自算垂直距離、第二趟每列各自取拋物線下包絡。
+    /// 兩趟的「每欄」與「每列」彼此獨立，所以都直接分到所有核心上跑 ——
+    /// 4K 的文字外框／陰影一次要掃兩百萬個像素，單執行緒就是拖曳時那半秒的卡頓。
+    /// </summary>
     private static void Propagate(float[] d, int w, int h)
     {
         var inf = (float)(w + h + 1);
         // 第一趟：每欄的垂直距離 g（種子＝0），另帶著「最近種子的偏移」gt 一路傳下去
         var g = new float[w * h];
         var gt = new float[w * h];
-        for (var x = 0; x < w; x++)
+        ParallelFor(0, w, x =>
         {
             var isSeed = d[x] < inf;
             g[x] = isSeed ? 0 : inf;
@@ -170,14 +177,12 @@ internal static class DistanceTransform
                     gt[i] = gt[i + w];
                 }
             }
-        }
+        });
 
-        // 第二趟：每列取拋物線下包絡，最後把該種子的偏移加回去
-        var s = new int[w];
-        var t = new int[w];
-        var gy = new float[w];
-        for (var y = 0; y < h; y++)
+        // 第二趟：每列取拋物線下包絡，最後把該種子的偏移加回去（s/t/gy 是每列的暫存，各執行緒一份）
+        ParallelFor(0, h, () => (S: new int[w], T: new int[w], Gy: new float[w]), (y, scratch) =>
         {
+            var (s, t, gy) = scratch;
             var row = y * w;
             for (var x = 0; x < w; x++) gy[x] = g[row + x];
 
@@ -211,7 +216,35 @@ internal static class DistanceTransform
                 d[row + u] = Math.Max(0f, MathF.Sqrt(F(u, s[q])) + gt[row + s[q]]);
                 if (u == t[q]) q--;
             }
+        });
+    }
+
+    /// <summary>小工作量就別開執行緒（開銷比省下的多）。</summary>
+    private const int ParallelThreshold = 64;
+
+    private static void ParallelFor(int from, int to, Action<int> body)
+    {
+        if (to - from < ParallelThreshold || Environment.ProcessorCount < 2)
+        {
+            for (var i = from; i < to; i++) body(i);
+            return;
         }
+        System.Threading.Tasks.Parallel.For(from, to, body);
+    }
+
+    private static void ParallelFor<TLocal>(int from, int to, Func<TLocal> init, Action<int, TLocal> body)
+    {
+        if (to - from < ParallelThreshold || Environment.ProcessorCount < 2)
+        {
+            var local = init();
+            for (var i = from; i < to; i++) body(i, local);
+            return;
+        }
+        System.Threading.Tasks.Parallel.For(from, to, init, (i, _, local) =>
+        {
+            body(i, local);
+            return local;
+        }, _ => { });
     }
 }
 
