@@ -86,9 +86,18 @@
   }
   .tally.in { opacity: 1; }
   .tally b { color: var(--muted); font-weight: 700; font-variant-numeric: tabular-nums; }
-  .links { margin-top: 56px; font-size: 13px; color: var(--faint); }
-  .links a { color: var(--faint); text-decoration: none; transition: color .3s ease; }
-  .links a:hover { color: var(--text); }
+
+  /* 右上角的外部連結：純色單色圖示，捲動時跟著留在原位 */
+  .corner {
+    position: fixed; top: 20px; right: 24px; z-index: 5;
+    display: flex; align-items: center; gap: 16px;
+  }
+  .corner a {
+    display: block; color: var(--faint);
+    transition: color .3s ease, transform .3s var(--ease);
+  }
+  .corner a:hover { color: var(--text); transform: translateY(-2px); }
+  .corner svg { display: block; }
 
   /* 往下還有一頁的提示；捲動後自己退場 */
   .cue {
@@ -158,6 +167,7 @@
     .why h2 { font-size: 30px; white-space: normal; }
   }
   @media (max-width: 480px) {
+    .corner { top: 14px; right: 16px; gap: 14px; }
     .icon { width: 104px; height: 104px; }
     .icon-wrap { margin-bottom: 32px; }
     h1 { font-size: 36px; }
@@ -173,10 +183,20 @@
     .btn, .btn svg { transition: none; }
     .reveal { opacity: 1; transform: none; transition: none; }
     .tally { transition: none; }
+    .corner a { transition: none; }
+    .corner a:hover { transform: none; }
   }
 </style>
 </head>
 <body>
+<nav class="corner rise d5" aria-label="連結">
+  <a href="https://github.com/DragonL0508/minepainter" title="GitHub" aria-label="GitHub">
+    <svg width="20" height="20" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0c4.42 0 8 3.58 8 8a8.013 8.013 0 0 1-5.45 7.59c-.4.08-.55-.17-.55-.38 0-.27.01-1.13.01-2.2 0-.75-.25-1.23-.54-1.48 1.78-.2 3.65-.88 3.65-3.95 0-.88-.31-1.59-.82-2.15.08-.2.36-1.02-.08-2.12 0 0-.66-.21-2.2.82-.64-.18-1.32-.27-2-.27-.68 0-1.36.09-2 .27-1.54-1.03-2.2-.82-2.2-.82-.44 1.1-.16 1.92-.08 2.12-.51.56-.82 1.27-.82 2.15 0 3.06 1.86 3.75 3.64 3.95-.23.2-.44.55-.51 1.07-.46.21-1.61.55-2.33-.66-.15-.24-.6-.83-1.23-.82-.67.01-.27.38.01.53.34.19.73.9.82 1.13.16.45.68 1.31 2.69.94 0 .67.01 1.3.01 1.49 0 .21-.15.45-.55.38A7.995 7.995 0 0 1 0 8c0-4.42 3.58-8 8-8Z"/></svg>
+  </a>
+  <a href="https://github.com/DragonL0508/minepainter/releases" title="所有版本" aria-label="所有版本">
+    <svg width="19" height="19" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M21.41 11.58l-9-9C12.05 2.22 11.55 2 11 2H4c-1.1 0-2 .9-2 2v7c0 .55.22 1.05.59 1.42l9 9c.36.36.86.58 1.41.58s1.05-.22 1.41-.59l7-7c.37-.36.59-.86.59-1.41s-.23-1.06-.59-1.42zM5.5 7C4.67 7 4 6.33 4 5.5S4.67 4 5.5 4 7 4.67 7 5.5 6.33 7 5.5 7z"/></svg>
+  </a>
+</nav>
 <main>
   <section class="hero">
     <div class="halo" aria-hidden="true"></div>
@@ -192,11 +212,6 @@
       </a>
       <div class="meta rise d4" id="meta"></div>
       <div class="tally" id="tally" hidden>累計下載 <b id="tally-num">0</b> 次</div>
-
-      <div class="links rise d5">
-        <a href="https://github.com/DragonL0508/minepainter">GitHub</a> ·
-        <a href="https://github.com/DragonL0508/minepainter/releases">所有版本</a>
-      </div>
     </div>
 
     <a class="cue rise d5" href="#why">
