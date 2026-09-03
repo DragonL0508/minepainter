@@ -2224,7 +2224,7 @@ public partial class MainWindow : Window
     private void OnTogglePixelGridClicked(object? sender, RoutedEventArgs e)
     {
         Canvas.ShowPixelGrid = PixelGridMenuItem.IsChecked;
-        Toasts.Show(Canvas.ShowPixelGrid ? "像素格線：開（放大 500% 以上顯示）" : "像素格線：關");
+        Toasts.Show(Canvas.ShowPixelGrid ? "像素格線：開（放大 300% 以上顯示）" : "像素格線：關");
     }
 
     private void OnToggleSmoothZoomClicked(object? sender, RoutedEventArgs e)

@@ -16,8 +16,14 @@ public sealed class NumberBox : UserControl
     public double Minimum { get; set; }
     public double Maximum { get; set; } = 100;
 
-    /// <summary>滾輪一格的增量。</summary>
+    /// <summary>滾輪一格的增量。AdaptiveStep 為 true 時改由數值大小決定。</summary>
     public double Step { get; set; } = 1;
+
+    /// <summary>
+    /// 滾輪加速：數值越大一格跳越多，且結果會對齊 1/2/5/10 這種整齊的級距，
+    /// 不會停在 37、113 之類的隨機數字。
+    /// </summary>
+    public bool AdaptiveStep { get; set; }
 
     public event Action<double>? ValueChanged;
 
@@ -127,8 +133,48 @@ public sealed class NumberBox : UserControl
     protected override void OnPointerWheelChanged(PointerWheelEventArgs e)
     {
         base.OnPointerWheelChanged(e);
-        SetAndNotify(_value + Math.Sign(e.Delta.Y) * Step);
+        // 往下滾＝變大、往上滾＝變小。
+        var up = -Math.Sign(e.Delta.Y);
+        if (up != 0)
+        {
+            var notches = Math.Max(1, (int)Math.Round(Math.Abs(e.Delta.Y)));
+            var v = _value;
+            for (var i = 0; i < notches; i++)
+                v = AdaptiveStep ? NextAdaptive(v, up > 0) : v + up * Step;
+            SetAndNotify(v);
+        }
         e.Handled = true;
+    }
+
+    /// <summary>數值越大，一格的級距越大：1、2、5、10、20、50、100…</summary>
+    private static double StepFor(double value)
+    {
+        var v = Math.Abs(value);
+        if (v < 10) return 1;
+        if (v < 20) return 2;
+        if (v < 50) return 5;
+        if (v < 100) return 10;
+        if (v < 200) return 20;
+        if (v < 500) return 50;
+        if (v < 1000) return 100;
+        return 200;
+    }
+
+    /// <summary>往上或往下跳一格，並對齊該級距的整數倍（20 → 25 → 30、20 → 18 → 16）。</summary>
+    private static double NextAdaptive(double value, bool up)
+    {
+        const double eps = 1e-6;
+        if (up)
+        {
+            var step = StepFor(value);
+            return Math.Floor(value / step + eps) * step + step;
+        }
+        else
+        {
+            // 往下時用「下一段」的級距，才不會 20 一次掉到 15。
+            var step = StepFor(value - eps);
+            return Math.Ceiling(value / step - eps) * step - step;
+        }
     }
 
     private void Parse()

@@ -82,7 +82,7 @@ public sealed class CanvasView : Control
     /// <summary>渲染統計（狀態列顯示 FPS / 合成中 tile 數）。</summary>
     public FrameStats Stats => _stats;
 
-    /// <summary>是否顯示像素格線（放大 500% 以上才實際繪製）。</summary>
+    /// <summary>是否顯示像素格線（放大 300% 以上才實際繪製）。</summary>
     public bool ShowPixelGrid { get; set; }
 
     /// <summary>放大時雙線性插值顯示（預設關：顯示真實像素、硬邊）。只影響上屏，不影響文件。</summary>

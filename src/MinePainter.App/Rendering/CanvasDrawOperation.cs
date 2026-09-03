@@ -318,13 +318,13 @@ public sealed class CanvasDrawOperation : ICustomDrawOperation
 
     /// <summary>
     /// 像素格線（對像素創作是核心功能）。線寬用 1/zoom 讓螢幕上恆為 1px，
-    /// 並用同尺度的虛線讓格線夠淡不蓋住內容。格線間距小於 5 螢幕像素時不畫。
+    /// 並用同尺度的虛線讓格線夠淡不蓋住內容。放大不到 300% 時不畫。
     /// </summary>
     private void DrawPixelGrid(SKCanvas canvas)
     {
         if (!_showPixelGrid) return;
         var scale = _viewport.Scale;
-        if (scale < 5) return; // 螢幕間距不足 5px 就沒有意義
+        if (scale < 3) return; // 放大不到 300%（一格不足 3 螢幕像素）就沒有意義
 
         var screenPx = (float)(1.0 / scale);
         using var dash = SKPathEffect.CreateDash([screenPx, screenPx], 0);
