@@ -27,9 +27,12 @@ public sealed class CanvasDrawOperation : ICustomDrawOperation
     private readonly bool _showPixelGrid;
     private readonly float _contentFade;
 
+    private readonly bool _smoothZoom;
+
     public CanvasDrawOperation(Rect bounds, EditorSession session, ViewportTransform viewport,
-        FrameStats stats, bool showPixelGrid = false, float contentFade = 1f)
+        FrameStats stats, bool showPixelGrid = false, float contentFade = 1f, bool smoothZoom = false)
     {
+        _smoothZoom = smoothZoom;
         _contentFade = Math.Clamp(contentFade, 0f, 1f);
         _showPixelGrid = showPixelGrid;
         Bounds = bounds;
@@ -308,8 +311,10 @@ public sealed class CanvasDrawOperation : ICustomDrawOperation
     /// 上屏取樣：縮小 → Medium（linear+mipmap）；放大（含非整數倍）→ nearest。
     /// 像素創作是核心：64×64 的圖放到 12.3 倍時用 bilinear 會整張糊掉，硬邊比階梯抖動重要（與 paint.net 一致）。
     /// </summary>
-    private static SKFilterQuality QualityFor(double scale) =>
-        scale < 1 ? SKFilterQuality.Medium : SKFilterQuality.None;
+    private SKFilterQuality QualityFor(double scale) =>
+        scale < 1 ? SKFilterQuality.Medium
+        : _smoothZoom ? SKFilterQuality.Low // 檢視 → 放大時平滑取樣（雙線性）
+        : SKFilterQuality.None;
 
     /// <summary>
     /// 像素格線（對像素創作是核心功能）。線寬用 1/zoom 讓螢幕上恆為 1px，

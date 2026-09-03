@@ -11,12 +11,24 @@ namespace MinePainter.Core.History;
 /// paint.net「影像」與「圖層」選單裡的幾何類指令：調整影像大小（重新取樣）、
 /// 調整畫布大小（含錨點）、單一圖層翻轉、從檔案匯入圖層。
 /// </summary>
+/// <summary>調整影像大小的重新取樣方式（paint.net：最佳品質／雙線性／最接近像素）。</summary>
+public enum ResampleMode
+{
+    /// <summary>雙三次（放大平滑、縮小走 mipmap）；照片與一般插畫的預設。</summary>
+    Bicubic,
+    /// <summary>雙線性：較軟、沒有雙三次的輕微過衝。</summary>
+    Bilinear,
+    /// <summary>最接近像素：不混色，像素圖／點陣風整數倍縮放用。</summary>
+    Nearest,
+}
+
 public static class ImageCommands
 {
     // ---- 調整影像大小 ----
 
     /// <summary>所有點陣圖層以高品質重新取樣到新尺寸；文字物件等比縮放；選取範圍丟棄。</summary>
-    public static void ResizeImage(EditorSession session, int width, int height, string label = "調整影像大小")
+    public static void ResizeImage(EditorSession session, int width, int height, string label = "調整影像大小",
+        ResampleMode resample = ResampleMode.Bicubic)
     {
         var doc = session.Document;
         var oldW = doc.Width;
@@ -32,7 +44,7 @@ public static class ImageCommands
             foreach (var layer in DocumentCommands.RasterLayers(doc.Root))
             {
                 states.Add((layer, layer.Surface, layer.Offset, layer.Elements.ToList()));
-                ScaleLayerCore(layer, sx, sy);
+                ScaleLayerCore(layer, sx, sy, resample);
             }
             doc.SetSize(width, height);
         }
@@ -61,7 +73,7 @@ public static class ImageCommands
             {
                 lock (d.SyncRoot)
                 {
-                    foreach (var (layer, _, _, _) in states) ScaleLayerCore(layer, sx, sy);
+                    foreach (var (layer, _, _, _) in states) ScaleLayerCore(layer, sx, sy, resample);
                     d.SetSize(width, height);
                 }
                 session.ApplySelection(null);
@@ -69,9 +81,9 @@ public static class ImageCommands
             }));
     }
 
-    private static void ScaleLayerCore(RasterLayer layer, float sx, float sy)
+    private static void ScaleLayerCore(RasterLayer layer, float sx, float sy, ResampleMode resample)
     {
-        var scaled = ScaleSurface(layer, sx, sy);
+        var scaled = ScaleSurface(layer, sx, sy, resample);
         layer.ReplaceSurface(scaled, disposeOld: false); // 舊的留給 undo
         layer.Offset = SKPointI.Empty;
         foreach (var element in layer.Elements.ToList())
@@ -87,7 +99,7 @@ public static class ImageCommands
     }
 
     /// <summary>圖層內容（含畫布外像素）整體縮放到 doc 座標的新表面（offset 併入）。</summary>
-    private static TileSurface ScaleSurface(RasterLayer layer, float sx, float sy)
+    private static TileSurface ScaleSurface(RasterLayer layer, float sx, float sy, ResampleMode resample)
     {
         var result = new TileSurface();
         var bounds = layer.Surface.ExactContentBounds();
@@ -103,7 +115,16 @@ public static class ImageCommands
 
         using var dst = new SKBitmap(new SKImageInfo(dstRect.Width, dstRect.Height, SKColorType.Bgra8888, SKAlphaType.Premul));
         using (var canvas = new SKCanvas(dst))
-        using (var paint = new SKPaint { FilterQuality = SKFilterQuality.High, IsAntialias = true })
+        using (var paint = new SKPaint
+               {
+                   FilterQuality = resample switch
+                   {
+                       ResampleMode.Nearest => SKFilterQuality.None,
+                       ResampleMode.Bilinear => SKFilterQuality.Low,
+                       _ => SKFilterQuality.High, // 雙三次（含縮小時的 mipmap）
+                   },
+                   IsAntialias = resample != ResampleMode.Nearest,
+               })
         {
             canvas.Clear(SKColors.Transparent);
             canvas.DrawBitmap(src, SKRect.Create(0, 0, dstRect.Width, dstRect.Height), paint);

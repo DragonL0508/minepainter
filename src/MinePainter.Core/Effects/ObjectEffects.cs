@@ -3,18 +3,30 @@ using static MinePainter.Core.Effects.EffectMath;
 
 namespace MinePainter.Core.Effects;
 
-/// <summary>精確歐氏距離變換（見 <see cref="Propagate"/>）；距離以「到最近不透明像素」計。</summary>
+/// <summary>
+/// 精確歐氏距離變換（見 <see cref="Propagate"/>）；距離以「到內容邊緣」計（全不透明像素的邊緣＝像素邊界）。
+///
+/// **抗鋸齒種子**：Skia 畫的邊緣過渡只有一格寬 —— 邊緣像素的覆蓋率 a 就是邊緣在那一格裡的位置
+/// （邊緣 ≈ 像素起點 + a）。舊版用 alpha ≥ 128 二值化把這個資訊丟掉，距離場的邊界被量化到像素格，
+/// 外框／羽化／光暈全沿著鋸齒走，放大看就是毛邊；門檻換幾個、平均起來也一樣（過渡只有一格，門檻幾乎都落在同一格）。
+/// 現在每個 a &gt; 0 的像素都是種子，帶「起始偏移」t = 0.5 − a（軸對齊邊緣下精確：全覆蓋的邊界像素邊緣在中心外 0.5、
+/// 半覆蓋在中心、幾乎沒覆蓋在中心內 0.5），傳播結果 = 到種子中心的距離 + 該種子的 t。
+/// </summary>
 internal static class DistanceTransform
 {
+    private const float Big = 1e9f;
+
+    /// <summary>覆蓋率 a（0..255）→ 種子起始偏移（0.5 − a）；0 = 不是種子（Big）。</summary>
+    private static float SeedFromCoverage(int a) => a <= 0 ? Big : 0.5f - a / 255f;
+
     public static float[] FromAlpha(EffectContext ctx, int pad)
     {
         var w = ctx.Width + pad * 2;
         var h = ctx.Height + pad * 2;
-        var big = 1e9f;
         var d = new float[w * h];
         for (var y = 0; y < h; y++)
         for (var x = 0; x < w; x++)
-            d[y * w + x] = A(ctx.SrcOrTransparent(x - pad, y - pad)) >= 128 ? 0f : big;
+            d[y * w + x] = SeedFromCoverage(A(ctx.SrcOrTransparent(x - pad, y - pad)));
         Propagate(d, w, h);
         return d;
     }
@@ -30,13 +42,15 @@ internal static class DistanceTransform
         var w = ctx.Width + pad * 2;
         var h = ctx.Height + pad * 2;
         var n = w * h;
-        var big = 1e9f;
-        // 膨脹：離不透明 ≤ r 的都算形狀；接著算「到膨脹形狀之外」的距離
+        // 膨脹：離邊緣 ≤ r 的都算形狀；接著算「到膨脹形狀之外」的距離。
+        // 邊界不二值化：以「在膨脹形狀之外的程度」當覆蓋率（一格內的線性過渡），種子偏移同 FromAlpha。
         var toOutside = new float[n];
-        for (var i = 0; i < n; i++) toOutside[i] = dist[i] <= r ? big : 0f;
+        for (var i = 0; i < n; i++)
+            toOutside[i] = SeedFromCoverage((int)MathF.Round(Math.Clamp(dist[i] - r + 0.5f, 0f, 1f) * 255));
         Propagate(toOutside, w, h);
         // 侵蝕：離外側 > r 的才留下 = 閉運算結果；最後回到「到閉運算形狀」的距離
-        for (var i = 0; i < n; i++) dist[i] = toOutside[i] > r ? 0f : big;
+        for (var i = 0; i < n; i++)
+            dist[i] = SeedFromCoverage((int)MathF.Round(Math.Clamp(toOutside[i] - r + 0.5f, 0f, 1f) * 255));
         Propagate(dist, w, h);
         return dist;
     }
@@ -49,7 +63,6 @@ internal static class DistanceTransform
     {
         var w = ctx.Width + pad * 2;
         var h = ctx.Height + pad * 2;
-        var big = 1e9f;
         var d = new float[w * h];
         var docLeft = ctx.Region.Left - pad;
         var docTop = ctx.Region.Top - pad;
@@ -62,32 +75,55 @@ internal static class DistanceTransform
             var p = outside
                 ? (canvasEdge ? 0u : ctx.SrcAt(x - pad, y - pad))
                 : ctx.SrcOrTransparent(x - pad, y - pad);
-            d[y * w + x] = A(p) < 128 ? 0f : big;
+            d[y * w + x] = SeedFromCoverage(255 - A(p)); // 種子 = 透明程度
         }
         Propagate(d, w, h);
         return d;
     }
 
     /// <summary>
-    /// 精確歐氏距離變換（Meijster 分離式，O(w·h)）：輸入 0 = 特徵像素、其餘任意大；
-    /// 輸出每格到最近特徵像素的直線距離（px）。外框／羽化的邊角因此是真正的圓弧，
-    /// 不像 chamfer 近似會出現八角形稜角。
+    /// 精確歐氏距離變換（Meijster 分離式，O(w·h)）：輸入 &lt; inf 的是種子（值＝起始偏移 −0.5..0.5）、
+    /// 其餘任意大；輸出每格到最近種子中心的直線距離（px）＋該種子的偏移。
+    /// 偏移不參與包絡比較（最多差一格內的次優），換來邊界落在次像素位置。
+    /// 外框／羽化的邊角是真正的圓弧，不像 chamfer 近似會出現八角形稜角。
     /// </summary>
     private static void Propagate(float[] d, int w, int h)
     {
         var inf = (float)(w + h + 1);
-        // 第一趟：每欄的垂直距離 g
+        // 第一趟：每欄的垂直距離 g（種子＝0），另帶著「最近種子的偏移」gt 一路傳下去
         var g = new float[w * h];
+        var gt = new float[w * h];
         for (var x = 0; x < w; x++)
         {
-            g[x] = d[x] == 0 ? 0 : inf;
+            var isSeed = d[x] < inf;
+            g[x] = isSeed ? 0 : inf;
+            gt[x] = isSeed ? d[x] : 0;
             for (var y = 1; y < h; y++)
-                g[y * w + x] = d[y * w + x] == 0 ? 0 : g[(y - 1) * w + x] + 1;
+            {
+                var i = y * w + x;
+                if (d[i] < inf)
+                {
+                    g[i] = 0;
+                    gt[i] = d[i];
+                }
+                else
+                {
+                    g[i] = g[i - w] + 1;
+                    gt[i] = gt[i - w];
+                }
+            }
             for (var y = h - 2; y >= 0; y--)
-                if (g[(y + 1) * w + x] + 1 < g[y * w + x]) g[y * w + x] = g[(y + 1) * w + x] + 1;
+            {
+                var i = y * w + x;
+                if (g[i + w] + 1 < g[i])
+                {
+                    g[i] = g[i + w] + 1;
+                    gt[i] = gt[i + w];
+                }
+            }
         }
 
-        // 第二趟：每列取拋物線下包絡
+        // 第二趟：每列取拋物線下包絡，最後把該種子的偏移加回去
         var s = new int[w];
         var t = new int[w];
         var gy = new float[w];
@@ -123,7 +159,7 @@ internal static class DistanceTransform
             }
             for (var u = w - 1; u >= 0; u--)
             {
-                d[row + u] = MathF.Sqrt(F(u, s[q]));
+                d[row + u] = Math.Max(0f, MathF.Sqrt(F(u, s[q])) + gt[row + s[q]]);
                 if (u == t[q]) q--;
             }
         }

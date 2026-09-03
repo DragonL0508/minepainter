@@ -80,6 +80,9 @@ public sealed class CanvasView : Control
     /// <summary>是否顯示像素格線（放大 500% 以上才實際繪製）。</summary>
     public bool ShowPixelGrid { get; set; }
 
+    /// <summary>放大時雙線性插值顯示（預設關：顯示真實像素、硬邊）。只影響上屏，不影響文件。</summary>
+    public bool SmoothZoom { get; set; }
+
     /// <summary>doc 座標 → 此控制項的 view 座標。</summary>
     public Point DocToView(SKPoint doc) => _viewport.DocToView(new Point(doc.X, doc.Y));
 
@@ -207,7 +210,7 @@ public sealed class CanvasView : Control
 
         context.Custom(new CanvasDrawOperation(
             new Rect(0, 0, Bounds.Width, Bounds.Height), session, _viewport, _stats, ShowPixelGrid,
-            (float)CurrentContentFade));
+            (float)CurrentContentFade, SmoothZoom));
 
         DrawBrushCursor(context);
     }

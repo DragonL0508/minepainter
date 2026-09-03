@@ -25,6 +25,9 @@ public sealed class AppSettings
     /// <summary>效果／調整套用時記錄在圖層的效果堆疊（非破壞性），而不是直接改像素。</summary>
     public bool NonDestructiveEffects { get; set; } = true;
 
+    /// <summary>檢視 → 放大時平滑取樣（預設關：放大顯示真實像素，同 paint.net）。</summary>
+    public bool SmoothZoom { get; set; }
+
     /// <summary>啟動時靜默檢查 GitHub 有沒有新版（開發建置不檢查）。</summary>
     public bool CheckUpdatesOnStartup { get; set; } = true;
 

@@ -117,6 +117,9 @@
             <Separator />
             <MenuItem x:Name="PixelGridMenuItem" Header="像素格線" Click="OnTogglePixelGridClicked"
                       ToggleType="CheckBox" />
+            <MenuItem x:Name="SmoothZoomMenuItem" Header="放大時平滑取樣" Click="OnToggleSmoothZoomClicked"
+                      ToggleType="CheckBox"
+                      ToolTip.Tip="關（預設，同 paint.net）：放大時顯示真實像素、硬邊；開：放大時雙線性插值，看起來平滑但看不到真實像素邊界。只影響畫面顯示，不影響輸出。" />
           </MenuItem>
 
           <MenuItem Header="設定(_S)">

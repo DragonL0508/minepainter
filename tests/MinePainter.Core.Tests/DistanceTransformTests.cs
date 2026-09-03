@@ -33,7 +33,8 @@ public class DistanceTransformTests
             var best = double.MaxValue;
             foreach (var (ox, oy) in opaque)
                 best = Math.Min(best, Math.Sqrt((x - ox) * (x - ox) + (y - oy) * (y - oy)));
-            Assert.Equal(best, dist[(y + pad) * dw + (x + pad)], 3);
+            // 全不透明像素的邊緣在中心外 0.5（次像素種子偏移），距離因此比「到中心」少 0.5，最小 0
+            Assert.Equal(Math.Max(0, best - 0.5), dist[(y + pad) * dw + (x + pad)], 3);
         }
     }
 
@@ -80,5 +81,52 @@ public class DistanceTransformTests
         Assert.Equal(A(ctxPlain.Dst[15 * w + 9]), A(ctxSmooth.Dst[15 * w + 9]));
         // 原本的不透明像素保持原色（閉運算只會補、不會削）
         Assert.Equal(src[10 * w + 10], ctxSmooth.Dst[10 * w + 10]);
+    }
+}
+
+public class OutlineAntiAliasTests
+{
+    [Fact]
+    public void Outline_FollowsAntiAliasedEdge_NotStaircase()
+    {
+        // 抗鋸齒的圓（Skia 畫的）：外框的外緣要有大量中間值（沿著次像素邊走），
+        // 舊版二值化（alpha ≥ 128）後外緣只剩沿著像素格的階梯，中間值幾乎只在 45° 附近出現
+        const int w = 120, h = 120;
+        using var bmp = new SkiaSharp.SKBitmap(new SkiaSharp.SKImageInfo(w, h, SkiaSharp.SKColorType.Bgra8888, SkiaSharp.SKAlphaType.Premul));
+        using (var c = new SkiaSharp.SKCanvas(bmp))
+        {
+            c.Clear(SkiaSharp.SKColors.Transparent);
+            using var p = new SkiaSharp.SKPaint { Color = SkiaSharp.SKColors.Black, IsAntialias = true };
+            c.DrawCircle(60.3f, 60.7f, 30.4f, p);
+        }
+        var src = new uint[w * h];
+        var pixels = bmp.GetPixelSpan();
+        for (var i = 0; i < src.Length; i++)
+            src[i] = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(pixels.Slice(i * 4, 4));
+
+        var fx = new MinePainter.Core.Effects.ObjectOutlineEffect { Width = 6, Color = SkiaSharp.SKColors.Red };
+        double Mae(int[] levels)
+        {
+            {
+                var ctx = MinePainter.Core.Effects.EffectContext.FromPixels(src, w, h, fx.SourceMargin);
+                fx.Render(ctx);
+                double err = 0; var count = 0;
+                for (var y = 0; y < h; y++)
+                for (var x = 0; x < w; x++)
+                {
+                    var r = Math.Sqrt((x + 0.5 - 60.3) * (x + 0.5 - 60.3) + (y + 0.5 - 60.7) * (y + 0.5 - 60.7));
+                    if (r < 34 || r > 39) continue;
+                    var ideal = Math.Clamp(36.9 - r, 0, 1) * 255;
+                    var a = (int)(ctx.Dst[y * w + x] >> 24);
+                    err += Math.Abs(a - ideal);
+                    count++;
+                }
+                return err / count;
+            }
+        }
+        var mae = Mae([]);
+
+        // 舊版（alpha ≥ 128 二值化）在這個量法下約 17/255；次像素種子要明顯更貼近解析解
+        Assert.True(mae < 9, $"AA outline MAE {mae:0.0}/255（二值化舊版約 17）");
     }
 }

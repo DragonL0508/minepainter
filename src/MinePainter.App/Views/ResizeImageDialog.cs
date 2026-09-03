@@ -18,10 +18,24 @@ public sealed class ResizeImageDialog : ModalDialog
     private readonly NumberBox _heightBox = new() { Minimum = 1, Maximum = MaxSize, Width = 90 };
     private readonly CheckBox _keepAspect = new() { Content = "維持長寬比", FontSize = 12, IsChecked = true };
     private readonly TextBlock _info = new() { FontSize = 11, Foreground = AppTheme.TextMutedBrush };
+    private readonly ComboBox _resampleCombo = new()
+    {
+        Width = 150, FontSize = 12,
+        ItemsSource = new[] { "最佳品質（雙三次）", "雙線性", "最接近像素" },
+        SelectedIndex = 0,
+    };
     private bool _suppress;
 
     public int NewWidth => (int)Math.Round(_widthBox.Value);
     public int NewHeight => (int)Math.Round(_heightBox.Value);
+
+    /// <summary>重新取樣方式（paint.net 的 Resampling）。</summary>
+    public Core.History.ResampleMode Resample => _resampleCombo.SelectedIndex switch
+    {
+        1 => Core.History.ResampleMode.Bilinear,
+        2 => Core.History.ResampleMode.Nearest,
+        _ => Core.History.ResampleMode.Bicubic,
+    };
 
     public ResizeImageDialog(int width, int height) : base("調整影像大小", 320)
     {
@@ -71,9 +85,11 @@ public sealed class ResizeImageDialog : ModalDialog
                 Row("寬度", _widthBox, "px"),
                 Row("高度", _heightBox, "px"),
                 _keepAspect,
+                Row("取樣", _resampleCombo, ""),
                 _info,
             },
         };
+        ToolTip.SetTip(_resampleCombo, "放大縮小時像素怎麼混：雙三次最平滑；最接近像素不混色（像素圖整數倍縮放用）");
         SetBody(body, ButtonRow(MakeButton("確定", primary: true, confirm: true), MakeButton("取消")));
     }
 

@@ -105,6 +105,8 @@ public partial class MainWindow : Window
 
         Canvas.StateChanged += RefreshUiState;
         Canvas.TextEditRequested += StartCanvasTextEdit;
+        Canvas.SmoothZoom = Services.AppSettings.Instance.SmoothZoom;
+        SmoothZoomMenuItem.IsChecked = Canvas.SmoothZoom;
         BuildFrameActions();
         Canvas.FrameTick += UpdateFrameActions;
         Canvas.ViewportChanged += () =>
@@ -1663,9 +1665,10 @@ public partial class MainWindow : Window
         if (!dialog.Confirmed) return;
         var w = dialog.NewWidth;
         var h = dialog.NewHeight;
+        var resample = dialog.Resample; // 交給背景執行緒前先在 UI 執行緒讀完（不得懶讀控制項）
         try
         {
-            await ProgressDialog.RunAsync(this, "調整影像大小", _ => ImageCommands.ResizeImage(session, w, h));
+            await ProgressDialog.RunAsync(this, "調整影像大小", _ => ImageCommands.ResizeImage(session, w, h, resample: resample));
         }
         catch (Exception ex)
         {
@@ -2209,6 +2212,14 @@ public partial class MainWindow : Window
     {
         Canvas.ShowPixelGrid = PixelGridMenuItem.IsChecked;
         Toasts.Show(Canvas.ShowPixelGrid ? "像素格線：開（放大 500% 以上顯示）" : "像素格線：關");
+    }
+
+    private void OnToggleSmoothZoomClicked(object? sender, RoutedEventArgs e)
+    {
+        Canvas.SmoothZoom = SmoothZoomMenuItem.IsChecked;
+        Services.AppSettings.Instance.SmoothZoom = Canvas.SmoothZoom;
+        Services.AppSettings.Instance.Save();
+        Toasts.Show(Canvas.SmoothZoom ? "放大時平滑取樣：開（只影響顯示）" : "放大時平滑取樣：關（顯示真實像素）");
     }
 
     // ---- 快捷鍵 ----
