@@ -1022,6 +1022,7 @@ public partial class MainWindow : Window
             "eyedropper" => session.Eyedropper,
             "move" => session.Move,
             "rectselect" => session.RectSelect,
+            "ellipseselect" => session.EllipseSelect,
             "lasso" => session.Lasso,
             "wand" => session.Wand,
             "fill" => session.Fill,
@@ -2787,7 +2788,7 @@ public partial class MainWindow : Window
             ["view.actualSize"] = () => Canvas.SetZoomPercent(100),
             ["view.bestFit"] = () => Canvas.ZoomToFit(),
         };
-        foreach (var key in new[] { "brush", "pencil", "eraser", "bgeraser", "eyedropper", "move", "rectselect", "lasso", "wand", "fill", "text", "shape", "line", "pen" })
+        foreach (var key in new[] { "brush", "pencil", "eraser", "bgeraser", "eyedropper", "move", "rectselect", "ellipseselect", "lasso", "wand", "fill", "text", "shape", "line", "pen" })
         {
             var toolKey = key;
             _shortcutActions[$"tool.{key}"] = () => SelectTool(toolKey);

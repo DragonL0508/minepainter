@@ -43,6 +43,7 @@ public sealed class CanvasDrawOperation : ICustomDrawOperation
         _viewport = viewport;
         _stats = stats;
         _highlightSelection = session.ActiveTool == session.RectSelect ||
+                              session.ActiveTool == session.EllipseSelect ||
                               session.ActiveTool == session.Lasso ||
                               session.ActiveTool == session.Wand;
         _showPenPath = session.ActiveTool == session.Pen;

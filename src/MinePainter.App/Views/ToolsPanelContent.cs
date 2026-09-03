@@ -1,4 +1,4 @@
-using Avalonia;
+﻿using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Layout;
@@ -18,6 +18,7 @@ public sealed class ToolsPanelContent : UserControl
     [
         [
             ("rectselect", MaterialIconKind.Select, "矩形選取 (S)"),
+            ("ellipseselect", MaterialIconKind.SelectionEllipse, "橢圓選取 (C)：拖出外接矩形；Shift 加選、Ctrl 減選"),
             ("lasso", MaterialIconKind.Lasso, "套索選取 (L)"),
             ("wand", MaterialIconKind.AutoFix, "魔術棒 (W)"),
             ("move", MaterialIconKind.CursorMove, "移動 (M)"),

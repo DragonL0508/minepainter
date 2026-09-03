@@ -1,4 +1,4 @@
-using Avalonia;
+﻿using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
@@ -578,6 +578,7 @@ public sealed class CanvasView : Control
             // 雙擊文字 → 畫布內編輯。只在矩形選取／移動／文字工具下（使用者明示）——
             // 筆刷、橡皮擦這類繪畫工具連點兩下是在畫東西，不該跳去編輯文字
             var editTools = _session.ActiveTool == _session.RectSelect ||
+                            _session.ActiveTool == _session.EllipseSelect ||
                             _session.ActiveTool == _session.Move ||
                             _session.ActiveTool == _session.Text;
             if (e.ClickCount == 2 && editTools)
@@ -600,6 +601,7 @@ public sealed class CanvasView : Control
             // 選取框把手（選取範圍／浮動內容／文字物件都是同一套）：
             // 選取類與移動工具下可直接拉大小；繪畫類工具不攔截，免得干擾落筆。
             var handleTools = _session.ActiveTool == _session.RectSelect ||
+                              _session.ActiveTool == _session.EllipseSelect ||
                               _session.ActiveTool == _session.Lasso ||
                               _session.ActiveTool == _session.Wand;
             if (handleTools && _handles.TryBegin(_session, docPoint,

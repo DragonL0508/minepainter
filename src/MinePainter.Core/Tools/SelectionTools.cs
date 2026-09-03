@@ -128,6 +128,81 @@ public sealed class RectangleSelectTool : ITool
     }
 }
 
+/// <summary>
+/// 橢圓（圓形）選取：拖出外接矩形，Shift 加選 / Ctrl 減選 / Shift+Ctrl 交集（與矩形選取同一套）。
+/// </summary>
+public sealed class EllipseSelectTool : ITool
+{
+    public string Name => "橢圓選取";
+
+    /// <summary>預覽用的取樣點數（畫面上的虛線橢圓；夠圓又不會太多點）。</summary>
+    private const int PreviewSegments = 72;
+
+    private SKPoint _anchor;
+    private bool _dragging;
+    private SelectionMask? _original;
+
+    public void OnPointerDown(ToolPointerEvent e, EditorSession session)
+    {
+        if (SelectionCommands.RefusePixelSelection(session)) return;
+        _anchor = e.DocPosition;
+        _dragging = true;
+        session.Preview = null;
+
+        // 沒按修飾鍵 = Replace 模式：按下瞬間就清掉畫面上的舊選取（與矩形選取一致）
+        _original = session.Selection;
+        if (SelectionCommands.ModeFrom(e.Modifiers) == SelectionCombineMode.Replace)
+            session.ApplySelection(null);
+    }
+
+    public void OnPointerMove(ToolPointerEvent e, EditorSession session)
+    {
+        if (!_dragging) return;
+        session.Preview = new OverlayPreview(OutlinePoints(Rect(e.DocPosition)), Closed: true);
+    }
+
+    public void OnPointerUp(ToolPointerEvent e, EditorSession session)
+    {
+        if (!_dragging) return;
+        _dragging = false;
+        session.Preview = null;
+        var original = _original;
+        _original = null;
+
+        var r = Rect(e.DocPosition);
+        if (r.Width < 1 || r.Height < 1)
+        {
+            // 點一下 = 取消選取（與矩形選取一致）
+            SelectionCommands.SetSelection(session, original, null, "取消選取");
+            return;
+        }
+
+        using var path = new SKPath();
+        path.AddOval(SelectionMask.SnapToPixels(r)); // 選取以整像素為單位，邊界才不會糊掉
+        RectangleSelectTool.Apply(session, path, e.Modifiers, original, "橢圓選取");
+    }
+
+    private SKRect Rect(SKPoint p) => SKRect.Create(
+        Math.Min(_anchor.X, p.X), Math.Min(_anchor.Y, p.Y),
+        Math.Abs(p.X - _anchor.X), Math.Abs(p.Y - _anchor.Y));
+
+    /// <summary>橢圓的取樣折線（覆疊預覽畫的是折線，沒有曲線）。</summary>
+    private static SKPoint[] OutlinePoints(SKRect r)
+    {
+        var cx = r.MidX;
+        var cy = r.MidY;
+        var rx = r.Width / 2f;
+        var ry = r.Height / 2f;
+        var points = new SKPoint[PreviewSegments];
+        for (var i = 0; i < PreviewSegments; i++)
+        {
+            var a = i * 2f * MathF.PI / PreviewSegments;
+            points[i] = new SKPoint(cx + MathF.Cos(a) * rx, cy + MathF.Sin(a) * ry);
+        }
+        return points;
+    }
+}
+
 /// <summary>套索選取：自由圈選。</summary>
 public sealed class LassoSelectTool : ITool
 {

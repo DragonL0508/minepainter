@@ -1409,6 +1409,7 @@ public sealed class EditorSession : IDisposable
     public EyedropperTool Eyedropper { get; }
     public MoveTool Move { get; }
     public RectangleSelectTool RectSelect { get; }
+    public EllipseSelectTool EllipseSelect { get; }
     public LassoSelectTool Lasso { get; }
     public MagicWandTool Wand { get; }
     public FillTool Fill { get; }
@@ -1460,6 +1461,7 @@ public sealed class EditorSession : IDisposable
         Eyedropper = new EyedropperTool();
         Move = new MoveTool();
         RectSelect = new RectangleSelectTool();
+        EllipseSelect = new EllipseSelectTool();
         Lasso = new LassoSelectTool();
         Wand = new MagicWandTool();
         Fill = new FillTool();

@@ -1,4 +1,4 @@
-using Avalonia.Input;
+﻿using Avalonia.Input;
 
 namespace MinePainter.App.Services;
 
@@ -80,6 +80,7 @@ public static class ShortcutMap
         new("tool.eyedropper", "工具", "滴管", new KeyGesture(Key.I)),
         new("tool.move", "工具", "移動", new KeyGesture(Key.M)),
         new("tool.rectselect", "工具", "矩形選取", new KeyGesture(Key.S)),
+        new("tool.ellipseselect", "工具", "橢圓選取", new KeyGesture(Key.C)),
         new("tool.lasso", "工具", "套索選取", new KeyGesture(Key.L)),
         new("tool.wand", "工具", "魔術棒", new KeyGesture(Key.W)),
         new("tool.fill", "工具", "油漆桶", new KeyGesture(Key.F)),
