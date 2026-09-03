@@ -622,25 +622,21 @@ public sealed class CanvasView : Control
                 }
                 e.Handled = true;
                 break;
-            case Key.Left or Key.Right or Key.Up or Key.Down when session?.SelectedElement is { } sel && !ctrl:
+            case Key.Left or Key.Right or Key.Up or Key.Down
+                when session != null && !ctrl &&
+                     (session.ActiveTool == session.Move || session.SelectedElement != null):
             {
-                // 方向鍵微調選中的物件：1px；Shift = 10px（paint.net 的習慣）
-                var step = e.KeyModifiers.HasFlag(KeyModifiers.Shift) ? 10f : 1f;
+                // 方向鍵微調：1px；Shift = 10px（Photoshop／paint.net 的慣例）。
+                // 移動工具下依序動變形框 → 浮動內容 → 選中的文字物件 → 整個圖層／群組。
+                var step = e.KeyModifiers.HasFlag(KeyModifiers.Shift) ? 10 : 1;
                 var (dx, dy) = e.Key switch
                 {
-                    Key.Left => (-step, 0f),
-                    Key.Right => (step, 0f),
-                    Key.Up => (0f, -step),
-                    _ => (0f, step),
+                    Key.Left => (-step, 0),
+                    Key.Right => (step, 0),
+                    Key.Up => (0, -step),
+                    _ => (0, step),
                 };
-                if (session.Document.FindLayer(sel.LayerId) is Core.Layers.RasterLayer nlayer &&
-                    nlayer.FindElement(sel.ElementId) is { } nudged)
-                {
-                    Core.History.VectorCommands.ReplaceElement(session.Document, session.History, nlayer,
-                        nudged, nudged.Translated(dx, dy), "微調物件");
-                    session.RefreshSelectionHandles();
-                    StateChanged?.Invoke();
-                }
+                if (Core.Tools.MoveTool.Nudge(session, dx, dy)) StateChanged?.Invoke();
                 e.Handled = true;
                 break;
             }

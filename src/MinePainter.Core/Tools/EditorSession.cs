@@ -109,42 +109,11 @@ public sealed class EditorSession : IDisposable
         if (mode == TransformMode.Perspective && t.Quad != null && t.Warp == null) return t;
         if (mode == TransformMode.Warp && t.Warp != null) return t;
 
-        if (!t.CanUseQuad)
-        {
-            // 文字 → 像素：先把目前的 session 收掉（沒動過就無損還原、動過就落地），平面化，再重新框
-            if (t.IsIdentity) CancelTransform(); else CommitTransform();
-            var target = Document.ActiveLayer;
-            if (target == null) return null;
-            var flattened = 0;
-            foreach (var layer in RasterLayersOf(target))
-            {
-                if (layer.HasElements && LayerCommands.FlattenText(Document, History, layer)) flattened++;
-            }
-            _autoFlattenSteps = flattened;
-            SelectedElement = null;
-            t = BeginTransform();
-            if (t == null) return null;
-        }
-
+        // 文字物件不必平面化：透視／彎曲疊在文字的輸出端（TextElement.Deform），改字照樣套（使用者明示）
         var ok = mode == TransformMode.Warp ? t.EnterWarpMode() : t.EnterQuadMode();
         if (!ok) Notify("此圖層無法進入這種變形");
         RefreshSelectionHandles();
         return t;
-    }
-
-    /// <summary>進入透視／扭曲前自動平面化的步數：Esc 取消變形時一併退回（文字回到可編輯狀態）。</summary>
-    private int _autoFlattenSteps;
-
-    private static IEnumerable<RasterLayer> RasterLayersOf(LayerNode node)
-    {
-        switch (node)
-        {
-            case RasterLayer r: yield return r; break;
-            case GroupLayer g:
-                foreach (var child in g.Children)
-                foreach (var r in RasterLayersOf(child)) yield return r;
-                break;
-        }
     }
 
     /// <summary>鋼筆工具的工作路徑（render thread 直接讀；immutable，每次改動換新實例）。null＝沒有路徑。</summary>
@@ -209,6 +178,9 @@ public sealed class EditorSession : IDisposable
         get
         {
             if (Transform is { } t) return t.CanReset;
+            // 沒在變形、但剛落地的變形還能續接（點出去再點回來）：重設要能回到最原始
+            if (ActiveTool == Move && Floating == null && Document.ActiveLayer is { } node && HasResumeFor(node))
+                return true;
             lock (Document.SyncRoot)
             {
                 return SelectedTextLocked() is { } sel && sel.Element.IsTransformed;
@@ -230,6 +202,18 @@ public sealed class EditorSession : IDisposable
             // 回到「最原始」：退出四角／彎曲、角度 0、尺寸回原始（含續接的上一輪也一起丟掉），位置留在原地
             t.ResetAll();
             t.Apply(preview: false);
+            RefreshSelectionHandles();
+            return true;
+        }
+
+        // 沒在變形、剛落地的變形還能續接：用續接點開一輪、重設、直接落地（單一步 undo）
+        if (ActiveTool == Move && Floating == null && Document.ActiveLayer is { } node && HasResumeFor(node))
+        {
+            var resumed = BeginTransform();
+            if (resumed == null) return false;
+            resumed.ResetAll();
+            resumed.Apply(preview: false);
+            CommitTransform();
             RefreshSelectionHandles();
             return true;
         }
@@ -319,6 +303,10 @@ public sealed class EditorSession : IDisposable
     private TransformResume? _transformResume;
     private FloatingResume? _floatingResume;
 
+    /// <summary>對 <paramref name="target"/> 還有有效的變形續接點（落地那步仍在 history 頂端）。</summary>
+    public bool HasResumeFor(LayerNode target) =>
+        _transformResume is { } r && r.IsValid(History) && ReferenceEquals(r.Target, target);
+
     /// <summary>取出對 <paramref name="target"/> 有效的變形續接點（一次性；無效的順手釋放）。</summary>
     private TransformResume? TakeTransformResume(LayerNode target)
     {
@@ -389,7 +377,6 @@ public sealed class EditorSession : IDisposable
         var t = Transform;
         if (t == null) return;
         Transform = null;
-        _autoFlattenSteps = 0; // 落地：自動平面化留著（各自一步 undo）
 
         if (t.IsIdentity)
         {
@@ -419,10 +406,6 @@ public sealed class EditorSession : IDisposable
         Transform = null;
         t.RestoreOriginal();
         t.DisposeDeferred(Compositor);
-        // 進透視／扭曲時自動平面化的文字：取消變形＝連平面化一起退回（文字回到可編輯）
-        var steps = _autoFlattenSteps;
-        _autoFlattenSteps = 0;
-        for (var i = 0; i < steps && History.CanUndo; i++) History.Undo();
         RefreshSelectionHandles();
     }
 

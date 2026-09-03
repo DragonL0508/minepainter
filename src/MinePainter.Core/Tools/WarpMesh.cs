@@ -71,6 +71,52 @@ public sealed record WarpMesh(SKPoint[] Points, SKRect Frame)
 
     public WarpMesh Translated(float dx, float dy) => this with { Points = QuadGeometry.Translated(Points, dx, dy) };
 
+    /// <summary>輸入與輸出一起平移（文字物件整個搬家：來源框也跟著走）。</summary>
+    public WarpMesh TranslatedWithFrame(float dx, float dy) => new(
+        QuadGeometry.Translated(Points, dx, dy),
+        new SKRect(Frame.Left + dx, Frame.Top + dy, Frame.Right + dx, Frame.Bottom + dy));
+
+    /// <summary>輸出經矩陣映射（仿射時精確；透視時只是控制點近似）。</summary>
+    public WarpMesh Transformed(SKMatrix m)
+    {
+        var pts = new SKPoint[16];
+        for (var i = 0; i < 16; i++) pts[i] = m.MapPoint(Points[i]);
+        return this with { Points = pts };
+    }
+
+    /// <summary>把來源框裡（或外，貝茲外插）的一個點映到曲面上。</summary>
+    public SKPoint MapPoint(SKPoint p) => Evaluate(
+        Frame.Width > 0.001f ? (p.X - Frame.Left) / Frame.Width : 0f,
+        Frame.Height > 0.001f ? (p.Y - Frame.Top) / Frame.Height : 0f);
+
+    /// <summary>矩形經曲面映射後的外接矩形（沿邊界取樣）。</summary>
+    public SKRect MapBounds(SKRect r, int samples = 12)
+    {
+        float l = float.MaxValue, t = float.MaxValue, rr = float.MinValue, b = float.MinValue;
+        void Add(SKPoint p)
+        {
+            l = Math.Min(l, p.X); t = Math.Min(t, p.Y);
+            rr = Math.Max(rr, p.X); b = Math.Max(b, p.Y);
+        }
+        for (var i = 0; i <= samples; i++)
+        {
+            var k = i / (float)samples;
+            Add(MapPoint(new SKPoint(r.Left + r.Width * k, r.Top)));
+            Add(MapPoint(new SKPoint(r.Left + r.Width * k, r.Bottom)));
+            Add(MapPoint(new SKPoint(r.Left, r.Top + r.Height * k)));
+            Add(MapPoint(new SKPoint(r.Right, r.Top + r.Height * k)));
+        }
+        return new SKRect(l, t, rr, b);
+    }
+
+    /// <summary>另一張網格接在這張之後（近似：把控制點送過去）。</summary>
+    public WarpMesh Then(WarpMesh outer)
+    {
+        var pts = new SKPoint[16];
+        for (var i = 0; i < 16; i++) pts[i] = outer.MapPoint(Points[i]);
+        return this with { Points = pts };
+    }
+
     public WarpMesh Rotated(SKPoint center, float deg) => this with { Points = QuadGeometry.Rotated(Points, center, deg) };
 
     /// <summary>控制點命中（角優先）；-1 = 無。</summary>
@@ -136,9 +182,19 @@ public sealed record WarpMesh(SKPoint[] Points, SKRect Frame)
     /// 沿曲面畫出來：曲面細分成三角形網格，貼圖座標對回原始像素（Decal：影像外透明，
     /// 群組裡比框小的圖層不會被邊緣像素拉成一片）。canvas 已在 doc 座標。
     /// </summary>
-    public void Draw(SKCanvas canvas, SKImage image, SKRectI srcBounds, SKMatrix pixelMatrix, SKFilterQuality quality)
+    public void Draw(SKCanvas canvas, SKImage image, SKRectI srcBounds, SKMatrix pixelMatrix, SKFilterQuality quality,
+        SKRect? cover = null)
     {
         if (!pixelMatrix.TryInvert(out var inverse)) return;
+        // 網格預設只鋪 Frame；cover 給了就外插到把它蓋住（文字改字後長出框外也要畫得到）
+        float u0 = 0, u1 = 1, v0 = 0, v1 = 1;
+        if (cover is { } cv && Frame.Width > 0.001f && Frame.Height > 0.001f)
+        {
+            u0 = Math.Min(0, (cv.Left - Frame.Left) / Frame.Width);
+            u1 = Math.Max(1, (cv.Right - Frame.Left) / Frame.Width);
+            v0 = Math.Min(0, (cv.Top - Frame.Top) / Frame.Height);
+            v1 = Math.Max(1, (cv.Bottom - Frame.Top) / Frame.Height);
+        }
         const int n = Subdivisions;
         var count = (n + 1) * (n + 1);
         var positions = new SKPoint[count];
@@ -146,8 +202,8 @@ public sealed record WarpMesh(SKPoint[] Points, SKRect Frame)
         for (var j = 0; j <= n; j++)
         for (var i = 0; i <= n; i++)
         {
-            var u = i / (float)n;
-            var v = j / (float)n;
+            var u = u0 + (u1 - u0) * i / n;
+            var v = v0 + (v1 - v0) * j / n;
             var idx = j * (n + 1) + i;
             positions[idx] = Evaluate(u, v);
             var flat = new SKPoint(Frame.Left + Frame.Width * u, Frame.Top + Frame.Height * v);

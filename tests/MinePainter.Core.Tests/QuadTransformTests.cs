@@ -191,7 +191,7 @@ public class QuadTransformTests
     }
 
     [Fact]
-    public void QuadMode_RefusedForTextLayer()
+    public void QuadMode_AllowedForTextLayer_TextStaysEditable()
     {
         using var session = new EditorSession(ImageCodec.CreateBlankDocument(256, 256, SKColors.Transparent));
         var doc = session.Document;
@@ -206,9 +206,9 @@ public class QuadTransformTests
         session.RefreshSelectionHandles();
         var t = session.BeginTransform();
         Assert.NotNull(t);
-        Assert.False(t!.CanUseQuad);
-        Assert.False(t.EnterQuadMode());
-        Assert.Null(t.Quad);
+        Assert.True(t!.CanUseQuad);
+        Assert.True(t.EnterQuadMode());
+        Assert.NotNull(t.Quad);
         session.CancelTransform();
     }
 

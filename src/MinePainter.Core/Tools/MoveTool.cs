@@ -512,6 +512,115 @@ public sealed class MoveTool : ITool
             layer.Invalidate(SKRectI.Union(before, floating.TargetBounds));
     }
 
+    // ---- 方向鍵微調（移動工具；1px，Shift＝10px，Photoshop 慣例）----
+
+    /// <summary>
+    /// 把「目前框住的東西」平移 delta：變形框 → 浮動內容 → 選中的文字物件 → 整個圖層／群組。
+    /// 變形框與浮動內容在 session 裡動、不記步（落地時一起記）；物件與圖層各記一步。
+    /// 回傳 false＝沒有可微調的東西。
+    /// </summary>
+    public static bool Nudge(EditorSession session, int dx, int dy)
+    {
+        if (dx == 0 && dy == 0) return false;
+        var doc = session.Document;
+
+        if (session.Transform is { } transform)
+        {
+            if (transform.Warp is { } warp) transform.SetWarp(warp.Translated(dx, dy));
+            else if (transform.Quad is { } quad) transform.SetQuad(QuadGeometry.Translated(quad, dx, dy));
+            else
+            {
+                var r = transform.TargetRect;
+                transform.TargetRect = new SKRect(r.Left + dx, r.Top + dy, r.Right + dx, r.Bottom + dy);
+            }
+            transform.Apply(preview: false);
+            session.RefreshSelectionHandles();
+            return true;
+        }
+
+        if (session.Floating is { } floating)
+        {
+            var before = floating.TargetBounds;
+            var r = floating.TargetRect;
+            floating.TargetRect = new SKRect(r.Left + dx, r.Top + dy, r.Right + dx, r.Bottom + dy);
+            InvalidateFloating(session, floating, before);
+            return true;
+        }
+
+        if (session.SelectedElement is { } sel)
+        {
+            RasterLayer? layer;
+            VectorElement? element;
+            lock (doc.SyncRoot)
+            {
+                layer = doc.FindLayer(sel.LayerId) as RasterLayer;
+                element = layer?.FindElement(sel.ElementId);
+            }
+            if (layer != null && element != null)
+            {
+                VectorCommands.ReplaceElement(doc, session.History, layer, element, element.Translated(dx, dy), "微調物件");
+                session.RefreshSelectionHandles();
+                return true;
+            }
+        }
+
+        // 整個圖層／群組：Offset 與文字物件一起動（同 OnPointerUp 的 Layer 路徑，單一步 undo）
+        var layers = new List<RasterLayer>();
+        switch (doc.ActiveLayer)
+        {
+            case RasterLayer single: layers.Add(single); break;
+            case GroupLayer group: CollectRasterLayers(group, layers); break;
+        }
+        if (layers.Count == 0) return false;
+
+        var oldOffsets = layers.Select(l => l.Offset).ToArray();
+        var newOffsets = oldOffsets.Select(o => new SKPointI(o.X + dx, o.Y + dy)).ToArray();
+        VectorElement[][] oldElements;
+        lock (doc.SyncRoot)
+        {
+            oldElements = layers.Select(l => l.HasElements ? l.Elements.ToArray() : Array.Empty<VectorElement>()).ToArray();
+        }
+        var oldSelection = session.Selection;
+        var newSelection = oldSelection is { IsEmpty: false } s
+            ? s.TransformedTo(SKRect.Create(s.Bounds.Left + dx, s.Bounds.Top + dy, s.Bounds.Width, s.Bounds.Height), doc.Bounds) ?? oldSelection
+            : oldSelection;
+
+        void Apply(SKPointI[] offsets, bool moved)
+        {
+            for (var i = 0; i < layers.Count; i++)
+            {
+                var layer = layers[i];
+                lock (doc.SyncRoot)
+                {
+                    layer.Offset = offsets[i];
+                    foreach (var el in oldElements[i])
+                    {
+                        if (layer.FindElement(el.Id) != null)
+                            layer.ReplaceElement(moved ? el.Translated(dx, dy) : el);
+                    }
+                }
+                layer.InvalidateComposite(doc.Bounds); // 純平移：效果快取是圖層座標，不重算
+            }
+            session.RefreshSelectionHandles();
+        }
+
+        Apply(newOffsets, moved: true);
+        if (!ReferenceEquals(newSelection, oldSelection)) session.ApplySelection(newSelection);
+        var label = doc.ActiveLayer is GroupLayer ? "微調群組" : "微調圖層";
+        session.History.Push(new ActionHistoryEntry(label, doc.Bounds,
+            undo: _ =>
+            {
+                if (!ReferenceEquals(newSelection, oldSelection)) session.ApplySelection(oldSelection);
+                Apply(oldOffsets, moved: false);
+            },
+            redo: _ =>
+            {
+                if (!ReferenceEquals(newSelection, oldSelection)) session.ApplySelection(newSelection);
+                Apply(newOffsets, moved: true);
+            }));
+        return true;
+    }
+
     // ---- 旋轉手勢（右鍵拖曳，paint.net 式）----
 
     private bool _rotateActive;

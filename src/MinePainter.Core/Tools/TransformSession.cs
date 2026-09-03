@@ -36,7 +36,50 @@ public sealed class TransformSession : IDisposable
         public required TileSnapshot Before;
         public required VectorElement[] StartElements;
         public SKRectI LastStamp;                // 目前蓋章的 doc 範圍（Offset=Base 基準；呈現位置再加 OffsetDelta）
+
+        /// <summary>進入四角／彎曲模式時的文字物件（已含矩形模式的變形）：網格變形疊在它們的輸出端。</summary>
+        public Dictionary<Guid, VectorElement>? MeshStartElements;
     }
+
+    /// <summary>
+    /// 文字物件在目前狀態下該長什麼樣：矩形模式走參數式 TransformedBy；
+    /// 四角／彎曲模式把單應／網格疊在進入時的物件輸出端（排版參數不動 → 文字永遠可編輯）。
+    /// </summary>
+    private VectorElement TransformedElement(Item item, VectorElement start, SKMatrix m, float sx, float sy)
+    {
+        if (IsMeshMode && item.MeshStartElements != null &&
+            item.MeshStartElements.TryGetValue(start.Id, out var meshStart) && meshStart is TextElement text)
+        {
+            if (_warp != null) return IsWarpChanged ? text.Warped(_warp) : text;
+            if (_quad != null && _quadStart != null)
+                return IsQuadChanged ? text.Deformed(QuadGeometry.QuadToQuad(_quadStart, _quad)) : text;
+            return text;
+        }
+        if (_stripDeform && start is TextElement t) start = t.WithoutDeform();
+        return start.TransformedBy(m, sx, sy, DeltaRotation);
+    }
+
+    /// <summary>進入網格模式：把此刻的文字物件記下來當網格變形的輸入端。</summary>
+    private void CaptureMeshStartElements()
+    {
+        lock (_doc.SyncRoot)
+        {
+            foreach (var item in _items)
+            {
+                if (item.StartElements.Length == 0) continue;
+                var dict = new Dictionary<Guid, VectorElement>();
+                foreach (var start in item.StartElements)
+                {
+                    if (item.Layer.FindElement(start.Id) is { } current) dict[start.Id] = current;
+                }
+                item.MeshStartElements = dict;
+            }
+        }
+    }
+
+    /// <summary>有沒有帶著透視／彎曲的文字（重設鈕要亮：拿掉才是最原始）。</summary>
+    public bool HasDeformedElements =>
+        _items.Any(i => i.StartElements.Any(e => e is TextElement { Deform: not null }));
 
     /// <summary>單層內容的尺寸上限（單邊），與整層提起相同的保險。</summary>
     private const int MaxContentSide = 16384;
@@ -68,8 +111,8 @@ public sealed class TransformSession : IDisposable
     /// <summary>把手框該畫的旋轉角：四角／彎曲模式的框本身就是網格，不再另外轉。</summary>
     public float DisplayRotation => IsMeshMode ? 0f : RotationDeg;
 
-    /// <summary>文字物件沒有透視這回事（PS 也是先柵格化）：有物件的目標不能進四角模式。</summary>
-    public bool CanUseQuad => _items.All(i => i.StartElements.Length == 0);
+    /// <summary>文字物件也能透視／彎曲（變形疊在輸出端，文字仍可編輯），任何目標都能進網格模式。</summary>
+    public bool CanUseQuad => true;
 
     /// <summary>
     /// 進入四角模式：以目前框（含旋轉）的四角為起點。已在四角模式回 true；有文字物件回 false。
@@ -87,6 +130,7 @@ public sealed class TransformSession : IDisposable
         _quad = (SKPoint[])_quadStart.Clone();
         // 目前蓋章的像素位置 = 現在的框 − 純平移位移（蓋章一律在 Offset=Base 基準）
         _stampedQuad = QuadGeometry.Translated(_quadStart, -OffsetDelta.X, -OffsetDelta.Y);
+        CaptureMeshStartElements();
         return true;
     }
 
@@ -139,6 +183,7 @@ public sealed class TransformSession : IDisposable
         _warpStart = WarpMesh.Flat(frame);
         _warp = _warpStart;
         _stampedWarp = _warpStart.Translated(-OffsetDelta.X, -OffsetDelta.Y);
+        CaptureMeshStartElements();
         return true;
     }
 
@@ -177,8 +222,12 @@ public sealed class TransformSession : IDisposable
     /// 有沒有東西可以重設：任何角度／尺寸／四角／網格偏離原始，或這是續接的 session
     /// （上一輪的變形也算，重設要回到「最原始」的狀態）。
     /// </summary>
+    /// <summary>重設後文字物件拿掉透視／彎曲（回到排版本身）。</summary>
+    private bool _stripDeform;
+
     public bool CanReset =>
         IsResumed && !_resetFromResume ||
+        HasDeformedElements && !_stripDeform ||
         IsQuadChanged || IsWarpChanged ||
         Math.Abs(RotationDeg) > 0.01f ||
         Math.Abs(TargetRect.Width - ResetSize.Width) > 0.5f ||
@@ -198,6 +247,10 @@ public sealed class TransformSession : IDisposable
         _quad = null; _quadStart = null; _stampedQuad = null;
         _warp = null; _warpStart = null; _stampedWarp = null;
         RotationDeg = 0f;
+        if (HasDeformedElements) _stripDeform = true; // 文字的透視／彎曲一併拿掉
+        // 蓋章狀態標成未知：強制下一次 Apply 走全量路徑（純平移的捷徑在位移為 0 時會直接略過，
+        // 文字物件就不會被重新算一次、透視／彎曲拿不掉）
+        _stampedParams = (float.NaN, float.NaN, float.NaN, float.NaN, float.NaN);
 
         if (IsResumed)
         {
@@ -279,7 +332,7 @@ public sealed class TransformSession : IDisposable
 
     private bool RectIsIdentity => TargetRect == SourceRect && DeltaRotation == 0f;
 
-    public bool IsIdentity => !_resetFromResume && RectIsIdentity && !IsQuadChanged && !IsWarpChanged;
+    public bool IsIdentity => !_resetFromResume && !_stripDeform && RectIsIdentity && !IsQuadChanged && !IsWarpChanged;
 
     /// <summary>
     /// 「重設角度與比例」該回到的尺寸：第一輪＝SourceRect；續接時＝最初提起時的原始尺寸
@@ -743,7 +796,7 @@ public sealed class TransformSession : IDisposable
                 foreach (var start in item.StartElements)
                 {
                     if (item.Layer.FindElement(start.Id) != null)
-                        item.Layer.ReplaceElement(start.TransformedBy(m, sx, sy, DeltaRotation));
+                        item.Layer.ReplaceElement(TransformedElement(item, start, m, sx, sy));
                 }
             }
 
@@ -798,7 +851,7 @@ public sealed class TransformSession : IDisposable
                 foreach (var start in item.StartElements)
                 {
                     if (item.Layer.FindElement(start.Id) != null)
-                        item.Layer.ReplaceElement(start.TransformedBy(m, sx, sy, DeltaRotation));
+                        item.Layer.ReplaceElement(TransformedElement(item, start, m, sx, sy));
                 }
             }
 
@@ -825,7 +878,7 @@ public sealed class TransformSession : IDisposable
                 foreach (var start in item.StartElements)
                 {
                     if (item.Layer.FindElement(start.Id) != null)
-                        item.Layer.ReplaceElement(start.TransformedBy(m, sx, sy, DeltaRotation));
+                        item.Layer.ReplaceElement(TransformedElement(item, start, m, sx, sy));
                 }
             }
         }

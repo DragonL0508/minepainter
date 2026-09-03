@@ -100,6 +100,10 @@ public static class MppFormat
         public float? ScaleX { get; set; }
         public float? BaseFontSize { get; set; }
         public float? Rotation { get; set; }
+        /// <summary>透視／彎曲變形：3×3 單應矩陣（列主序 9 個值）；WarpPoints = 16 個控制點（x,y 交錯）、WarpFrame = l,t,r,b。</summary>
+        public float[]? Deform { get; set; }
+        public float[]? WarpPoints { get; set; }
+        public float[]? WarpFrame { get; set; }
         public int? Weight { get; set; }
         public bool? Bold { get; set; }
         public bool? Italic { get; set; }
@@ -289,6 +293,9 @@ public static class MppFormat
             ScaleX = t.ScaleX,
             BaseFontSize = t.BaseFontSize,
             Rotation = t.Rotation,
+            Deform = t.Deform is { } d ? MatrixToArray(d.Projective) : null,
+            WarpPoints = t.Deform?.Warp is { } w ? w.Points.SelectMany(p => new[] { p.X, p.Y }).ToArray() : null,
+            WarpFrame = t.Deform?.Warp is { } wf ? [wf.Frame.Left, wf.Frame.Top, wf.Frame.Right, wf.Frame.Bottom] : null,
             Weight = t.FontWeight,
             Bold = t.Bold,
             Italic = t.Italic,
@@ -647,6 +654,24 @@ public static class MppFormat
         return mask;
     }
 
+    private static float[] MatrixToArray(SKMatrix m) =>
+        [m.ScaleX, m.SkewX, m.TransX, m.SkewY, m.ScaleY, m.TransY, m.Persp0, m.Persp1, m.Persp2];
+
+    private static TextDeform? ReadDeform(Element el)
+    {
+        if (el.Deform is not { Length: 9 } d) return null;
+        var m = new SKMatrix(d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7], d[8]);
+        Tools.WarpMesh? warp = null;
+        if (el.WarpPoints is { Length: 32 } wp && el.WarpFrame is { Length: 4 } wf)
+        {
+            var pts = new SKPoint[16];
+            for (var i = 0; i < 16; i++) pts[i] = new SKPoint(wp[i * 2], wp[i * 2 + 1]);
+            warp = new Tools.WarpMesh(pts, new SKRect(wf[0], wf[1], wf[2], wf[3]));
+        }
+        var deform = new TextDeform(m, warp);
+        return deform.IsIdentity ? null : deform;
+    }
+
     private static VectorElement BuildElement(Element el) => el.Type switch
     {
         "text" => new TextElement
@@ -660,6 +685,7 @@ public static class MppFormat
             ScaleX = el.ScaleX ?? 1f,
             BaseFontSize = el.BaseFontSize,
             Rotation = el.Rotation ?? 0f,
+            Deform = ReadDeform(el),
             FontWeight = el.Weight ?? 400,
             Bold = el.Bold ?? false,
             Italic = el.Italic ?? false,

@@ -125,24 +125,54 @@ public class WarpTransformTests
         var t = session.EnterTransformMode(TransformMode.Perspective);
         Assert.NotNull(t);
         Assert.NotNull(t!.Quad);
-        Assert.False(text.HasElements);              // 已自動平面化
-        Assert.True(text.Surface.TileCount > 0);     // 文字變成像素
-        Assert.Equal("平面化文字", session.History.UndoLabel);
+        Assert.True(text.HasElements);               // 文字仍是文字（沒平面化）
+        Assert.Equal(0, text.Surface.TileCount);
 
-        session.CancelTransform();                   // Esc：連平面化一起退回
+        Assert.True(t.SetQuad(QuadGeometry.PerspectiveDrag(t.Quad!, 0, new SKPoint(3, 0))));
+        t.Apply(preview: false);
+        var el = Assert.IsType<TextElement>(text.Elements[0]);
+        Assert.NotNull(el.Deform);                   // 透視疊在文字輸出端
+        Assert.Equal("Hi", el.Text);
+        session.CommitTransform();
         Assert.True(text.HasElements);
-        Assert.Null(session.Transform);
+        Assert.False(text.ViolatesTextLayerInvariant);
 
-        // 再來一次並落地：平面化與變形各記一步
+        // 改字後照樣帶著透視（可編輯）
+        var edited = (TextElement)text.Elements[0] with { Text = "Hello" };
+        lock (doc.SyncRoot) text.ReplaceElement(edited);
+        Assert.NotNull(((TextElement)text.Elements[0]).Deform);
+        Assert.True(((TextElement)text.Elements[0]).IsTransformed);
+
+        // 彎曲也一樣
         var t2 = session.EnterTransformMode(TransformMode.Warp)!;
         Assert.NotNull(t2.Warp);
-        Assert.True(t2.SetWarp(WarpMesh.Drag(t2.Warp!, 0, new SKPoint(10, 10))));
+        Assert.True(t2.SetWarp(WarpMesh.Drag(t2.Warp!, 5, new SKPoint(10, 10))));
         t2.Apply(preview: false);
-        var before = session.History.UndoStack.Count;
         session.CommitTransform();
-        Assert.Equal(before + 1, session.History.UndoStack.Count);
-        Assert.False(text.HasElements);
-        Assert.False(text.ViolatesTextLayerInvariant);
+        var warped = (TextElement)text.Elements[0];
+        Assert.NotNull(warped.Deform?.Warp);
+        Assert.Equal("Hello", warped.Text);
+
+        // 重設：拿掉透視／彎曲，文字回到排版本身
+        var t3 = session.BeginTransform()!;
+        Assert.True(session.CanResetTransform);
+        Assert.True(session.ResetTransform());
+        session.CommitTransform();
+        Assert.Null(((TextElement)text.Elements[0]).Deform);
+
+        // mpp 存讀保留變形
+        lock (doc.SyncRoot) text.ReplaceElement(warped);
+        var path = Path.Combine(Path.GetTempPath(), $"deform_{Guid.NewGuid():N}.mpp");
+        try
+        {
+            MppFormat.Save(doc, path);
+            using var loaded = MppFormat.Load(path);
+            var back = loaded.Root.Children.OfType<RasterLayer>().First(l => l.HasElements);
+            var backEl = Assert.IsType<TextElement>(back.Elements[0]);
+            Assert.NotNull(backEl.Deform?.Warp);
+            Assert.Equal(warped.Deform, backEl.Deform);
+        }
+        finally { File.Delete(path); }
     }
 
     [Fact]
@@ -272,5 +302,70 @@ public class TransformResetTests
         Assert.True(LayerPx(layer, (int)rect.MidX, (int)rect.MidY).Alpha > 200);
         Assert.Equal(0, LayerPx(layer, (int)rect.Right + 5, (int)rect.MidY).Alpha);
         Assert.Equal(0, LayerPx(layer, (int)rect.Left - 5, (int)rect.MidY).Alpha);
+    }
+}
+
+public class TransformResetAfterClickAwayTests
+{
+    [Fact]
+    public void Reset_WithoutSession_UsesResume_ReturnsToOriginalSize_SingleUndo()
+    {
+        using var session = new EditorSession(ImageCodec.CreateBlankDocument(512, 512, SKColors.Transparent));
+        var doc = session.Document;
+        var layer = (RasterLayer)doc.ActiveLayer!;
+        lock (doc.SyncRoot) layer.Surface.Fill(new SKRectI(100, 100, 200, 200), new SKColor(255, 0, 0));
+        session.ActiveTool = session.Move;
+        session.RefreshSelectionHandles();
+
+        // 拉完（放大兩倍）→ 點出去（落地）
+        var t1 = session.BeginTransform()!;
+        t1.TargetRect = new SKRect(100, 100, 300, 300);
+        t1.Apply(preview: false);
+        session.CommitTransform();
+        Assert.Null(session.Transform);
+
+        // 點回來（沒開 session）→ 重設鈕要亮、按下去回到 100×100
+        Assert.True(session.CanResetTransform);
+        var before = session.History.UndoStack.Count;
+        Assert.True(session.ResetTransform());
+        Assert.Null(session.Transform);
+        Assert.Equal(before + 1, session.History.UndoStack.Count);
+        var bounds = layer.Surface.ExactContentBounds();
+        Assert.InRange(bounds.Width, 99, 101);
+        Assert.InRange(bounds.Height, 99, 101);
+        Assert.False(session.CanResetTransform);
+    }
+}
+
+public class NudgeTests
+{
+    [Fact]
+    public void Nudge_LayerOffset_SingleUndo_AndTransformFrame()
+    {
+        using var session = new EditorSession(ImageCodec.CreateBlankDocument(256, 256, SKColors.Transparent));
+        var doc = session.Document;
+        var layer = (RasterLayer)doc.ActiveLayer!;
+        lock (doc.SyncRoot) layer.Surface.Fill(new SKRectI(20, 20, 60, 60), new SKColor(255, 0, 0));
+        session.ActiveTool = session.Move;
+        session.RefreshSelectionHandles();
+
+        Assert.True(MoveTool.Nudge(session, 1, 0));
+        Assert.Equal(new SKPointI(1, 0), layer.Offset);
+        Assert.True(MoveTool.Nudge(session, 0, 10));
+        Assert.Equal(new SKPointI(1, 10), layer.Offset);
+        Assert.Equal("微調圖層", session.History.UndoLabel);
+        session.Undo();
+        Assert.Equal(new SKPointI(1, 0), layer.Offset);
+        session.Undo();
+        Assert.Equal(new SKPointI(0, 0), layer.Offset);
+
+        // 變形框：在 session 裡動，不記步
+        var t = session.BeginTransform()!;
+        var before = session.History.UndoStack.Count;
+        Assert.True(MoveTool.Nudge(session, 5, -2));
+        Assert.Equal(before, session.History.UndoStack.Count);
+        Assert.Equal(t.SourceRect.Left + 5, t.TargetRect.Left, 3);
+        session.CancelTransform();
+        Assert.Equal(new SKPointI(0, 0), layer.Offset);
     }
 }

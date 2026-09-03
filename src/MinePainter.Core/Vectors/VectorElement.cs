@@ -50,9 +50,71 @@ public enum TextAlign
     Right,
 }
 
+/// <summary>
+/// 文字的非仿射變形（透視／彎曲），套在 Position／Rotation／ScaleX 之後（doc → doc）：
+/// 先 <see cref="Projective"/>（單應矩陣，可含透視）、再 <see cref="Warp"/>（貝茲網格，null＝無）。
+/// 文字本身的排版參數完全不動 —— 改字之後照樣套同一套變形，文字永遠可編輯（使用者明示）。
+/// </summary>
+public sealed record TextDeform(SKMatrix Projective, Tools.WarpMesh? Warp)
+{
+    public static readonly TextDeform None = new(SKMatrix.Identity, null);
+
+    public bool IsIdentity => Warp == null && IsIdentityMatrix(Projective);
+
+    private static bool IsIdentityMatrix(SKMatrix m) =>
+        Math.Abs(m.ScaleX - 1) < 1e-5f && Math.Abs(m.ScaleY - 1) < 1e-5f &&
+        Math.Abs(m.SkewX) < 1e-5f && Math.Abs(m.SkewY) < 1e-5f &&
+        Math.Abs(m.TransX) < 1e-3f && Math.Abs(m.TransY) < 1e-3f &&
+        Math.Abs(m.Persp0) < 1e-9f && Math.Abs(m.Persp1) < 1e-9f && Math.Abs(m.Persp2 - 1) < 1e-5f;
+
+    public SKPoint MapPoint(SKPoint p)
+    {
+        var q = Projective.MapPoint(p);
+        return Warp?.MapPoint(q) ?? q;
+    }
+
+    /// <summary>矩形經整套變形後的外接矩形。</summary>
+    public SKRect MapBounds(SKRect r)
+    {
+        var q = Projective.MapRect(r);
+        return Warp?.MapBounds(q) ?? q;
+    }
+
+    /// <summary>輸入端平移 d（文字搬家）：輸出也跟著平移。</summary>
+    public TextDeform Translated(float dx, float dy)
+    {
+        var t = SKMatrix.CreateTranslation(dx, dy);
+        var p = SKMatrix.Concat(t, SKMatrix.Concat(Projective, SKMatrix.CreateTranslation(-dx, -dy)));
+        return new TextDeform(p, Warp?.TranslatedWithFrame(dx, dy));
+    }
+
+    /// <summary>輸出端再套一個矩陣（仿射精確；透視在有網格時是控制點近似）。</summary>
+    public TextDeform Then(SKMatrix m) => Warp == null
+        ? new TextDeform(SKMatrix.Concat(m, Projective), null)
+        : new TextDeform(Projective, Warp.Transformed(m));
+
+    /// <summary>輸出端再套一張網格。</summary>
+    public TextDeform Then(Tools.WarpMesh mesh) => Warp == null
+        ? new TextDeform(Projective, mesh)
+        : new TextDeform(Projective, Warp.Then(mesh));
+
+    public bool Equals(TextDeform? other) =>
+        other != null && Projective == other.Projective &&
+        (Warp == null ? other.Warp == null
+            : other.Warp != null && Warp.Frame == other.Warp.Frame &&
+              Tools.QuadGeometry.NearlyEqual(Warp.Points, other.Warp.Points, 0f));
+
+    public override int GetHashCode() => Projective.GetHashCode();
+}
+
 public sealed record TextElement : VectorElement
 {
     public string Text { get; init; } = "";
+
+    /// <summary>透視／彎曲變形（null＝無）；套在排版之後，改字不影響。</summary>
+    public TextDeform? Deform { get; init; }
+
+    private bool HasDeform => Deform is { IsIdentity: false };
     public string FontFamily { get; init; } = "Microsoft JhengHei";
     public float FontSize { get; init; } = 48f;
     public SKColor Color { get; init; } = SKColors.Black;
@@ -147,7 +209,31 @@ public sealed record TextElement : VectorElement
         }
     }
 
-    public override SKRectI Bounds => SKRectI.Ceiling(MapLocalToDoc(PaddedLocalBounds));
+    public override SKRectI Bounds
+    {
+        get
+        {
+            var doc = MapLocalToDoc(PaddedLocalBounds);
+            if (!HasDeform) return SKRectI.Ceiling(doc);
+            var deformed = Deform!.MapBounds(doc);
+            deformed.Inflate(2, 2); // 邊界取樣的誤差餘裕
+            return SKRectI.Ceiling(deformed);
+        }
+    }
+
+    /// <summary>沒有變形時的 doc 外框（透視／彎曲前；離線算繪文字用）。</summary>
+    internal SKRect UndeformedPaddedBounds => MapLocalToDoc(PaddedLocalBounds);
+
+    /// <summary>套用透視／彎曲前的框（把手／對齊用的「使用者看到的框」，變形前版本）。</summary>
+    public SKRect UndeformedFrameBounds => MapLocalToDoc(MeasureInkBounds() ?? LocalBounds);
+
+    /// <summary>輸出端再疊一個 doc→doc 單應矩陣（變形框的透視）。</summary>
+    public TextElement Deformed(SKMatrix h) => this with { Deform = (Deform ?? TextDeform.None).Then(h) };
+
+    /// <summary>輸出端再疊一張彎曲網格。</summary>
+    public TextElement Warped(Tools.WarpMesh mesh) => this with { Deform = (Deform ?? TextDeform.None).Then(mesh) };
+
+    public TextElement WithoutDeform() => Deform == null ? this : this with { Deform = null };
 
     private SKRect PaddedLocalBounds
     {
@@ -170,7 +256,8 @@ public sealed record TextElement : VectorElement
         get
         {
             var ink = MeasureInkBounds();
-            return MapLocalToDoc(ink ?? LocalBounds);
+            var doc = MapLocalToDoc(ink ?? LocalBounds);
+            return HasDeform ? Deform!.MapBounds(doc) : doc;
         }
     }
 
@@ -261,6 +348,13 @@ public sealed record TextElement : VectorElement
     /// </summary>
     public override bool HitTest(SKPoint p)
     {
+        if (HasDeform)
+        {
+            // 透視：把點反轉回變形前；彎曲沒有閉式反函數，退回用變形後的框
+            if (Deform!.Warp != null) return FrameBounds.Contains(p.X, p.Y);
+            if (!Deform.Projective.TryInvert(out var inv)) return false;
+            p = inv.MapPoint(p);
+        }
         var local = Math.Abs(Rotation) < 0.01f
             ? new SKPoint(p.X - Position.X, p.Y - Position.Y)
             : SKMatrix.CreateRotationDegrees(-Rotation).MapPoint(p.X - Position.X, p.Y - Position.Y);
@@ -270,6 +364,46 @@ public sealed record TextElement : VectorElement
     public override void Render(SKCanvas canvas)
     {
         if (string.IsNullOrEmpty(Text)) return;
+
+        if (HasDeform)
+        {
+            var deform = Deform!;
+            if (deform.Warp is { } warp)
+            {
+                // 彎曲：先把（透視後的）文字算到離線影像，再沿貝茲曲面貼上去
+                var pre = deform.Projective.MapRect(UndeformedPaddedBounds);
+                var src = SKRectI.Ceiling(pre);
+                src.Inflate(1, 1);
+                if (src.Width <= 0 || src.Height <= 0 || src.Width > 16384 || src.Height > 16384) return;
+                using var surface = SKSurface.Create(new SKImageInfo(src.Width, src.Height, SKColorType.Bgra8888, SKAlphaType.Premul));
+                if (surface == null) return;
+                var c = surface.Canvas;
+                c.Clear(SKColors.Transparent);
+                c.Translate(-src.Left, -src.Top);
+                var proj = deform.Projective;
+                c.Concat(ref proj);
+                RenderCore(c);
+                c.Flush();
+                using var image = surface.Snapshot();
+                warp.Draw(canvas, image, src, SKMatrix.Identity, SKFilterQuality.High,
+                    cover: new SKRect(src.Left, src.Top, src.Right, src.Bottom));
+                return;
+            }
+
+            // 只有透視：直接把矩陣疊進 canvas（Skia 的文字在透視下改走路徑繪製）
+            var m = deform.Projective;
+            canvas.Save();
+            canvas.Concat(ref m);
+            RenderCore(canvas);
+            canvas.Restore();
+            return;
+        }
+
+        RenderCore(canvas);
+    }
+
+    private void RenderCore(SKCanvas canvas)
+    {
         using var shaper = CreateShaper();
 
         var lines = Text.Split('\n');
@@ -392,13 +526,19 @@ public sealed record TextElement : VectorElement
     }
 
     public override VectorElement Translated(float dx, float dy) =>
-        this with { Position = new SKPoint(Position.X + dx, Position.Y + dy) };
+        this with
+        {
+            Position = new SKPoint(Position.X + dx, Position.Y + dy),
+            Deform = Deform?.Translated(dx, dy),
+        };
 
     /// <summary>
     /// 位置走完整矩陣；外形以參數表達 —— 垂直縮放進字級、水平比例差進 ScaleX、旋轉累加。
     /// （已旋轉的文字遇到非等比縮放時只能近似：縮放先於旋轉套用。）
+    /// 已有透視／彎曲的文字：排版參數不動，矩陣疊在變形的輸出端（精確，且改字仍可）。
     /// </summary>
     public override VectorElement TransformedBy(SKMatrix matrix, float sx, float sy, float rotationDeg) =>
+        HasDeform ? Deformed(matrix) :
         this with
         {
             Position = matrix.MapPoint(Position),
@@ -411,6 +551,7 @@ public sealed record TextElement : VectorElement
 
     /// <summary>有沒有被轉過、拉歪或縮放過（角度≠0、ScaleX≠1、或字級離開原始值）。</summary>
     public bool IsTransformed =>
+        HasDeform ||
         Math.Abs(Rotation) > 0.01f || Math.Abs(ScaleX - 1f) > 0.001f ||
         (BaseFontSize is { } b && Math.Abs(b - FontSize) > 0.01f);
 
@@ -426,6 +567,7 @@ public sealed record TextElement : VectorElement
         var ratio = FontSize > 0.01f ? baseSize / FontSize : 1f;
         var straight = this with
         {
+            Deform = null, // 透視／彎曲也一起拿掉（回到最原始）
             Rotation = 0f,
             ScaleX = 1f,
             FontSize = Math.Max(1f, baseSize),
