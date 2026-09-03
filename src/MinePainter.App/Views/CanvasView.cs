@@ -175,57 +175,124 @@ public sealed class CanvasView : Control
         _animationRunning = false;
     }
 
-    // ---- 方向鍵微調的補間（只用於浮動內容／變形框）----
+    // ---- 方向鍵微調：按一下走一格，按住則由動畫迴圈等速滑行 ----
+    //
+    // OS 的按鍵重複是「延遲半秒、然後每秒約 30 次」的離散事件，跟著它動一定是一格一格跳。
+    // 所以按住時我們忽略重複事件，改由每一幀依速度推進（小數累積、整數輸出），
+    // 速度還會由慢漸快 —— 微調時看得準，要搬遠一點時滑得動。
+    // 只用於不壓 undo 的路徑（浮動內容／變形框／可提起的選取），見 MoveTool.CanNudgeSmoothly。
 
-    /// <summary>還沒套用的微調位移（doc px）；每幀追上一部分。</summary>
-    private double _nudgeRemainX;
-    private double _nudgeRemainY;
+    private readonly HashSet<Key> _nudgeKeys = new();
+    private double _nudgeHeldSeconds;
+    private bool _nudgeShift;
 
-    /// <summary>每幀追上剩餘位移的比例（指數趨近；10px 約 6 幀 ≈ 100ms 到位）。</summary>
-    private const double NudgeCatchUp = 0.3;
+    /// <summary>按一下產生的位移，指數趨近地補間過去（Shift 的 10px 是滑過去的）。</summary>
+    private double _nudgePendingX;
+    private double _nudgePendingY;
 
-    /// <summary>剩下的微調位移往目標挪一幀。像素內容只能整數位移，所以每幀取整數步。</summary>
-    private void StepNudgeAnimation()
+    /// <summary>按住滑行的小數累積（不足一格先攢著）。</summary>
+    private double _nudgeGlideX;
+    private double _nudgeGlideY;
+
+    private const double NudgeCatchUp = 0.3;      // 單次按鍵每幀追上剩餘的比例
+    private const double NudgeHoldDelay = 0.16;   // 按住多久才開始滑行（秒）
+    private const double NudgeRampSeconds = 0.7;  // 由慢加速到快要多久
+    private const double NudgeSlowSpeed = 60;     // 起步速度（doc px/秒）
+    private const double NudgeFastSpeed = 520;    // 全速
+    private const double NudgeShiftFactor = 3;    // 按住 Shift 再快一些
+
+    /// <summary>方向鍵按下：第一次按記一格，之後的 OS 重複事件交給滑行處理。</summary>
+    private void BeginNudge(Key key, int dx, int dy, bool shift)
     {
-        if (_nudgeRemainX == 0 && _nudgeRemainY == 0) return;
+        _nudgeShift = shift;
+        if (!_nudgeKeys.Add(key)) return; // 按鍵重複：滑行已經在動了
+        _nudgeHeldSeconds = 0;
+        _nudgePendingX += dx;
+        _nudgePendingY += dy;
+    }
+
+    private void EndNudge(Key key)
+    {
+        if (!_nudgeKeys.Remove(key)) return;
+        if (_nudgeKeys.Count > 0) return;
+        _nudgeHeldSeconds = 0;
+        _nudgeGlideX = 0; // 沒送出的小數丟掉（放開就該停）
+        _nudgeGlideY = 0;
+    }
+
+    /// <summary>這一幀的微調：按住的滑行 ＋ 單次按鍵的補間，兩者合起來送一次。</summary>
+    private void StepNudgeAnimation(double dt)
+    {
         var session = _session;
         // 中途落地／取消（Enter、Esc、切工具）：剩下的位移就此作廢，不要事後補跳一段
         if (session == null || !Core.Tools.MoveTool.CanNudgeSmoothly(session))
         {
-            _nudgeRemainX = 0;
-            _nudgeRemainY = 0;
+            if (_nudgeKeys.Count > 0) _nudgeKeys.Clear();
+            _nudgePendingX = _nudgePendingY = 0;
+            _nudgeGlideX = _nudgeGlideY = 0;
+            _nudgeHeldSeconds = 0;
             return;
         }
 
-        var dx = NudgeStep(ref _nudgeRemainX);
-        var dy = NudgeStep(ref _nudgeRemainY);
+        if (_nudgeKeys.Count > 0)
+        {
+            _nudgeHeldSeconds += dt;
+            var gliding = _nudgeHeldSeconds - NudgeHoldDelay;
+            if (gliding > 0)
+            {
+                var t = Math.Clamp(gliding / NudgeRampSeconds, 0, 1);
+                var speed = (NudgeSlowSpeed + (NudgeFastSpeed - NudgeSlowSpeed) * t * t)
+                            * (_nudgeShift ? NudgeShiftFactor : 1);
+                var dirX = (_nudgeKeys.Contains(Key.Right) ? 1 : 0) - (_nudgeKeys.Contains(Key.Left) ? 1 : 0);
+                var dirY = (_nudgeKeys.Contains(Key.Down) ? 1 : 0) - (_nudgeKeys.Contains(Key.Up) ? 1 : 0);
+                _nudgeGlideX += dirX * speed * dt;
+                _nudgeGlideY += dirY * speed * dt;
+            }
+        }
+
+        var dx = NudgeStep(ref _nudgePendingX) + TakeWholePixels(ref _nudgeGlideX);
+        var dy = NudgeStep(ref _nudgePendingY) + TakeWholePixels(ref _nudgeGlideY);
         if (dx == 0 && dy == 0) return;
         if (Core.Tools.MoveTool.Nudge(session, dx, dy)) StateChanged?.Invoke();
     }
 
-    /// <summary>取這一幀要走的整數像素（至少 1px，否則永遠到不了）。</summary>
+    /// <summary>單次按鍵的補間：每幀走剩餘的一部分（至少 1px，否則永遠到不了）。</summary>
     private static int NudgeStep(ref double remain)
     {
-        if (remain == 0) return 0;
+        if (Math.Abs(remain) < 1) return 0; // 不足一格：攢著（像素內容只能整數位移）
         var step = remain * NudgeCatchUp;
         var pixels = Math.Abs(step) < 1 ? Math.Sign(remain) : (int)Math.Round(step);
         if (Math.Abs(pixels) > Math.Abs(remain)) pixels = (int)remain;
         remain -= pixels;
-        if (Math.Abs(remain) < 1e-6) remain = 0;
         return pixels;
     }
+
+    /// <summary>滑行累積：整數部分送出去，小數留著給下一幀。</summary>
+    private static int TakeWholePixels(ref double accumulated)
+    {
+        var whole = (int)Math.Truncate(accumulated);
+        accumulated -= whole;
+        return whole;
+    }
+
+    private TimeSpan _lastFrameTime;
 
     private void StartAnimationLoop()
     {
         if (_animationRunning) return;
         _animationRunning = true;
 
-        void Frame(TimeSpan _)
+        void Frame(TimeSpan now)
         {
             if (!_animationRunning) return;
+            // 幀間隔（掉幀／切到背景時夾住上限，免得一幀滑過頭）
+            var dt = _lastFrameTime == TimeSpan.Zero
+                ? 1 / 60.0
+                : Math.Clamp((now - _lastFrameTime).TotalSeconds, 0, 0.1);
+            _lastFrameTime = now;
             _session?.CollectOverlayGhost(); // 落地後的殘影：合成器追上就收掉
             StepViewportAnimation();
-            StepNudgeAnimation();
+            StepNudgeAnimation(dt);
             UpdateBrushCursor();
             FrameTick?.Invoke();
             InvalidateVisual();
@@ -707,8 +774,7 @@ public sealed class CanvasView : Control
                 // 物件／圖層每一步都會壓一筆 undo，拆幀會灌爆歷史，維持即時。
                 if (Core.Tools.MoveTool.CanNudgeSmoothly(session))
                 {
-                    _nudgeRemainX += dx;
-                    _nudgeRemainY += dy;
+                    BeginNudge(e.Key, dx, dy, e.KeyModifiers.HasFlag(KeyModifiers.Shift));
                 }
                 else if (Core.Tools.MoveTool.Nudge(session, dx, dy))
                 {
@@ -737,5 +803,14 @@ public sealed class CanvasView : Control
             _spaceDown = false;
             e.Handled = true;
         }
+        if (e.Key is Key.Left or Key.Right or Key.Up or Key.Down) EndNudge(e.Key);
+    }
+
+    protected override void OnLostFocus(Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        base.OnLostFocus(e);
+        _nudgeKeys.Clear(); // 焦點跑掉就收不到 KeyUp，會一直滑下去
+        _nudgeGlideX = _nudgeGlideY = 0;
+        _nudgeHeldSeconds = 0;
     }
 }
