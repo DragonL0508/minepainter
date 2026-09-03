@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    檔案總管的 .mpp 縮圖處理常式（IThumbnailProvider）。檔案總管會把這個 DLL 載進
+    自己的 COM 代理程序（dllhost），所以它不能依賴 .NET 執行階段 —— 使用者的電腦
+    不見得裝了。用 NativeAOT 編成獨立的原生 DLL（NativeLib=Shared），成品再嵌進
+    MinePainter.exe，安裝時寫到安裝資料夾並註冊。
+  -->
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <AssemblyName>MinePainterThumbs</AssemblyName>
+    <PublishAot>true</PublishAot>
+    <NativeLib>Shared</NativeLib>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- 源產生的 COM 互通（AOT 相容），取代舊的 built-in COM interop -->
+    <EnableComHosting>false</EnableComHosting>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <UseSystemResourceKeys>true</UseSystemResourceKeys>
+    <StackTraceSupport>false</StackTraceSupport>
+    <IsPublishable>true</IsPublishable>
+  </PropertyGroup>
+
+</Project>

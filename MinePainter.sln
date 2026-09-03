@@ -15,6 +15,8 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{0AB3BF05
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MinePainter.App.Tests", "tests\MinePainter.App.Tests\MinePainter.App.Tests.csproj", "{9BB873A7-8773-4794-B46A-5C1EF5C65885}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MinePainter.Thumbnails", "src\MinePainter.Thumbnails\MinePainter.Thumbnails.csproj", "{6CD0B0EA-3D18-418F-AE10-57C5F25D205F}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -73,6 +75,18 @@ Global
 		{9BB873A7-8773-4794-B46A-5C1EF5C65885}.Release|x64.Build.0 = Release|Any CPU
 		{9BB873A7-8773-4794-B46A-5C1EF5C65885}.Release|x86.ActiveCfg = Release|Any CPU
 		{9BB873A7-8773-4794-B46A-5C1EF5C65885}.Release|x86.Build.0 = Release|Any CPU
+		{6CD0B0EA-3D18-418F-AE10-57C5F25D205F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6CD0B0EA-3D18-418F-AE10-57C5F25D205F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6CD0B0EA-3D18-418F-AE10-57C5F25D205F}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{6CD0B0EA-3D18-418F-AE10-57C5F25D205F}.Debug|x64.Build.0 = Debug|Any CPU
+		{6CD0B0EA-3D18-418F-AE10-57C5F25D205F}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{6CD0B0EA-3D18-418F-AE10-57C5F25D205F}.Debug|x86.Build.0 = Debug|Any CPU
+		{6CD0B0EA-3D18-418F-AE10-57C5F25D205F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6CD0B0EA-3D18-418F-AE10-57C5F25D205F}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6CD0B0EA-3D18-418F-AE10-57C5F25D205F}.Release|x64.ActiveCfg = Release|Any CPU
+		{6CD0B0EA-3D18-418F-AE10-57C5F25D205F}.Release|x64.Build.0 = Release|Any CPU
+		{6CD0B0EA-3D18-418F-AE10-57C5F25D205F}.Release|x86.ActiveCfg = Release|Any CPU
+		{6CD0B0EA-3D18-418F-AE10-57C5F25D205F}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -82,5 +96,6 @@ Global
 		{391386D8-D775-4801-8A7F-778338518EBD} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{118C5D61-6FB2-4D0D-AE8A-782BD3A23645} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{9BB873A7-8773-4794-B46A-5C1EF5C65885} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
+		{6CD0B0EA-3D18-418F-AE10-57C5F25D205F} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 	EndGlobalSection
 EndGlobal

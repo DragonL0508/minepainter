@@ -45,6 +45,31 @@ if exist "%DEST%" rmdir /s /q "%DEST%"
 if exist "%STAGE%" rmdir /s /q "%STAGE%"
 if exist "%ZIP%" del /q "%ZIP%"
 
+rem The .mpp thumbnail handler is a separate native DLL: Explorer loads it into its own
+rem COM surrogate, so it can't be our single-file exe and can't need the .NET runtime.
+rem NativeAOT builds it; the app embeds the result and drops it next to the installed exe.
+rem NativeAOT links with MSVC, which its targets locate through vswhere - make sure that's on PATH.
+set PATH=%PATH%;C:\Program Files (x86)\Microsoft Visual Studio\Installer
+set THUMBS=%~dp0src\MinePainter.Thumbnails
+set THUMBSOUT=%THUMBS%\bin\Release\net8.0-windows\win-x64\publish\MinePainterThumbs.dll
+set NATIVEDIR=%~dp0src\MinePainter.App\Assets\Native
+
+echo === Building .mpp thumbnail handler (NativeAOT) ===
+dotnet publish "%THUMBS%" -c Release -r win-x64 --nologo
+if errorlevel 1 (
+    echo.
+    echo Thumbnail handler build FAILED - fix that, or Explorer previews ship broken.
+    if not defined CI pause
+    exit /b 1
+)
+if not exist "%NATIVEDIR%" mkdir "%NATIVEDIR%"
+copy /y "%THUMBSOUT%" "%NATIVEDIR%\MinePainterThumbs.dll" >nul
+if errorlevel 1 (
+    echo Could not find the thumbnail DLL at %THUMBSOUT%
+    if not defined CI pause
+    exit /b 1
+)
+
 echo === Publishing MinePainter %APPVER% (%SUFFIX%) ===
 dotnet publish "%PROJ%" -c Release -r %RID% --self-contained %SELF% ^
     "-p:PublishDir=%STAGE%" ^

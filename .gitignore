@@ -15,3 +15,6 @@ TestResults/
 # OS
 Thumbs.db
 .DS_Store
+
+# 發佈時由 publish.bat 產生的縮圖處理常式（AOT 原生 DLL），不進版控
+src/MinePainter.App/Assets/Native/

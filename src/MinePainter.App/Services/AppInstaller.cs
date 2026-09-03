@@ -129,9 +129,18 @@ public static class AppInstaller
         return true;
     }
 
-    /// <summary>開始功能表捷徑、App Paths、控制台的移除項目。</summary>
+    /// <summary>開始功能表捷徑、App Paths、控制台的移除項目、.mpp 縮圖處理常式。</summary>
     private static void WriteShellEntries()
     {
+        try
+        {
+            ThumbnailHandler.Install(InstallDir);
+        }
+        catch
+        {
+            // 縮圖裝不起來不影響程式本身
+        }
+
         try
         {
             ShellLink.Create(ShortcutPath, InstalledExe, "MinePainter 影像編輯器", InstallDir);
@@ -186,6 +195,7 @@ public static class AppInstaller
         catch { /* 設定檔寫不了不影響清理 */ }
 
         try { FileAssociations.RemoveAll(); } catch { /* 繼續清剩下的 */ }
+        try { ThumbnailHandler.Uninstall(); } catch { /* 同上 */ }
         try { File.Delete(ShortcutPath); } catch { /* 捷徑可能已被刪 */ }
         Registry.CurrentUser.DeleteSubKeyTree(AppPathsKey, throwOnMissingSubKey: false);
         Registry.CurrentUser.DeleteSubKeyTree(UninstallKey, throwOnMissingSubKey: false);
