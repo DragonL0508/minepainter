@@ -14,6 +14,9 @@ internal static class Program
             return;
         }
 
+        // 已經有一個 MinePainter 在跑：把要開的檔交給它（開成新分頁），自己退場
+        if (Services.SingleInstance.TryPassToRunning(args)) return;
+
         // 還是從解壓的 zip 點進來的：交給已安裝的那份跑，自己退場（要在啟動畫面之前，
         // 不然使用者會看到兩次 splash）
         if (Services.AppInstaller.TryHandOff(args)) return;

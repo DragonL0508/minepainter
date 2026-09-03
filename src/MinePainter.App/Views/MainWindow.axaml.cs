@@ -149,6 +149,9 @@ public partial class MainWindow : Window
             Services.StartupSounds.MainWindowShown();
             _ = CheckUpdatesAsync(silent: true);
             EnsureInstalledAndAssociated();
+            // 之後在檔案總管點圖片，路徑會送到這裡開成新分頁，而不是再開一個程式
+            Services.SingleInstance.StartServer(files =>
+                Dispatcher.UIThread.Post(() => OpenFilesFromOtherInstance(files)));
             PrepareBeforeShow(); // 正常流程 App 已先呼叫過（啟動畫面期間）；這裡是保險
             ShowPanels();
             StartPerfLabelTimer();
@@ -2485,6 +2488,26 @@ public partial class MainWindow : Window
     {
         await new FileAssociationsWindow().ShowDialog(this);
         Services.AppSettings.Instance.Save();
+    }
+
+    /// <summary>
+    /// 另一個 MinePainter 程序把使用者點開的檔案轉過來（同 paint.net：不再開一個視窗）：
+    /// 開成新分頁並把視窗叫到前景。
+    /// </summary>
+    private void OpenFilesFromOtherInstance(string[] files)
+    {
+        if (WindowState == WindowState.Minimized)
+        {
+            WindowState = Services.AppSettings.Instance.WindowMaximized
+                ? WindowState.Maximized
+                : WindowState.Normal;
+        }
+
+        Activate();
+        foreach (var file in files)
+        {
+            if (File.Exists(file)) OpenFile(file);
+        }
     }
 
     /// <summary>
