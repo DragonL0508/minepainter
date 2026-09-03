@@ -1,4 +1,4 @@
-using Avalonia;
+﻿using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Platform;
 using Avalonia.Input;
@@ -9,12 +9,13 @@ namespace MinePainter.App.Controls;
 /// <summary>
 /// 主選單：子選單「必須點擊才展開」（使用者明示），不像 Avalonia 預設滑過就延遲彈出；
 /// 點開之後滑鼠移出去、或滑過兄弟項目都不會自動關（使用者明示），只有點別的項目、點別處或 Esc 才收。
-/// 頂層項目維持慣例：選單已打開時滑過即切換。
+/// **頂層項目（檔案／編輯／影像…）也一樣要點一下**（使用者 2026-09-04 明示）：
+/// 打開一個之後滑過旁邊的不會跟著自動展開，只會高亮。
 /// </summary>
 public sealed class ClickSubmenuMenu : Menu
 {
     public ClickSubmenuMenu()
-        : base(new ClickSubmenuInteractionHandler(isContextMenu: false, clickOnlyAtTopLevel: false))
+        : base(new ClickSubmenuInteractionHandler(isContextMenu: false, clickOnlyAtTopLevel: true))
     {
     }
 
@@ -49,7 +50,8 @@ public sealed class ClickSubmenuMenuFlyout : MenuFlyout
 
 /// <summary>
 /// 「點擊才展開子選單、移出不自動關」的互動處理器。
-/// clickOnlyAtTopLevel：頂層項目也套用（flyout 用）；否則頂層維持 Avalonia 慣例。
+/// clickOnlyAtTopLevel：頂層項目也套用（主選單與 flyout 都是 true；false 則頂層維持
+/// Avalonia 慣例＝選單開著時滑過即切換）。
 /// </summary>
 internal sealed class ClickSubmenuInteractionHandler(bool isContextMenu, bool clickOnlyAtTopLevel)
     : DefaultMenuInteractionHandler(isContextMenu)

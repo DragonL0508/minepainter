@@ -1,4 +1,4 @@
-using MinePainter.Core.Adjustments;
+﻿using MinePainter.Core.Adjustments;
 using MinePainter.Core.Compositing;
 using MinePainter.Core.Documents;
 using MinePainter.Core.IO;
@@ -204,12 +204,18 @@ public class LayerThumbnailTests
 
         RenderThumb(doc, layer).Dispose(); // 暖機
 
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-        const int iterations = 50;
-        for (var i = 0; i < iterations; i++) RenderThumb(doc, layer).Dispose();
-        sw.Stop();
-
-        var perRender = sw.Elapsed.TotalMilliseconds / iterations;
-        Assert.True(perRender < 5, $"單張縮圖 {perRender:0.##} ms，太慢（1600×1200 全滿圖層）");
+        // 取中位數而不是平均：這台機器同時在跑別的測試／建置時，偶爾一次被排程搶走
+        // 就會把平均拉高，害這條穩定的效能護欄變成隨機失敗。
+        const int iterations = 51;
+        var samples = new double[iterations];
+        for (var i = 0; i < iterations; i++)
+        {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            RenderThumb(doc, layer).Dispose();
+            samples[i] = sw.Elapsed.TotalMilliseconds;
+        }
+        Array.Sort(samples);
+        var perRender = samples[iterations / 2];
+        Assert.True(perRender < 5, $"單張縮圖中位數 {perRender:0.##} ms，太慢（1600×1200 全滿圖層）");
     }
 }

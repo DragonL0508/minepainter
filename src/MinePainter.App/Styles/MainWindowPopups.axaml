@@ -1,0 +1,23 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <!--
+    主視窗裡的彈出層（下拉、按鈕 flyout、工具提示）畫在主視窗自己的 overlay 層，不另開 OS 視窗。
+    原生 popup 每開一次都要建 HWND＋GPU surface（第一次 100ms+、之後每次約 17ms，而且會卡住
+    共用的渲染執行緒）。主視窗夠大，彈出層被限制在視窗內不成問題；其他視窗（浮動面板、對話框）
+    維持原生 popup。
+  -->
+  <Style Selector="Popup">
+    <Setter Property="ShouldUseOverlayLayer" Value="True" />
+  </Style>
+
+  <!--
+    主選單例外，改回原生 popup：overlay 層是畫在主視窗「裡面」的，而浮動面板是獨立的 OS 視窗、
+    永遠在主視窗之上 —— 畫在裡面就一定被面板蓋住，置頂也救不了
+    （使用者 2026-09-04 回報「檔案／編輯…的下拉被工具、調色盤浮窗擋住」）。
+    原生 popup 的建立成本原本是為了「滑過就展開」才要命；現在頂層與子選單都要點一下才展開，
+    一次點擊付一次成本，感覺不出來。置頂由 Styles/Popups.axaml 那條負責。
+  -->
+  <Style Selector="MenuItem /template/ Popup">
+    <Setter Property="ShouldUseOverlayLayer" Value="False" />
+  </Style>
+</Styles>
