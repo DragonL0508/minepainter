@@ -45,8 +45,6 @@ public sealed class PresetsPanelContent : UserControl
     private readonly ListBox _folderList;
     private readonly WrapPanel _grid;
     private readonly TextBox _search;
-    private readonly TextBlock _empty;
-    private readonly TextBlock _status;
 
     private List<EffectPreset> _presets = new();
     private List<string> _folders = new();
@@ -117,15 +115,6 @@ public sealed class PresetsPanelContent : UserControl
 
         // ---- 右：預覽格 ----
         _grid = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(4) };
-        _empty = new TextBlock
-        {
-            Text = "這個資料夾還沒有預設集。\n在圖層屬性的「預設集」或上面的儲存鈕把堆疊存進來。",
-            FontSize = 11,
-            Foreground = AppTheme.TextMutedBrush,
-            TextWrapping = TextWrapping.Wrap,
-            Margin = new Thickness(10),
-            IsVisible = false,
-        };
         var right = new Border
         {
             Background = AppTheme.InnerBrush,
@@ -134,7 +123,7 @@ public sealed class PresetsPanelContent : UserControl
             Child = new ScrollViewer
             {
                 HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-                Content = new StackPanel { Children = { _grid, _empty } },
+                Content = _grid,
             },
         };
         // 拖到右邊空白處 = 搬進目前資料夾
@@ -159,19 +148,9 @@ public sealed class PresetsPanelContent : UserControl
         body.Children.Add(_folderList);
         body.Children.Add(right);
 
-        _status = new TextBlock
-        {
-            FontSize = 10,
-            Foreground = AppTheme.TextMutedBrush,
-            Margin = new Thickness(2, 4, 0, 0),
-            Text = "拖到畫布套用到那一層；雙擊套到目前圖層；右鍵編輯／更多",
-        };
-
         var root = new DockPanel();
         DockPanel.SetDock(top, Dock.Top);
-        DockPanel.SetDock(_status, Dock.Bottom);
         root.Children.Add(top);
-        root.Children.Add(_status);
         root.Children.Add(body);
         Content = root;
 
@@ -292,16 +271,10 @@ public sealed class PresetsPanelContent : UserControl
             ? _presets.Where(p => p.Name.Contains(query, StringComparison.CurrentCultureIgnoreCase) ||
                                   p.Folder.Contains(query, StringComparison.CurrentCultureIgnoreCase))
             : _presets.Where(p => p.Folder == _currentFolder);
-        var any = false;
         foreach (var preset in shown)
         {
             _grid.Children.Add(Tile(preset, showFolder: searching));
-            any = true;
         }
-        _empty.IsVisible = !any;
-        _empty.Text = searching
-            ? "沒有符合的預設集。"
-            : "這個資料夾還沒有預設集。\n在圖層屬性的「預設集」或上面的儲存鈕把堆疊存進來，\n或從別的資料夾把預設集拖過來。";
     }
 
     // ---- 預設集格子 ----
@@ -360,7 +333,7 @@ public sealed class PresetsPanelContent : UserControl
         var effects = preset.Effects.Count == 0
             ? "（空堆疊）"
             : string.Join("、", preset.Effects.Select(e => e.Enabled ? e.Effect.Name : e.Effect.Name + "（關）"));
-        ToolTip.SetTip(tile, $"{preset.DisplayPath}\n{effects}\n\n拖到畫布：套用到落點那一層\n雙擊：套用到目前圖層（已有堆疊會問覆蓋或疊加）\n右鍵：編輯、改名、搬移…");
+        ToolTip.SetTip(tile, $"{preset.DisplayPath}\n{effects}");
 
         tile.PointerEntered += (_, _) => tile.Background = AppTheme.HeaderBrush;
         tile.PointerExited += (_, _) => tile.Background = Brushes.Transparent;

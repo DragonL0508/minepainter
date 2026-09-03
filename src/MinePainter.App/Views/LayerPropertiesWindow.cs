@@ -427,12 +427,6 @@ public sealed class LayerPropertiesWindow : Window
                 FontSize = 12, FontWeight = FontWeight.Bold,
                 HorizontalAlignment = HorizontalAlignment.Center,
             });
-            empty.Children.Add(new TextBlock
-            {
-                Text = "從「調整」「效果」選單套用的會記錄在這裡，之後隨時可以回頭改參數、調順序或暫時關掉，像素不會被動到。",
-                FontSize = 11, Foreground = AppTheme.TextMutedBrush,
-                TextWrapping = TextWrapping.Wrap, TextAlignment = TextAlignment.Center,
-            });
             empty.Children.Add(emptyAdd);
             _effectsPanel.Children.Add(new Border
             {

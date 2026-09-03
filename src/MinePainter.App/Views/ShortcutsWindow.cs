@@ -21,7 +21,7 @@ public sealed class ShortcutsWindow : ModalDialog
         FontSize = 11,
         Foreground = AppTheme.TextMutedBrush,
         TextWrapping = TextWrapping.Wrap,
-        Text = "點一下按鍵欄位，然後按下新的組合鍵（Esc 取消、Backspace 清除綁定）。",
+        Text = "",
     };
 
     public ShortcutsWindow() : base("快捷鍵", 440)

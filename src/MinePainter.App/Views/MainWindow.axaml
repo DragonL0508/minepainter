@@ -290,8 +290,6 @@
               <mi:MaterialIcon Kind="VectorCurve" Width="16" Height="16" />
             </ToggleButton>
           </StackPanel>
-          <TextBlock Text="Enter 套用、Esc 還原" FontSize="11" VerticalAlignment="Center"
-                     Foreground="{x:Static app:AppTheme.TextMutedBrush}" />
         </StackPanel>
 
         <!-- 鋼筆工具：路徑的落地動作 -->
@@ -304,8 +302,6 @@
                   ToolTip.Tip="以前景色填滿路徑到作用中圖層" />
           <Button x:Name="PenClearButton" Content="清除路徑" FontSize="12" Padding="8,2" Height="24"
                   ToolTip.Tip="丟棄工作路徑（Esc）；Backspace 只退最後一個錨點" />
-          <TextBlock Text="點＝角點、拖＝曲線、點回起點＝封閉" FontSize="11" VerticalAlignment="Center"
-                     Foreground="{x:Static app:AppTheme.TextMutedBrush}" />
         </StackPanel>
 
         <Separator Width="1" Height="24" Background="{x:Static app:AppTheme.SeparatorBrush}" />

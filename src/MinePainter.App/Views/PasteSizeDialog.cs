@@ -49,13 +49,6 @@ public sealed class PasteSizeDialog : ModalDialog
                     FontSize = 12,
                     TextWrapping = TextWrapping.Wrap,
                 },
-                new TextBlock
-                {
-                    Text = "延展畫布會把畫布放大到能容納整張影像；維持畫布大小則照常貼上，超出的部分先被畫布邊界蓋住，之後仍可移動。",
-                    FontSize = 11,
-                    Foreground = AppTheme.TextMutedBrush,
-                    TextWrapping = TextWrapping.Wrap,
-                },
             },
         };
 

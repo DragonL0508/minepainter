@@ -349,13 +349,6 @@ public sealed class ParamEditor : StackPanel
         SyncSelected();
 
         var label = new TextBlock { Text = gr.Label, FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
-        var hint = new TextBlock
-        {
-            Text = "點漸層條新增節點；拖標記移動、右鍵或往下拖出刪除；雙擊標記選色",
-            FontSize = 10,
-            Foreground = AppTheme.TextMutedBrush,
-            TextWrapping = Avalonia.Media.TextWrapping.Wrap,
-        };
         var row = new DockPanel { Margin = new Thickness(0, 2, 0, 0) };
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, Margin = new Thickness(6, 0, 0, 0) };
         buttons.Children.Add(remove);
@@ -368,7 +361,7 @@ public sealed class ParamEditor : StackPanel
         row.Children.Add(buttons);
         row.Children.Add(position);
 
-        return new StackPanel { Spacing = 3, Children = { label, editor, row, hint } };
+        return new StackPanel { Spacing = 3, Children = { label, editor, row } };
     }
 
     private static Avalonia.Media.IBrush ToBrush(SkiaSharp.SKColor c) =>

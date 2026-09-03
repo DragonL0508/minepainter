@@ -64,13 +64,6 @@ public sealed class ThemeWindow : ModalDialog
                 grid,
                 new Separator { Margin = new Thickness(0, 4) },
                 new TextBlock { Text = "畫布背景圖", FontSize = 12, FontWeight = FontWeight.Bold },
-                new TextBlock
-                {
-                    Text = "畫布外圍的純色區塊會鋪上這張圖（低不透明度，當作工作區的裝飾底圖）。",
-                    FontSize = 11,
-                    Foreground = AppTheme.TextMutedBrush,
-                    TextWrapping = TextWrapping.Wrap,
-                },
                 new StackPanel
                 {
                     Orientation = Orientation.Horizontal,
