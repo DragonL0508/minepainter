@@ -22,6 +22,7 @@ public sealed class BackgroundRemovalWindow : ModalDialog
     private static bool _lastSolid = true;
     private static int _lastContrast;
     private static int _lastShift;
+    private static bool _lastSelectionOnly = true;
 
     private readonly EditorSession _session;
     private readonly RasterLayer _layer;
@@ -30,6 +31,7 @@ public sealed class BackgroundRemovalWindow : ModalDialog
     private readonly ComboBox _modelCombo = new() { FontSize = 12, HorizontalAlignment = HorizontalAlignment.Stretch };
     private readonly CheckBox _gpuCheck = new() { Content = "使用 GPU（DirectML；不支援時自動改用 CPU）", FontSize = 12 };
     private readonly CheckBox _solidCheck = new() { Content = "內部填實（只在邊緣保留半透明）", FontSize = 12 };
+    private readonly CheckBox _selectionCheck = new() { Content = "只處理選取範圍（範圍外一併清除）", FontSize = 12 };
     private readonly BarSlider _contrastBar = new() { Minimum = 0, Maximum = 100, Width = 160, Suffix = "%" };
     private readonly BarSlider _shiftBar = new() { Minimum = -20, Maximum = 20, Width = 160, Suffix = "px" };
     private readonly TextBlock _status = new() { FontSize = 11, Foreground = AppTheme.TextMutedBrush };
@@ -61,6 +63,10 @@ public sealed class BackgroundRemovalWindow : ModalDialog
         _solidCheck.IsChecked = _lastSolid;
         _contrastBar.Value = _lastContrast;
         _shiftBar.Value = _lastShift;
+        // 有選取範圍才給這個選項：圈出要去背的東西，模型的解析度全用在它身上（更準），範圍外直接清掉
+        _selectionCheck.IsVisible = session.Selection is { IsEmpty: false };
+        _selectionCheck.IsChecked = _lastSelectionOnly;
+        ToolTip.SetTip(_selectionCheck, "只把選取範圍內的像素送進模型（範圍外對模型是黑），解析度全用在圈出來的物件上；選取範圍外的像素一律清成透明，選取的羽化邊也會保留");
         ToolTip.SetTip(_solidCheck, "模型的機率圖在物件內部常只有六、七成，會讓內部變半透明；勾選後離邊界夠遠的內部一律不透明，半透明只留在邊緣（髮絲、毛邊）");
         ToolTip.SetTip(_contrastBar, "遮罩對比：拉高可去掉半透明的殘影，但也會失去柔邊");
         ToolTip.SetTip(_shiftBar, "邊緣收縮（負）／擴張（正）：收縮可吃掉殘留的背景色邊");
@@ -88,6 +94,7 @@ public sealed class BackgroundRemovalWindow : ModalDialog
                 LabeledRow("模型", _modelCombo),
                 _gpuCheck,
                 _solidCheck,
+                _selectionCheck,
                 LabeledRow("遮罩對比", _contrastBar),
                 LabeledRow("邊緣收縮", _shiftBar),
                 new Separator { Margin = new Thickness(0, 3) },
@@ -130,7 +137,9 @@ public sealed class BackgroundRemovalWindow : ModalDialog
             SolidCore = _solidCheck.IsChecked == true,
             Contrast = (int)_contrastBar.Value,
             Shift = (int)_shiftBar.Value,
+            Selection = _selectionCheck.IsVisible && _selectionCheck.IsChecked == true ? _session.Selection : null,
         };
+        _lastSelectionOnly = _selectionCheck.IsChecked == true;
         _lastModel = model.Name;
         _lastGpu = options.UseGpu;
         _lastSolid = options.SolidCore;
@@ -138,7 +147,7 @@ public sealed class BackgroundRemovalWindow : ModalDialog
         _lastShift = options.Shift;
 
         _okButton.IsEnabled = false;
-        _modelCombo.IsEnabled = _gpuCheck.IsEnabled = _solidCheck.IsEnabled = false;
+        _modelCombo.IsEnabled = _gpuCheck.IsEnabled = _solidCheck.IsEnabled = _selectionCheck.IsEnabled = false;
         _contrastBar.IsEnabled = _shiftBar.IsEnabled = false;
         _status.Text = "處理中…（第一次載入模型會多花幾秒）";
 
@@ -161,7 +170,7 @@ public sealed class BackgroundRemovalWindow : ModalDialog
                     else
                     {
                         Applied = t.Result;
-                        if (!Applied) Error = "圖層沒有內容";
+                        if (!Applied) Error = options.Selection != null ? "選取範圍內沒有內容" : "圖層沒有內容";
                         else Note = BackgroundRemover.LastPlanNote;
                     }
                     _running = false;

@@ -29,6 +29,11 @@ public sealed class CanvasView : Control
     private EditorSession? _session;
 
     private bool _viewportInitialized;
+    // 最近一次「自動 fit」的結果與當時的控制項大小：視口仍停在這個 fit 上而控制項大小又變了
+    // （典型：啟動時先以預設視窗大小算一次 fit、下一瞬間視窗才最大化），就重新 fit 一次置中。
+    // 使用者一旦縮放／平移過（視口 != fit）就不再干預。
+    private ViewportTransform? _autoFit;
+    private Size _autoFitSize;
     private bool _spaceDown;
     private bool _panning;
 
@@ -102,6 +107,8 @@ public sealed class CanvasView : Control
         var doc = _session?.Document;
         if (doc == null || Bounds.Width <= 0) return;
         _targetViewport = ViewportTransform.Fit(doc.Width, doc.Height, Bounds.Width, Bounds.Height);
+        _autoFit = _targetViewport;
+        _autoFitSize = Bounds.Size;
     }
 
     /// <summary>以畫面中心為錨點縮放（選單的放大/縮小用）。</summary>
@@ -133,6 +140,7 @@ public sealed class CanvasView : Control
             _viewport = vp;
             _targetViewport = vp;
             _viewportInitialized = true;
+            _autoFit = null; // 分頁還原的視口是使用者的，不再自動置中
             ViewportChanged?.Invoke();
         }
         else
@@ -150,6 +158,7 @@ public sealed class CanvasView : Control
     {
         _session = null;
         _viewportInitialized = false;
+        _autoFit = null;
         InvalidateVisual();
         StateChanged?.Invoke();
     }
@@ -205,6 +214,19 @@ public sealed class CanvasView : Control
             _viewport = fit;
             _targetViewport = fit;
             _viewportInitialized = true;
+            _autoFit = fit;
+            _autoFitSize = Bounds.Size;
+            Avalonia.Threading.Dispatcher.UIThread.Post(() => ViewportChanged?.Invoke());
+        }
+        else if (_autoFit is { } autoFit && _viewport == autoFit && _targetViewport == autoFit &&
+                 Bounds.Size != _autoFitSize && Bounds.Width > 0 && Bounds.Height > 0)
+        {
+            // 控制項大小變了（視窗最大化／拉大），視口還停在舊的 fit 上：重新置中，不走動畫
+            var fit = ViewportTransform.Fit(doc.Width, doc.Height, Bounds.Width, Bounds.Height);
+            _viewport = fit;
+            _targetViewport = fit;
+            _autoFit = fit;
+            _autoFitSize = Bounds.Size;
             Avalonia.Threading.Dispatcher.UIThread.Post(() => ViewportChanged?.Invoke());
         }
 

@@ -22,6 +22,12 @@ public sealed record BackgroundRemovalOptions
     public int Contrast { get; init; }
     /// <summary>邊緣收縮（負）／擴張（正）px。</summary>
     public int Shift { get; init; }
+    /// <summary>
+    /// 只處理選取範圍（doc 座標；null = 整個圖層）。
+    /// 有給時只把選取範圍內的像素送進模型（範圍外對模型是黑），模型的解析度全用在使用者圈出的物件上；
+    /// 選取範圍外的像素一律清成透明，選取的軟邊（羽化／抗鋸齒）也乘進遮罩。
+    /// </summary>
+    public Selections.SelectionMask? Selection { get; init; }
 }
 
 /// <summary>
@@ -85,15 +91,32 @@ public static class BackgroundRemovalCommand
             // ---- 2. 讀內容外接框的像素（鎖內，很快）----
             SKRectI crop;
             uint[] pixels;
+            byte[]? coverage = null; // 選取覆蓋度（crop 內、圖層座標）
+            var selection = options.Selection is { IsEmpty: false } s ? s : null;
             lock (doc.SyncRoot)
             {
                 crop = layer.Surface.ExactContentBounds();
-                if (crop.IsEmpty)
+                if (selection != null)
+                {
+                    // 選取是 doc 座標、圖層像素是圖層座標：把選取外接框搬到圖層座標再交集
+                    var sb = selection.Bounds;
+                    var selInLayer = new SKRectI(sb.Left - layer.Offset.X, sb.Top - layer.Offset.Y,
+                        sb.Right - layer.Offset.X, sb.Bottom - layer.Offset.Y);
+                    crop = SKRectI.Intersect(crop, selInLayer);
+                }
+                if (crop.Width <= 0 || crop.Height <= 0)
                 {
                     Rollback();
                     return false;
                 }
                 pixels = ReadRegion(layer.Surface, crop);
+                if (selection != null)
+                {
+                    coverage = ReadCoverage(selection, crop, layer.Offset);
+                    // 範圍外的像素不給模型看（透明 = 黑），讓它只專心在圈出來的東西上
+                    for (var i = 0; i < pixels.Length; i++)
+                        if (coverage[i] != 255) pixels[i] = Scale(pixels[i], coverage[i]);
+                }
             }
 
             // ---- 3. 推論 + 後處理（鎖外）----
@@ -107,6 +130,9 @@ public static class BackgroundRemovalCommand
                 mask = BackgroundRemover.SolidifyCore(mask, model, crop.Width, crop.Height, radius);
             BackgroundRemover.ApplyContrast(mask, options.Contrast);
             mask = BackgroundRemover.Shift(mask, crop.Width, crop.Height, options.Shift);
+            if (coverage != null)
+                for (var i = 0; i < mask.Length; i++)
+                    if (coverage[i] != 255) mask[i] = (byte)(mask[i] * coverage[i] / 255);
             ct.ThrowIfCancellationRequested();
 
             // ---- 4. 套 alpha（鎖內）----
@@ -115,6 +141,13 @@ public static class BackgroundRemovalCommand
                 if (layer.Document != doc) { Rollback(); return false; }
                 ApplyMask(layer.Surface, crop, mask);
                 affected = Union(affected, crop);
+                if (selection != null)
+                {
+                    // 選取範圍外（crop 之外的所有內容）一律清掉
+                    var content = layer.Surface.ContentBounds;
+                    ClearOutside(layer.Surface, crop);
+                    affected = Union(affected, content);
+                }
 
                 var pixelEntry = TileDeltaEntry.Capture("AI 去背", layer, before, affected);
                 var stateEntry = new ActionHistoryEntry("AI 去背", doc.Bounds,
@@ -191,6 +224,65 @@ public static class BackgroundRemovalCommand
         return pixels;
     }
 
+    /// <summary>讀選取在 rect（圖層座標）內的覆蓋度；選取本身是 doc 座標，差一個圖層位移。</summary>
+    private static byte[] ReadCoverage(Selections.SelectionMask selection, SKRectI rect, SKPointI layerOffset)
+    {
+        var cov = new byte[rect.Width * rect.Height];
+        for (var y = 0; y < rect.Height; y++)
+        {
+            var docY = rect.Top + y + layerOffset.Y;
+            for (var x = 0; x < rect.Width; x++)
+                cov[y * rect.Width + x] = selection.CoverageAt(rect.Left + x + layerOffset.X, docY);
+        }
+        return cov;
+    }
+
+    /// <summary>把 keep（圖層座標）以外的所有像素清成透明；整個 tile 都在外面就直接移除。</summary>
+    private static unsafe void ClearOutside(TileSurface surface, SKRectI keep)
+    {
+        foreach (var idx in TileIndex.CoveringRect(surface.ContentBounds))
+        {
+            if (surface.GetTileForRead(idx) == null) continue;
+            var tileRect = idx.ToPixelRect();
+            var inter = SKRectI.Intersect(tileRect, keep);
+            if (inter.Width <= 0 || inter.Height <= 0)
+            {
+                surface.RemoveTile(idx);
+                continue;
+            }
+            if (inter == tileRect) continue; // 整塊都在保留範圍內
+            var tile = surface.GetTileForWrite(idx);
+            var px = (uint*)tile.Pixels;
+            for (var y = tileRect.Top; y < tileRect.Bottom; y++)
+            {
+                var row = px + (y - tileRect.Top) * Tile.Size;
+                if (y < inter.Top || y >= inter.Bottom)
+                {
+                    new Span<uint>(row, Tile.Size).Clear();
+                    continue;
+                }
+                if (inter.Left > tileRect.Left)
+                    new Span<uint>(row, inter.Left - tileRect.Left).Clear();
+                if (inter.Right < tileRect.Right)
+                    new Span<uint>(row + (inter.Right - tileRect.Left), tileRect.Right - inter.Right).Clear();
+            }
+            if (tile.IsBlank()) surface.RemoveTile(idx);
+        }
+    }
+
+    /// <summary>premul 像素四通道乘上 m/255。</summary>
+    private static uint Scale(uint p, byte m)
+    {
+        if (m == 255) return p;
+        if (m == 0) return 0;
+        var mul = m + (m >> 7); // 0..256
+        var b = (int)(p & 0xFF) * mul >> 8;
+        var g = (int)((p >> 8) & 0xFF) * mul >> 8;
+        var r = (int)((p >> 16) & 0xFF) * mul >> 8;
+        var a = (int)(p >> 24) * mul >> 8;
+        return (uint)b | ((uint)g << 8) | ((uint)r << 16) | ((uint)a << 24);
+    }
+
     /// <summary>premul 像素四通道乘上 mask/255（rect 為圖層座標）。</summary>
     private static unsafe void ApplyMask(TileSurface surface, SKRectI rect, byte[] mask)
     {
@@ -211,13 +303,7 @@ public static class BackgroundRemovalCommand
                     var m = mask[mrow + (x - rect.Left)];
                     if (m == 255) continue;
                     ref var p = ref row[x - tileRect.Left];
-                    if (m == 0) { p = 0; continue; }
-                    var mul = m + (m >> 7); // 0..256
-                    var b = (int)(p & 0xFF) * mul >> 8;
-                    var g = (int)((p >> 8) & 0xFF) * mul >> 8;
-                    var r = (int)((p >> 16) & 0xFF) * mul >> 8;
-                    var a = (int)(p >> 24) * mul >> 8;
-                    p = (uint)b | ((uint)g << 8) | ((uint)r << 16) | ((uint)a << 24);
+                    p = Scale(p, m);
                 }
             }
             if (tile.IsBlank()) surface.RemoveTile(idx);
