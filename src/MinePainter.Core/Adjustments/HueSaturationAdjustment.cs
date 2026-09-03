@@ -68,8 +68,10 @@ public sealed record HueSaturationAdjustment(float Hue = 0f, float Saturation = 
     private static float[] LightnessMatrix(float l)
     {
         // 正值往白、負值往黑（scale + offset）
+        // SKColorFilter.CreateColorMatrix 的第五欄位移是 0..1（不是 0..255），
+        // 用 255 倍會讓明度一超過 0 就整張全白。
         var scale = l < 0 ? 1 + l : 1 - l;
-        var offset = l > 0 ? l * 255f : 0f;
+        var offset = l > 0 ? l : 0f;
         return
         [
             scale, 0, 0, 0, offset,

@@ -60,6 +60,32 @@ public class AdjustmentTests
     }
 
     [Fact]
+    public void LightnessHalf_LightensTowardWhiteNotFullWhite()
+    {
+        using var doc = ImageCodec.CreateBlankDocument(256, 256, new SKColor(100, 100, 100));
+        var adj = new AdjustmentLayer(new HueSaturationAdjustment(Lightness: 0.5f));
+        lock (doc.SyncRoot) doc.Root.Add(adj);
+
+        using var compositor = new Compositor(doc);
+        // 100 * 0.5 + 255 * 0.5 ≈ 178；以前位移多乘了 255 會直接爆成 255
+        var px = WaitPixel(compositor, 128, 128, c => c.Red is > 170 and < 186);
+        Assert.InRange(px.Red, 171, 185);
+        Assert.Equal(px.Red, px.Green);
+    }
+
+    [Fact]
+    public void LightnessMinusHalf_DarkensTowardBlack()
+    {
+        using var doc = ImageCodec.CreateBlankDocument(256, 256, new SKColor(200, 200, 200));
+        var adj = new AdjustmentLayer(new HueSaturationAdjustment(Lightness: -0.5f));
+        lock (doc.SyncRoot) doc.Root.Add(adj);
+
+        using var compositor = new Compositor(doc);
+        var px = WaitPixel(compositor, 128, 128, c => c.Red is > 95 and < 105);
+        Assert.InRange(px.Red, 96, 104); // 200 * 0.5 = 100
+    }
+
+    [Fact]
     public void AdjustmentInsideGroup_OnlyAffectsGroupContent()
     {
         // 群組外(下方)白色；群組內灰色方塊 + 亮度調整。
