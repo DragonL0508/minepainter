@@ -1,4 +1,4 @@
-using MinePainter.Core.Tiles;
+﻿using MinePainter.Core.Tiles;
 using SkiaSharp;
 
 namespace MinePainter.Core.Compositing;
@@ -47,6 +47,17 @@ public sealed class GroupCache : IDisposable
         {
             _clean.Add(idx);
         }
+    }
+
+    /// <summary>
+    /// 丟掉快取的像素（整批標髒 + 歸還 tile）。分頁切到背景時呼叫 ——
+    /// 群組快取是純粹的加速結構，重算便宜，但一格 256 KB 放著很貴。
+    /// 呼叫端須持有 Document.SyncRoot。
+    /// </summary>
+    public void Release()
+    {
+        MarkAllDirty();
+        foreach (var idx in Surface.Tiles.Keys.ToList()) Surface.RemoveTile(idx);
     }
 
     public void Dispose() => Surface.Dispose();

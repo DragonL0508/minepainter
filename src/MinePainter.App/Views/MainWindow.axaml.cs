@@ -1104,8 +1104,10 @@ public partial class MainWindow : Window
             RefreshTabThumbnail(_activeTab);
         }
 
+        var previous = _activeTab;
         _activeTab = tab;
         var session = tab.Session;
+        session.Compositor.Resume(); // 切回前景：重新排隊合成（切走時丟掉了）
         Canvas.SetSession(session, tab.Viewport);
         _layersContent.SetSession(session);
         _historyContent.SetSession(session);
@@ -1122,6 +1124,15 @@ public partial class MainWindow : Window
         UpdateTabVisuals();
         RefreshTabThumbnail(tab);
         Canvas.Focus();
+
+        // 畫布已經切走，舊分頁的合成快取（整份文件，一格 256 KB）就是純浪費 —— 丟掉。
+        // 要在 SetSession 之後才做，退役的影像也走全域佇列延後釋放，
+        // 不然這一幀還在畫它的 render thread 會撞上。
+        if (previous != null && !ReferenceEquals(previous, tab))
+        {
+            previous.Session.Compositor.Suspend();
+            TilePool.Shared.Trim(64); // 剛還回來一大批，留一點週轉就好
+        }
     }
 
     // ---- 分頁切換動畫（快速 fade out → 換內容 → fade in） ----
@@ -1209,6 +1220,7 @@ public partial class MainWindow : Window
         }
 
         tab.Session.Dispose(); // 畫布已切走，這裡才是唯一的釋放點
+        TilePool.Shared.Trim(64); // 整份文件的 tile 剛還回池子，別讓它留著
         return true;
     }
 

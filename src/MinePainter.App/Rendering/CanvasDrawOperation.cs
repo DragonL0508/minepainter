@@ -1,4 +1,4 @@
-using Avalonia;
+﻿using Avalonia;
 using Avalonia.Media;
 using Avalonia.Platform;
 using Avalonia.Rendering.SceneGraph;
@@ -93,6 +93,7 @@ public sealed class CanvasDrawOperation : ICustomDrawOperation
         var canvas = lease.SkCanvas;
 
         _compositor.CollectRetired();
+        Compositor.CollectGlobalRetired(); // 背景分頁交出來的影像（它們自己沒有幀可以收）
         _stats.OnFrame();
         if (TextBench.Enabled) TextBench.Run(canvas);
 

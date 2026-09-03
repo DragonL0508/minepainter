@@ -1,4 +1,4 @@
-using MinePainter.Core.Documents;
+﻿using MinePainter.Core.Documents;
 
 namespace MinePainter.Core.History;
 
@@ -6,6 +6,10 @@ namespace MinePainter.Core.History;
 /// undo/redo 雙堆疊。Push/Undo/Redo 都在 UI thread 呼叫；
 /// 內部進入 Document.SyncRoot 執行 entry。
 /// 記憶體總量超過上限時從最舊淘汰。
+///
+/// 上限是「所有開啟中的文件共用」（<see cref="GlobalMemoryLimit"/>）而不是每份文件各自一份 ——
+/// 每份各 1 GB 的話，開五個分頁的 undo 就能吃掉 5 GB。每份文件分到 1/N，
+/// 但不低於 <see cref="MinimumShareBytes"/>，開再多分頁每一份都還留得住幾步。
 /// </summary>
 public sealed class HistoryManager : IDisposable
 {
@@ -13,12 +17,67 @@ public sealed class HistoryManager : IDisposable
     private readonly List<IHistoryEntry> _undo = new();
     private readonly List<IHistoryEntry> _redo = new();
 
+    /// <summary>這份文件自己的上限（實際生效值還會再取「全域預算 ÷ 文件數」的較小者）。</summary>
     public long MemoryLimit { get; set; } = 1L << 30; // 1 GB
+
+    /// <summary>每份文件保底的份額 —— 分頁再多也還留得住幾步 undo。</summary>
+    public const long MinimumShareBytes = 64L << 20;
+
+    private static readonly List<HistoryManager> Live = new();
+
+    private static long _globalMemoryLimit = DefaultGlobalLimit();
+
+    /// <summary>
+    /// 所有開啟中文件的 undo/redo 記憶體總預算。預設取實體記憶體的 1/8（夾在 512 MB～2 GB）。
+    /// </summary>
+    public static long GlobalMemoryLimit
+    {
+        get => Volatile.Read(ref _globalMemoryLimit);
+        set
+        {
+            Volatile.Write(ref _globalMemoryLimit, Math.Max(MinimumShareBytes, value));
+            RebalanceAll();
+        }
+    }
+
+    private static long DefaultGlobalLimit()
+    {
+        var total = (long)AI.SystemMemory.TotalPhysicalBytes;
+        return total > 0 ? Math.Clamp(total / 8, 512L << 20, 2L << 30) : 1L << 30;
+    }
+
+    /// <summary>目前這份文件實際生效的上限（自己的上限 vs 全域預算的份額，取小）。</summary>
+    public long EffectiveMemoryLimit
+    {
+        get
+        {
+            int count;
+            lock (Live) count = Math.Max(1, Live.Count);
+            return Math.Min(MemoryLimit, Math.Max(MinimumShareBytes, GlobalMemoryLimit / count));
+        }
+    }
 
     /// <summary>堆疊內容變化（UI 更新用）。</summary>
     public event Action? Changed;
 
-    public HistoryManager(Document document) => _document = document;
+    public HistoryManager(Document document)
+    {
+        _document = document;
+        lock (Live) Live.Add(this);
+        RebalanceAll(); // 多一份文件 = 每份的份額變小，既有的文件也要跟著淘汰
+    }
+
+    /// <summary>
+    /// 文件數變了：讓每份文件重新對齊自己的份額。
+    /// 這裡刻意不發 <see cref="Changed"/> —— 那是「文件被編輯」的訊號，
+    /// 拿來報告淘汰會把背景分頁誤標成未存檔。
+    /// </summary>
+    private static void RebalanceAll()
+    {
+        HistoryManager[] all;
+        lock (Live) all = Live.ToArray();
+        foreach (var m in all) m.EvictIfNeeded();
+    }
 
     public bool CanUndo => _undo.Count > 0;
     public bool CanRedo => _redo.Count > 0;
@@ -120,8 +179,9 @@ public sealed class HistoryManager : IDisposable
 
     private void EvictIfNeeded()
     {
+        var limit = EffectiveMemoryLimit;
         var total = TotalMemoryCost;
-        while (total > MemoryLimit && _undo.Count > 1)
+        while (total > limit && _undo.Count > 1)
         {
             var oldest = _undo[0];
             _undo.RemoveAt(0);
@@ -132,6 +192,7 @@ public sealed class HistoryManager : IDisposable
 
     public void Dispose()
     {
+        lock (Live) Live.Remove(this);
         foreach (var e in _undo) e.Dispose();
         foreach (var e in _redo) e.Dispose();
         _undo.Clear();

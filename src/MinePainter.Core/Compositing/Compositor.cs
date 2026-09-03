@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using MinePainter.Core.Documents;
 using MinePainter.Core.Layers;
 using MinePainter.Core.Tiles;
@@ -51,6 +51,9 @@ public sealed class Compositor : IDisposable
     /// <summary>診斷：累計合成耗時（worker thread 上的純合成時間）。</summary>
     public TimeSpan RenderTime => TimeSpan.FromSeconds(
         (double)Interlocked.Read(ref _renderTicks) / System.Diagnostics.Stopwatch.Frequency);
+
+    /// <summary>診斷：目前快取著的 tile 數（含全透明格 —— 那些不佔像素記憶體）。</summary>
+    public int CachedTileCount => _cache.Count;
 
     /// <summary>診斷：還在排隊等合成的 tile 數（＝畫面落後多少）。</summary>
     public int DirtyCount
@@ -176,6 +179,69 @@ public sealed class Compositor : IDisposable
         {
             if (_retired.TryDequeue(out entry)) entry.Image.Dispose();
         }
+    }
+
+    // ---- 全域退役佇列（背景分頁用）----
+    //
+    // 切到背景的分頁自己沒有幀，收不了自己的退役佇列；但它交出來的影像 render thread
+    // 這一幀可能還在畫（切換的瞬間）。所以改交給全域佇列，由「目前正在畫的那個」畫布
+    // 每幀順手收 —— 同樣是延後三代才真的 Dispose。
+
+    private static readonly ConcurrentQueue<(long Gen, SKImage Image)> GlobalRetired = new();
+    private static long _globalGen;
+
+    private static void RetireGlobal(SKImage image) =>
+        GlobalRetired.Enqueue((Interlocked.Read(ref _globalGen), image));
+
+    /// <summary>render thread 每幀呼叫（與 <see cref="CollectRetired"/> 同一處）。</summary>
+    public static void CollectGlobalRetired()
+    {
+        var gen = Interlocked.Increment(ref _globalGen);
+        while (GlobalRetired.TryPeek(out var entry) && entry.Gen <= gen - 3)
+        {
+            if (GlobalRetired.TryDequeue(out entry)) entry.Image.Dispose();
+        }
+    }
+
+    /// <summary>暫停中（切到背景的分頁）：合成快取已經丟掉，worker 沒事做。</summary>
+    public bool IsSuspended { get; private set; }
+
+    /// <summary>
+    /// 分頁切到背景：丟掉整份合成快取與群組快取。
+    ///
+    /// 合成快取涵蓋的是「整份文件」而不是只有看得到的部分（這樣拉動畫面才不會等），
+    /// 一份 4000×3000 的文件就是 48 MB —— 開五個分頁，其中四個看不到的白白佔著。
+    /// 這些都是純加速結構，切回來時 <see cref="Resume"/> 重新標髒，可見範圍會優先補上。
+    /// </summary>
+    public void Suspend()
+    {
+        if (IsSuspended) return;
+        IsSuspended = true;
+
+        lock (_dirtyGate) _dirty.Clear();
+
+        foreach (var key in _cache.Keys)
+        {
+            if (_cache.TryRemove(key, out var img) && img != null) RetireGlobal(img);
+        }
+        while (_retired.TryDequeue(out var entry)) RetireGlobal(entry.Image);
+
+        lock (_document.SyncRoot)
+        {
+            foreach (var node in _document.Descendants())
+            {
+                if (node is Layers.GroupLayer group) group.Cache.Release();
+            }
+            _document.Root.Cache.Release();
+        }
+    }
+
+    /// <summary>分頁切回前景：整份重新排隊合成（可見的先）。</summary>
+    public void Resume()
+    {
+        if (!IsSuspended) return;
+        IsSuspended = false;
+        MarkDirty(_document.Bounds);
     }
 
     private void WorkerLoop()
