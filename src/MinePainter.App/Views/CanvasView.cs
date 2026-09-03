@@ -1,6 +1,7 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.Media;
 using MinePainter.App.Rendering;
 using MinePainter.Core.Tools;
@@ -83,10 +84,20 @@ public sealed class CanvasView : Control
     public FrameStats Stats => _stats;
 
     /// <summary>是否顯示像素格線（放大 300% 以上才實際繪製）。</summary>
-    public bool ShowPixelGrid { get; set; }
+    public bool ShowPixelGrid
+    {
+        get => _showPixelGrid;
+        set { _showPixelGrid = value; RequestRedraw(); }
+    }
+    private bool _showPixelGrid;
 
     /// <summary>放大時雙線性插值顯示（預設關：顯示真實像素、硬邊）。只影響上屏，不影響文件。</summary>
-    public bool SmoothZoom { get; set; }
+    public bool SmoothZoom
+    {
+        get => _smoothZoom;
+        set { _smoothZoom = value; RequestRedraw(); }
+    }
+    private bool _smoothZoom;
 
     /// <summary>doc 座標 → 此控制項的 view 座標。</summary>
     public Point DocToView(SKPoint doc) => _viewport.DocToView(new Point(doc.X, doc.Y));
@@ -123,6 +134,95 @@ public sealed class CanvasView : Control
         ClipToBounds = true;
         Cursor = new Cursor(StandardCursorType.Cross);
         UpdateBrushCursor();
+
+        // ---- dirty 驅動重繪的變動來源（見 StartAnimationLoop）----
+        StateChanged += RequestRedraw;
+        ViewportChanged += RequestRedraw;
+        // 任何指標／鍵盤事件都可能改到游標圈、工具預覽、把手（handledEventsToo：工具吃掉事件也算）
+        EventHandler<RoutedEventArgs> redraw = (_, _) => RequestRedraw();
+        foreach (var ev in new RoutedEvent[]
+                 {
+                     PointerPressedEvent, PointerMovedEvent, PointerReleasedEvent, PointerWheelChangedEvent,
+                     PointerEnteredEvent, PointerExitedEvent, PointerCaptureLostEvent, KeyDownEvent, KeyUpEvent,
+                 })
+        {
+            AddHandler(ev, redraw, RoutingStrategies.Tunnel | RoutingStrategies.Bubble, handledEventsToo: true);
+        }
+        // 圖層效果快取在 worker 上寫回：畫面要跟著換
+        Core.Effects.LayerEffectRenderer.LayerRendered += _ => RequestRedraw();
+    }
+
+    // ---- dirty 驅動重繪 ----
+    //
+    // 畫布以前是每幀 InvalidateVisual（144Hz 全窗重繪）。這樣任何疊在畫布上的東西（主選單、
+    // 字型下拉、工具提示）每幀都要重畫文字，開個選單就掉到 40fps。現在只有「有東西變了」才重繪：
+    // 指標／鍵盤事件、文件變動、合成器出 tile、效果快取寫回、視口動畫、歷史、StateChanged……
+    // 加上 250ms 的心跳保底（漏接的變動最多晚 250ms 出現）。螞蟻線只在有選取時以 30fps 動。
+
+    private volatile bool _dirty = true;
+    private long _lastDrawMs;
+
+    /// <summary>畫面上的東西變了，下一幀請重繪（任何執行緒都可呼叫）。</summary>
+    public void RequestRedraw() => _dirty = true;
+
+    private double _maxTickGapMs;
+    private long _lastTickMs;
+
+    /// <summary>
+    /// 自上次讀取以來 RequestAnimationFrame 回呼的最長間隔（毫秒）。UI 執行緒被什麼卡住多久就是多久
+    /// —— 畫布改成有變才畫之後，「fps」不再代表流暢度，這個才是。
+    /// </summary>
+    public double TakeMaxTickGapMs()
+    {
+        var v = _maxTickGapMs;
+        _maxTickGapMs = 0;
+        return v;
+    }
+
+    private EditorSession? _subscribed;
+
+    private void SubscribeSession(EditorSession? session)
+    {
+        if (ReferenceEquals(_subscribed, session)) return;
+        if (_subscribed is { } old)
+        {
+            old.Document.Changed -= OnDocumentChanged;
+            old.Document.SizeChanged -= RequestRedraw;
+            old.Compositor.TilesReady -= RequestRedraw;
+            old.History.Changed -= RequestRedraw;
+        }
+        _subscribed = session;
+        if (session != null)
+        {
+            session.Document.Changed += OnDocumentChanged;
+            session.Document.SizeChanged += RequestRedraw;
+            session.Compositor.TilesReady += RequestRedraw;
+            session.History.Changed += RequestRedraw;
+        }
+        RequestRedraw();
+    }
+
+    private void OnDocumentChanged(SKRectI _) => RequestRedraw();
+
+    /// <summary>這一幀非重繪不可（動畫進行中／合成尚未追上／手勢進行中）。</summary>
+    private bool NeedsContinuousRedraw()
+    {
+        if (!_viewportInitialized) return true;
+        if (_viewport != _targetViewport) return true;
+        if (_fadeDurationMs > 0 && Environment.TickCount64 - _fadeStartMs < _fadeDurationMs + 50) return true;
+        if (!_glide.IsIdle || _glide.AnyHeld) return true;
+        if (_panning || _toolActive) return true;
+        if (_stats.PendingTiles > 0) return true;
+        var session = _session;
+        if (session == null) return false;
+        return session.Ghost != null || session.IsFloatingOverlaid;
+    }
+
+    /// <summary>有會動的虛線（選取螞蟻線／工具預覽）——不必 144fps，30fps 就夠。</summary>
+    private bool HasAnimatedDashes()
+    {
+        var session = _session;
+        return session != null && (session.Selection != null || session.Floating != null || session.Preview != null);
     }
 
     public EditorSession? Session => _session;
@@ -135,6 +235,7 @@ public sealed class CanvasView : Control
     public void SetSession(EditorSession session, ViewportTransform? viewport = null)
     {
         _session = session;
+        SubscribeSession(session);
         if (viewport is { } vp)
         {
             _viewport = vp;
@@ -157,6 +258,7 @@ public sealed class CanvasView : Control
     public void ClearSession()
     {
         _session = null;
+        SubscribeSession(null);
         _viewportInitialized = false;
         _autoFit = null;
         InvalidateVisual();
@@ -265,7 +367,17 @@ public sealed class CanvasView : Control
             StepNudgeAnimation(dt);
             UpdateBrushCursor();
             FrameTick?.Invoke();
-            InvalidateVisual();
+
+            var nowMs = _animClock.ElapsedMilliseconds;
+            if (_lastTickMs != 0) _maxTickGapMs = Math.Max(_maxTickGapMs, nowMs - _lastTickMs);
+            _lastTickMs = nowMs;
+            var since = nowMs - _lastDrawMs;
+            if (_dirty || NeedsContinuousRedraw() || (since >= 33 && HasAnimatedDashes()) || since >= 250)
+            {
+                _dirty = false;
+                _lastDrawMs = nowMs;
+                InvalidateVisual();
+            }
             TopLevel.GetTopLevel(this)?.RequestAnimationFrame(Frame);
         }
 
@@ -331,6 +443,7 @@ public sealed class CanvasView : Control
         _fadeTo = to;
         _fadeStartMs = Environment.TickCount64;
         _fadeDurationMs = durationMs;
+        RequestRedraw();
     }
 
     /// <summary>不經動畫直接設定文件內容透明度。</summary>
@@ -339,6 +452,7 @@ public sealed class CanvasView : Control
         _fadeFrom = value;
         _fadeTo = value;
         _fadeDurationMs = 0;
+        RequestRedraw();
     }
 
     /// <summary>目前的文件內容透明度（CubicEaseOut 插值）。</summary>

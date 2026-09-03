@@ -38,7 +38,9 @@ internal static class Program
                 // tile 常駐 GPU 是上屏效能的前提。
                 MaxGpuResourceSizeBytes = 512L * 1024 * 1024,
             })
-            .With(new FontManagerOptions
+            .With(Environment.GetEnvironmentVariable("MINEPAINTER_DEBUG_NOFALLBACK") == "1"
+                ? new FontManagerOptions() // 效能對照：不掛內嵌字型後備
+                : new FontManagerOptions
             {
                 // 英文版 Windows 可能一支中日韓字型都沒有（Microsoft JhengHei 這類屬 Features on
                 // Demand），系統後備找不到字 → UI 中文全是豆腐框。內嵌一支墊底，語系無關。

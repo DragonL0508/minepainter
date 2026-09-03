@@ -215,6 +215,15 @@ public partial class MainWindow : Window
             {
                 PresetsToggle.IsChecked = true;
                 if (debugPresets != "1") _presetsContent.ShowFolder(debugPresets);
+                // MINEPAINTER_DEBUG_PRESETS_EDIT=1：1 秒後對庫裡第一個預設集開編輯器（驗證編輯視窗）
+                if (Environment.GetEnvironmentVariable("MINEPAINTER_DEBUG_PRESETS_EDIT") == "1")
+                {
+                    Avalonia.Threading.DispatcherTimer.RunOnce(() =>
+                    {
+                        if (EffectPresetStore.LoadAll().FirstOrDefault() is { } first)
+                            PresetEditor.Edit(this, first, Toasts.Show);
+                    }, TimeSpan.FromMilliseconds(1000));
+                }
                 if (Environment.GetEnvironmentVariable("MINEPAINTER_DEBUG_PRESETS_DROP")?.Split(',') is [var xs, var ys, .. var rest] &&
                     float.TryParse(xs, out var dx) && float.TryParse(ys, out var dy))
                 {
@@ -230,6 +239,171 @@ public partial class MainWindow : Window
                     }
                 }
             }
+            // MINEPAINTER_DEBUG_NOTOUI=1：整個主視窗直接用內嵌 Noto 當主字型（效能對照：走後備 vs 直接用）
+            if (Environment.GetEnvironmentVariable("MINEPAINTER_DEBUG_NOTOUI") == "1")
+                FontFamily = new FontFamily(Services.EmbeddedFonts.FamilyUri);
+
+            // MINEPAINTER_DEBUG_HIDECANVAS=1：把畫布控制項藏起來（效能對照：整幀慢是不是畫布 draw op 害的）
+            if (Environment.GetEnvironmentVariable("MINEPAINTER_DEBUG_HIDECANVAS") == "1") Canvas.IsVisible = false;
+
+            // MINEPAINTER_DEBUG_OVERLAY=1：Avalonia 的渲染診斷覆蓋層（fps、dirty rect、render/layout 時間圖）
+            if (Environment.GetEnvironmentVariable("MINEPAINTER_DEBUG_OVERLAY") == "1")
+            {
+                RendererDiagnostics.DebugOverlays = Avalonia.Rendering.RendererDebugOverlays.Fps |
+                                                    Avalonia.Rendering.RendererDebugOverlays.DirtyRects |
+                                                    Avalonia.Rendering.RendererDebugOverlays.RenderTimeGraph |
+                                                    Avalonia.Rendering.RendererDebugOverlays.LayoutTimeGraph;
+            }
+
+            // MINEPAINTER_DEBUG_MENU_CYCLE=<毫秒> + MINEPAINTER_DEBUG_PERF=<檔案>：每隔那麼久把主選單的頂層子選單
+            // 關掉、開下一個（模擬滑鼠在「檔案／編輯／影像…」之間來回滑），記每次開關在 UI 執行緒的毫秒與畫布 fps
+            if (int.TryParse(Environment.GetEnvironmentVariable("MINEPAINTER_DEBUG_MENU_CYCLE"), out var menuCycleMs) && menuCycleMs > 0 &&
+                Environment.GetEnvironmentVariable("MINEPAINTER_DEBUG_PERF") is { Length: > 0 } menuPerfFile)
+            {
+                Avalonia.Threading.DispatcherTimer.RunOnce(() =>
+                {
+                    // 字型後備解析的成本與快取狀況：同一個字連問 200 次，看每次幾毫秒、回傳的 GlyphTypeface 是不是同一份
+                    try
+                    {
+                        var fm = Avalonia.Media.FontManager.Current;
+                        {
+                            var coll = Services.EmbeddedFonts.Collection;
+                            fm.TryGetGlyphTypeface(new Avalonia.Media.Typeface(new FontFamily(Services.EmbeddedFonts.FamilyUri)), out var direct);
+                            var owns = coll != null && direct != null && coll.Owns(direct);
+                            var sw0 = System.Diagnostics.Stopwatch.StartNew();
+                            double adv = 0;
+                            if (direct != null)
+                                for (var cp = 0x4E00; cp < 0x4E00 + 2000; cp++) adv += direct.GetGlyphAdvance(direct.GetGlyph((uint)cp));
+                            File.AppendAllText(menuPerfFile, $"collection: {(coll?.Diagnostics ?? "null")} ownsDirect={owns} directType={direct?.GetType().Name} 2000 advances={sw0.Elapsed.TotalMilliseconds:F1}ms error={Services.EmbeddedFonts.RegisterError?.Split('\n')[0]}\n");
+                            // 後備排版會不會把中文切成一字一段 run？
+                            foreach (var (text, weight) in new[] { ("檔案(F) 圖層屬性範例", Avalonia.Media.FontWeight.Normal), ("檔案(F) 圖層屬性範例", Avalonia.Media.FontWeight.Normal), ("新增開啟儲存", Avalonia.Media.FontWeight.Normal), ("檔案(F) 圖層屬性範例", Avalonia.Media.FontWeight.Bold), ("Layer Properties", Avalonia.Media.FontWeight.Normal) })
+                            {
+                                var sw2 = System.Diagnostics.Stopwatch.StartNew();
+                                var layout = new Avalonia.Media.TextFormatting.TextLayout(text, new Avalonia.Media.Typeface(FontFamily.Default, Avalonia.Media.FontStyle.Normal, weight), 13, Brushes.White);
+                                var ms2 = sw2.Elapsed.TotalMilliseconds;
+                                var runs = layout.TextLines.Sum(l => l.TextRuns.Count);
+                                var desc = string.Join(" | ", layout.TextLines.SelectMany(l => l.TextRuns).Select(r => r is Avalonia.Media.TextFormatting.ShapedTextRun s ? $"{s.Properties.Typeface.FontFamily.Name}/{s.Properties.Typeface.Weight}:{s.Length}" : r.GetType().Name));
+                                File.AppendAllText(menuPerfFile, $"layout '{text}' {weight}: {ms2:F2}ms runs={runs} [{desc}]\n");
+                            }
+                            // 拆開：排版（HarfBuzz）vs GlyphRun（bounds）vs 第二次建同一段
+                            try
+                            {
+                                var cjk = "圖層屬性範例文字";
+                                fm.TryGetGlyphTypeface(new Avalonia.Media.Typeface(new FontFamily(Services.EmbeddedFonts.FamilyUri)), out var notoGt);
+                                if (notoGt != null)
+                                {
+                                    var props = new Avalonia.Media.TextFormatting.TextShaperOptions(notoGt, 13);
+                                    var sw3 = System.Diagnostics.Stopwatch.StartNew();
+                                    var shaped = Avalonia.Media.TextFormatting.TextShaper.Current.ShapeText(cjk.AsMemory(), props);
+                                    var shapeMs = sw3.Elapsed.TotalMilliseconds; sw3.Restart();
+                                    var shaped2 = Avalonia.Media.TextFormatting.TextShaper.Current.ShapeText(cjk.AsMemory(), props);
+                                    var shape2Ms = sw3.Elapsed.TotalMilliseconds; sw3.Restart();
+                                    var run = new Avalonia.Media.GlyphRun(notoGt, 13, cjk.AsMemory(), shaped);
+                                    _ = run.Bounds;
+                                    var runMs = sw3.Elapsed.TotalMilliseconds; sw3.Restart();
+                                    var run2 = new Avalonia.Media.GlyphRun(notoGt, 13, cjk.AsMemory(), shaped2);
+                                    _ = run2.Bounds;
+                                    var run2Ms = sw3.Elapsed.TotalMilliseconds; sw3.Restart();
+                                    var lay = new Avalonia.Media.TextFormatting.TextLayout(cjk, new Avalonia.Media.Typeface(new FontFamily(Services.EmbeddedFonts.FamilyUri)), 13, Brushes.White);
+                                    var lay1 = sw3.Elapsed.TotalMilliseconds; sw3.Restart();
+                                    var lay2o = new Avalonia.Media.TextFormatting.TextLayout(cjk, new Avalonia.Media.Typeface(new FontFamily(Services.EmbeddedFonts.FamilyUri)), 13, Brushes.White);
+                                    var lay2 = sw3.Elapsed.TotalMilliseconds;
+                                    File.AppendAllText(menuPerfFile, $"split: shape={shapeMs:F2} shapeAgain={shape2Ms:F2} glyphRun={runMs:F2} glyphRunAgain={run2Ms:F2} layoutNoto={lay1:F2} layoutNotoAgain={lay2:F2} (ms)\n");
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                File.AppendAllText(menuPerfFile, $"split EXCEPTION {ex.Message}\n");
+                            }
+                            // 含 bounds 的 GetGlyphWidths（要讀字形輪廓）：Avalonia 的 GlyphRunImpl 建構子就是這樣算 Bounds
+                            if (Core.Vectors.BundledFont.Typeface is { } noto)
+                            {
+                                var glyphs = Enumerable.Range(0x4E00, 300).Select(cp => (ushort)noto.GetGlyph(cp)).ToArray();
+                                using var memFont = new SkiaSharp.SKFont(noto, 13);
+                                var sw1 = System.Diagnostics.Stopwatch.StartNew();
+                                memFont.GetGlyphWidths(glyphs, new float[glyphs.Length], new SkiaSharp.SKRect[glyphs.Length]);
+                                var memMs = sw1.Elapsed.TotalMilliseconds;
+                                using var streamTf = SkiaSharp.SKTypeface.FromStream(Avalonia.Platform.AssetLoader.Open(new Uri("avares://MinePainter.App/Assets/Fonts/NotoSansTC-Regular.otf")));
+                                using var streamFont = new SkiaSharp.SKFont(streamTf, 13);
+                                var glyphs2 = Enumerable.Range(0x4E00, 300).Select(cp => (ushort)streamTf.GetGlyph(cp)).ToArray();
+                                sw1.Restart();
+                                streamFont.GetGlyphWidths(glyphs2, new float[glyphs2.Length], new SkiaSharp.SKRect[glyphs2.Length]);
+                                var streamMs = sw1.Elapsed.TotalMilliseconds;
+                                File.AppendAllText(menuPerfFile, $"GetGlyphWidths+bounds 300 glyphs: memory={memMs:F1}ms stream={streamMs:F1}ms\n");
+                            }
+                        }
+                        foreach (var weight in new[] { Avalonia.Media.FontWeight.Normal, Avalonia.Media.FontWeight.Bold })
+                        {
+                            var sw = System.Diagnostics.Stopwatch.StartNew();
+                            object? first = null;
+                            var same = 0;
+                            var found = 0;
+                            for (var i = 0; i < 200; i++)
+                            {
+                                if (fm.TryMatchCharacter('圖', Avalonia.Media.FontStyle.Normal, weight, Avalonia.Media.FontStretch.Normal, null, null, out var tf))
+                                {
+                                    found++;
+                                    var gt = tf.GlyphTypeface;
+                                    if (first == null) first = gt;
+                                    else if (ReferenceEquals(first, gt)) same++;
+                                }
+                            }
+                            var ms = sw.Elapsed.TotalMilliseconds;
+                            var name = first is Avalonia.Media.IGlyphTypeface g ? g.FamilyName + "/" + g.Weight + "/" + g.GetType().Name + "#" + System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(g) : "null";
+                            File.AppendAllText(menuPerfFile, $"fallback weight={weight}: 200 calls {ms:F1}ms ({ms / 200:F3}ms each) found={found} sameInstance={same}/199 typeface={name}\n");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        File.AppendAllText(menuPerfFile, $"fallback bench EXCEPTION {ex.Message}\n");
+                    }
+
+                    var tops = MainMenu.Items.OfType<MenuItem>().ToList();
+                    var index = -1;
+                    int switches = 0, layouts = 0;
+                    double total = 0, max = 0;
+                    LayoutUpdated += (_, _) => layouts++;
+                    var cycle = new Avalonia.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(menuCycleMs) };
+                    cycle.Tick += (_, _) =>
+                    {
+                        var sw = System.Diagnostics.Stopwatch.StartNew();
+                        try
+                        {
+                            if (index >= 0) tops[index].Close();
+                            index = (index + 1) % tops.Count;
+                            if (!MainMenu.IsOpen) MainMenu.Open();
+                            tops[index].Open();
+                        }
+                        catch (Exception ex)
+                        {
+                            File.AppendAllText(menuPerfFile, $"  [menu] EXCEPTION: {ex}\n");
+                        }
+                        var ms = sw.Elapsed.TotalMilliseconds;
+                        switches++;
+                        total += ms;
+                        max = Math.Max(max, ms);
+                    };
+                    cycle.Start();
+                    var perf = new Avalonia.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+                    var lastFrame = Canvas.Stats.FrameIndex;
+                    var gc0 = GC.CollectionCount(0);
+                    perf.Tick += (_, _) =>
+                    {
+                        var frames = Canvas.Stats.FrameIndex - lastFrame;
+                        lastFrame = Canvas.Stats.FrameIndex;
+                        var gcNow = GC.CollectionCount(0);
+                        File.AppendAllText(menuPerfFile,
+                            $"{DateTime.Now:HH:mm:ss} menu fps={Canvas.Stats.Fps:F0} canvasFrames={frames} uiTickGap={Canvas.TakeMaxTickGapMs():F0}ms layouts={layouts} switches={switches} " +
+                            (Rendering.TextBench.Enabled ? $"bench latin={Rendering.TextBench.LatinMs:F2} cjk={Rendering.TextBench.CjkMs:F2} cjkBold={Rendering.TextBench.CjkBoldMs:F2} cjkNewFont={Rendering.TextBench.CjkNewFontMs:F2} cjkStream={Rendering.TextBench.CjkStreamMs:F2} cjkStreamNewGlyphs={Rendering.TextBench.CjkAvaloniaMs:F2} fontCache={Rendering.TextBench.FontCacheUsed / 1024}K/{Rendering.TextBench.FontCacheLimit / 1024}K " : "") +
+                            $"avgMs={(switches > 0 ? total / switches : 0):F1} maxMs={max:F1} gc0={gcNow - gc0}\n");
+                        switches = layouts = 0;
+                        total = max = 0;
+                        gc0 = gcNow;
+                    };
+                    perf.Start();
+                }, TimeSpan.FromMilliseconds(1500));
+            }
+
             if (debugTextFx is "3" or "4" or "5")
             {
                 // =3：切到文字工具、1.5 秒後把工具列的字型下拉打開（驗證下拉清單首次開啟的渲染）；
@@ -312,7 +486,7 @@ public partial class MainWindow : Window
                             lastFrame = Canvas.Stats.FrameIndex;
                             var gcNow = GC.CollectionCount(0);
                             File.AppendAllText(perfFile,
-                                $"{DateTime.Now:HH:mm:ss} fps={Canvas.Stats.Fps:F0} canvasFrames={frames} mainLayout={mainLayout} popupLayout={popupLayout} " +
+                                $"{DateTime.Now:HH:mm:ss} uiTickGap={Canvas.TakeMaxTickGapMs():F0}ms canvasFrames={frames} mainLayout={mainLayout} popupLayout={popupLayout} " +
                                 $"switches={switches} avgMs={(switches > 0 ? switchMs / switches : 0):F1} maxMs={switchMax:F1} gc0={gcNow - gc0} font={FontFamilyCombo.SelectedItem}\n");
                             mainLayout = popupLayout = switches = 0;
                             switchMs = switchMax = 0;
@@ -617,7 +791,7 @@ public partial class MainWindow : Window
             Place(_palettePanel, new PanelAnchor(false, true, Px(18), Px(470)));
             Place(_layersPanel, new PanelAnchor(true, false, Px(348), Px(96)));
             Place(_historyPanel, new PanelAnchor(true, true, Px(286), Px(380)));
-            Place(_presetsPanel, new PanelAnchor(true, true, Px(810), Px(420)));
+            Place(_presetsPanel, new PanelAnchor(false, true, Px(18 + 330 + 12), Px(420))); // 調色盤右邊、貼底
             RestorePanelLayout(frame); // 上次關掉時的位置／大小／開關蓋過預設排法
 
             void Place(PanelWindow panel, PanelAnchor anchor)
@@ -1194,6 +1368,8 @@ public partial class MainWindow : Window
     private bool _suppressZoomEvents;
 
     /// <summary>狀態列的效能指示（取代先前蓋在畫布上的 debug overlay）。</summary>
+    private long _perfLastFrame;
+
     private void StartPerfLabelTimer()
     {
         var timer = new Avalonia.Threading.DispatcherTimer
@@ -1202,10 +1378,13 @@ public partial class MainWindow : Window
         };
         timer.Tick += (_, _) =>
         {
+            // 畫布改成有變才重繪：閒置時沒有幀，fps 只在真的連續重繪（合成中／動畫／拖曳）時才有意義
             var stats = Canvas.Stats;
+            var frames = stats.FrameIndex - _perfLastFrame;
+            _perfLastFrame = stats.FrameIndex;
             PerfLabel.Text = stats.PendingTiles > 0
                 ? $"{stats.Fps:F0} fps・合成中 {stats.PendingTiles}"
-                : $"{stats.Fps:F0} fps";
+                : frames >= 10 ? $"{stats.Fps:F0} fps" : "閒置";
 
             // 順便讓作用中分頁的縮圖跟上編輯（ChangeCount 沒變就是免費檢查）
             if (_activeTab is { } tab) RefreshTabThumbnail(tab);
@@ -3761,6 +3940,7 @@ public partial class MainWindow : Window
 
     private void RefreshUiState()
     {
+        Canvas.RequestRedraw(); // 幾乎所有會改到畫面的操作最後都會經過這裡
         var session = Canvas.Session;
         if (session == null) return;
 
@@ -3774,6 +3954,40 @@ public partial class MainWindow : Window
         RedoMenuItem.Header = session.History.RedoLabel is { } rl ? $"重做 {rl}(_R)" : "重做(_R)";
 
         SyncVectorOptionsFromSelection();
+    }
+
+    // ---- 整窗 layout 計時（MINEPAINTER_DEBUG_PERF 用；根節點的 Measure/Arrange 就是整棵樹）----
+    private static readonly bool PerfEnabled = Environment.GetEnvironmentVariable("MINEPAINTER_DEBUG_PERF") is { Length: > 0 };
+    private double _measureMs, _arrangeMs, _measureMax;
+    private int _measureCount;
+
+    protected override Size MeasureOverride(Size availableSize)
+    {
+        if (!PerfEnabled) return base.MeasureOverride(availableSize);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var r = base.MeasureOverride(availableSize);
+        var ms = sw.Elapsed.TotalMilliseconds;
+        _measureMs += ms;
+        _measureMax = Math.Max(_measureMax, ms);
+        _measureCount++;
+        return r;
+    }
+
+    protected override Size ArrangeOverride(Size finalSize)
+    {
+        if (!PerfEnabled) return base.ArrangeOverride(finalSize);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var r = base.ArrangeOverride(finalSize);
+        _arrangeMs += sw.Elapsed.TotalMilliseconds;
+        return r;
+    }
+
+    private string TakeLayoutPerf()
+    {
+        var text = $"measure={_measureMs:F0}ms/{_measureCount}x(max {_measureMax:F0}) arrange={_arrangeMs:F0}ms";
+        _measureMs = _arrangeMs = _measureMax = 0;
+        _measureCount = 0;
+        return text;
     }
 
     /// <summary>MINEPAINTER_DEBUG_PERF 有設時，把一段流程各步的毫秒寫進同一個記錄檔（沒設就全是空操作）。</summary>

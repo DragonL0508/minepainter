@@ -164,7 +164,7 @@ public sealed class PresetsPanelContent : UserControl
             FontSize = 10,
             Foreground = AppTheme.TextMutedBrush,
             Margin = new Thickness(2, 4, 0, 0),
-            Text = "拖到畫布套用到那一層；雙擊套到目前圖層；右鍵更多",
+            Text = "拖到畫布套用到那一層；雙擊套到目前圖層；右鍵編輯／更多",
         };
 
         var root = new DockPanel();
@@ -360,7 +360,7 @@ public sealed class PresetsPanelContent : UserControl
         var effects = preset.Effects.Count == 0
             ? "（空堆疊）"
             : string.Join("、", preset.Effects.Select(e => e.Enabled ? e.Effect.Name : e.Effect.Name + "（關）"));
-        ToolTip.SetTip(tile, $"{preset.DisplayPath}\n{effects}\n\n拖到畫布：套用到落點那一層\n雙擊：套用到目前圖層（已有堆疊會問覆蓋或疊加）");
+        ToolTip.SetTip(tile, $"{preset.DisplayPath}\n{effects}\n\n拖到畫布：套用到落點那一層\n雙擊：套用到目前圖層（已有堆疊會問覆蓋或疊加）\n右鍵：編輯、改名、搬移…");
 
         tile.PointerEntered += (_, _) => tile.Background = AppTheme.HeaderBrush;
         tile.PointerExited += (_, _) => tile.Background = Brushes.Transparent;
@@ -391,11 +391,18 @@ public sealed class PresetsPanelContent : UserControl
             var pos = e.GetPosition(tile);
             if (Math.Abs(pos.X - start.X) < 5 && Math.Abs(pos.Y - start.Y) < 5) return;
             pressAt = null;
-            await BeginDrag(preset, e);
+            await BeginDrag(preset, e, image.Source);
         };
 
-        // 右鍵選單
+        // 右鍵選單（編輯在最上面）
         var menu = new ClickSubmenuMenuFlyout();
+        var edit = new MenuItem { Header = "編輯…" };
+        edit.Click += (_, _) =>
+        {
+            if (Owner() is { } owner) PresetEditor.Edit(owner, preset, msg => Notify?.Invoke(msg));
+        };
+        menu.Items.Add(edit);
+        menu.Items.Add(new Separator());
         var apply = new MenuItem { Header = "套用到目前圖層（加在堆疊之後）" };
         apply.Click += (_, _) => ApplyRequested?.Invoke(preset, ApplyMode.Append);
         var replace = new MenuItem { Header = "取代目前圖層的堆疊" };
@@ -481,11 +488,13 @@ public sealed class PresetsPanelContent : UserControl
 
     // ---- 拖曳 ----
 
-    private static async Task BeginDrag(EffectPreset preset, PointerEventArgs e)
+    private static async Task BeginDrag(EffectPreset preset, PointerEventArgs e, IImage? thumbnail)
     {
         var data = new DataObject();
         data.Set(DataFormats.Text, DragPrefix + preset.Path);
         Dragging = preset;
+        // OS 拖放沒有拖曳影像：自己開一個跟著游標走的殘影小窗（縮圖＋名稱，平滑跟隨、放開時淡出）
+        var ghost = DragGhostWindow.Start(thumbnail, preset.Name);
         try
         {
             await DragDrop.DoDragDrop(e, data, DragDropEffects.Copy | DragDropEffects.Move);
@@ -496,6 +505,7 @@ public sealed class PresetsPanelContent : UserControl
         finally
         {
             Dragging = null;
+            ghost?.Finish();
         }
     }
 

@@ -14,6 +14,26 @@ public partial class App : Application
         AvaloniaXamlLoader.Load(this);
         // 畫布排版（Skia）看不到 avares 的內嵌字型，得在任何文字排版之前手動交給 Core
         Services.EmbeddedFonts.Register();
+
+        // MINEPAINTER_DEBUG_FONTCACHE=<MB>：Skia 字形快取上限（效能對照；預設 2MB／2048 個字形）
+        if (int.TryParse(Environment.GetEnvironmentVariable("MINEPAINTER_DEBUG_FONTCACHE"), out var fontCacheMb) && fontCacheMb > 0)
+        {
+            SkiaSharp.SKGraphics.SetFontCacheLimit(fontCacheMb * 1024L * 1024L);
+            SkiaSharp.SKGraphics.SetFontCacheCountLimit(65536);
+        }
+
+        // MINEPAINTER_DEBUG_NOANIM=1：拿掉全域微動畫（效能對照用）
+        if (Environment.GetEnvironmentVariable("MINEPAINTER_DEBUG_NOANIM") == "1")
+        {
+            for (var i = Styles.Count - 1; i >= 0; i--)
+            {
+                if (Styles[i] is Avalonia.Markup.Xaml.Styling.StyleInclude { Source: { } src } &&
+                    src.ToString().EndsWith("Animations.axaml", StringComparison.OrdinalIgnoreCase))
+                {
+                    Styles.RemoveAt(i);
+                }
+            }
+        }
     }
 
     public override void OnFrameworkInitializationCompleted()

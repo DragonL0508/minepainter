@@ -21,6 +21,16 @@ public sealed class FrameStats
     /// <summary>上一幀尚未合成完成的 tile 數（狀態列顯示用）。</summary>
     public int PendingTiles { get; set; }
 
+    private double _maxGap;
+
+    /// <summary>自上次讀取以來最長的一次幀間隔（毫秒；讀了就歸零）。找「偶發停頓」用，平均 fps 看不出來。</summary>
+    public double TakeMaxGapMs()
+    {
+        var v = _maxGap;
+        _maxGap = 0;
+        return v * 1000;
+    }
+
     public void OnFrame()
     {
         FrameIndex++;
@@ -28,6 +38,7 @@ public sealed class FrameStats
         if (_lastTicks != 0)
         {
             var dt = (now - _lastTicks) / (double)Stopwatch.Frequency;
+            if (dt > _maxGap) _maxGap = dt;
             _samples[_cursor] = dt;
             _cursor = (_cursor + 1) % _samples.Length;
             _filled = Math.Min(_filled + 1, _samples.Length);

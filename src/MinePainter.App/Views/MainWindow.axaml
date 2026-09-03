@@ -10,6 +10,18 @@
         Width="1360" Height="860"
         WindowStartupLocation="CenterScreen">
 
+  <Window.Styles>
+    <!--
+      主視窗裡的所有彈出層（主選單、下拉、按鈕 flyout、工具提示）畫在主視窗自己的 overlay 層，
+      不另開 OS 視窗。原生 popup 每開一次都要建 HWND＋GPU surface（第一次 100ms+、之後每次約 17ms，
+      而且會卡住共用的渲染執行緒），滑鼠在「檔案／編輯／影像…」之間來回滑會掉到 40fps。
+      主視窗夠大，彈出層被限制在視窗內不成問題；其他視窗（浮動面板、對話框）維持原生 popup。
+    -->
+    <Style Selector="Popup">
+      <Setter Property="ShouldUseOverlayLayer" Value="True" />
+    </Style>
+  </Window.Styles>
+
   <DockPanel>
     <!-- 選單列 + 右上角面板開關 -->
     <Border DockPanel.Dock="Top" Background="{x:Static app:AppTheme.ChromeBrush}">
@@ -27,7 +39,7 @@
           <ToggleButton x:Name="PaletteToggle" IsChecked="True" Padding="5,3" ToolTip.Tip="調色盤">
             <mi:MaterialIcon Kind="Palette" Width="16" Height="16" />
           </ToggleButton>
-          <ToggleButton x:Name="PresetsToggle" IsChecked="False" Padding="5,3" ToolTip.Tip="效果預設集">
+          <ToggleButton x:Name="PresetsToggle" IsChecked="True" Padding="5,3" ToolTip.Tip="效果預設集">
             <mi:MaterialIcon Kind="BookmarkMultipleOutline" Width="16" Height="16" />
           </ToggleButton>
         </StackPanel>

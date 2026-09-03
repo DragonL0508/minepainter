@@ -64,12 +64,16 @@ public sealed class LayerPropertiesWindow : Window
     /// <summary>圖層屬性變更後發出（讓 MainWindow 刷新 undo 選單等）。</summary>
     public event Action? StateChanged;
 
-    public LayerPropertiesWindow(EditorSession session, LayerNode node)
+    /// <summary>預設集編輯模式：開在暫存文件的「Aa」文字層上，只留名稱與效果堆疊（見 PresetEditor）。</summary>
+    private readonly bool _presetMode;
+
+    public LayerPropertiesWindow(EditorSession session, LayerNode node, bool presetMode = false)
     {
         _session = session;
         _node = node;
+        _presetMode = presetMode;
 
-        Title = "圖層屬性";
+        Title = presetMode ? "編輯預設集" : "圖層屬性";
         Width = 440;
         SizeToContent = SizeToContent.Height;
         SystemDecorations = SystemDecorations.None;
@@ -102,7 +106,7 @@ public sealed class LayerPropertiesWindow : Window
     {
         var titleText = new TextBlock
         {
-            Text = $"圖層屬性 — {node.Name}",
+            Text = _presetMode ? $"編輯預設集 — {node.Name}" : $"圖層屬性 — {node.Name}",
             FontSize = 12,
             FontWeight = FontWeight.Bold,
             Foreground = AppTheme.TextBrush,
@@ -151,9 +155,9 @@ public sealed class LayerPropertiesWindow : Window
 
         body.Children.Add(LabeledRow("名稱", _nameBox));
 
-        if (node is not AdjustmentLayer)
+        if (node is not AdjustmentLayer && !_presetMode)
             body.Children.Add(LabeledRow("混合", _blendCombo));
-        body.Children.Add(_opacityBar);
+        if (!_presetMode) body.Children.Add(_opacityBar);
 
         if (node is AdjustmentLayer)
         {
@@ -167,8 +171,11 @@ public sealed class LayerPropertiesWindow : Window
             body.Children.Add(_effectsPanel);
         }
 
-        body.Children.Add(new Separator { Margin = new Thickness(0, 3) });
-        body.Children.Add(_detailRows);
+        if (!_presetMode)
+        {
+            body.Children.Add(new Separator { Margin = new Thickness(0, 3) });
+            body.Children.Add(_detailRows);
+        }
 
         _root = new Border
         {
@@ -389,8 +396,12 @@ public sealed class LayerPropertiesWindow : Window
         };
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
         buttons.Children.Add(addButton);
-        buttons.Children.Add(presetButton);
-        buttons.Children.Add(bakeButton);
+        if (!_presetMode)
+        {
+            // 預設集編輯模式：這裡本身就是在編預設集，再存一次或把堆疊烙進暫存圖層都沒意義
+            buttons.Children.Add(presetButton);
+            buttons.Children.Add(bakeButton);
+        }
         DockPanel.SetDock(buttons, Dock.Right);
         var header = new DockPanel { Margin = new Thickness(0, 0, 0, 6) };
         header.Children.Add(buttons);

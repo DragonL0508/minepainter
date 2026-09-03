@@ -94,6 +94,7 @@ public sealed class CanvasDrawOperation : ICustomDrawOperation
 
         _compositor.CollectRetired();
         _stats.OnFrame();
+        if (TextBench.Enabled) TextBench.Run(canvas);
 
         var drawn = 0;
         var pending = 0;
@@ -630,5 +631,71 @@ public sealed class CanvasDrawOperation : ICustomDrawOperation
 
     public void Dispose()
     {
+    }
+}
+
+/// <summary>
+/// MINEPAINTER_DEBUG_TEXTBENCH=1：每幀在畫布上用 Skia 直接畫三種文字各 30 段並計時
+/// （系統字型英文、內嵌 Noto 中文、內嵌 Noto 假粗體中文），找「文字繪製為什麼慢」用。
+/// </summary>
+public static class TextBench
+{
+    public static readonly bool Enabled = Environment.GetEnvironmentVariable("MINEPAINTER_DEBUG_TEXTBENCH") == "1";
+    public static double LatinMs, CjkMs, CjkBoldMs, CjkNewFontMs, CjkStreamMs, CjkAvaloniaMs;
+    public static long FontCacheUsed, FontCacheLimit;
+    private static SKFont? _latin, _cjk, _cjkBold, _cjkStream, _cjkAvalonia;
+    private static SKTextBlob? _latinBlob, _cjkBlob, _cjkBoldBlob, _cjkStreamBlob, _cjkAvaloniaBlob;
+
+    public static void Run(SKCanvas canvas)
+    {
+        var noto = Core.Vectors.BundledFont.Typeface;
+        if (noto == null) return;
+        _latin ??= new SKFont(SKTypeface.FromFamilyName("Segoe UI"), 13) { Subpixel = true, Edging = SKFontEdging.SubpixelAntialias };
+        _cjk ??= new SKFont(noto, 13) { Subpixel = true, Edging = SKFontEdging.SubpixelAntialias };
+        _cjkBold ??= new SKFont(noto, 13) { Subpixel = true, Edging = SKFontEdging.SubpixelAntialias, Embolden = true };
+        _latinBlob ??= SKTextBlob.Create("Layer Properties Sample Text", _latin);
+        _cjkBlob ??= SKTextBlob.Create("圖層屬性範例文字效果調整", _cjk);
+        _cjkBoldBlob ??= SKTextBlob.Create("圖層屬性範例文字效果調整", _cjkBold);
+        using var paint = new SKPaint { Color = SKColors.White, IsAntialias = true };
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        for (var i = 0; i < 30; i++) canvas.DrawText(_latinBlob, 10, 20 + i * 2, paint);
+        canvas.Flush();
+        LatinMs = sw.Elapsed.TotalMilliseconds; sw.Restart();
+        for (var i = 0; i < 30; i++) canvas.DrawText(_cjkBlob, 10, 120 + i * 2, paint);
+        canvas.Flush();
+        CjkMs = sw.Elapsed.TotalMilliseconds; sw.Restart();
+        for (var i = 0; i < 30; i++) canvas.DrawText(_cjkBoldBlob, 10, 220 + i * 2, paint);
+        canvas.Flush();
+        CjkBoldMs = sw.Elapsed.TotalMilliseconds; sw.Restart();
+        // 每次都新建 SKFont + blob（模擬「字面每幀重建」的情況）
+        for (var i = 0; i < 30; i++)
+        {
+            using var f = new SKFont(noto, 13) { Subpixel = true, Edging = SKFontEdging.SubpixelAntialias };
+            using var b = SKTextBlob.Create("圖層屬性範例文字效果調整", f);
+            canvas.DrawText(b, 10, 320 + i * 2, paint);
+        }
+        canvas.Flush();
+        CjkNewFontMs = sw.Elapsed.TotalMilliseconds; sw.Restart();
+        // 用 managed Stream 建的字面（Avalonia 的 EmbeddedFontCollection 就是這樣建的）
+        if (_cjkStream == null)
+        {
+            var stream = Avalonia.Platform.AssetLoader.Open(new Uri("avares://MinePainter.App/Assets/Fonts/NotoSansTC-Regular.otf"));
+            _cjkStream = new SKFont(SKTypeface.FromStream(stream), 13) { Subpixel = true, Edging = SKFontEdging.SubpixelAntialias };
+            _cjkStreamBlob = SKTextBlob.Create("圖層屬性範例文字效果調整", _cjkStream);
+        }
+        for (var i = 0; i < 30; i++) canvas.DrawText(_cjkStreamBlob, 10, 420 + i * 2, paint);
+        canvas.Flush();
+        CjkStreamMs = sw.Elapsed.TotalMilliseconds; sw.Restart();
+        // 每幀換不同字（讓快取失效），看 stream 字面「新字形」的成本
+        if (_cjkAvalonia == null) _cjkAvalonia = _cjkStream;
+        var text = string.Concat(Enumerable.Range(0, 12).Select(i => (char)(0x4E00 + (Environment.TickCount / 16 + i * 7) % 3000)));
+        using (var b = SKTextBlob.Create(text, _cjkAvalonia))
+        {
+            for (var i = 0; i < 30; i++) canvas.DrawText(b, 10, 520 + i * 2, paint);
+        }
+        canvas.Flush();
+        CjkAvaloniaMs = sw.Elapsed.TotalMilliseconds;
+        FontCacheUsed = SKGraphics.GetFontCacheUsed();
+        FontCacheLimit = SKGraphics.GetFontCacheLimit();
     }
 }
