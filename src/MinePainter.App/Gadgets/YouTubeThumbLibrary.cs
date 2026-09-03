@@ -10,7 +10,7 @@ public sealed record YouTubeThumb(string Title, byte[] Webp);
 /// 「YouTube 縮圖預覽」週邊影片用的內建縮圖庫：Assets/YouTubePreview/ 下的 <c>.webp</c>
 /// 以 <c>ytthumb/檔名</c> 內嵌進組件，檔名（去副檔名）就是影片標題。
 /// <para>
-/// 進版控的一律是 <see cref="PackFolder"/> 轉好的 480×270 WebP，不是原檔：原尺寸 PNG
+/// 進版控的一律是 <see cref="PackFolder"/> 轉好的 960×540 WebP，不是原檔：原尺寸 PNG
 /// 一張就一兩 MB，直接內嵌會讓 exe 肥好幾十 MB，而預覽網頁還要再 base64 一次。
 /// 尺寸不合的圖仍會在載入時補轉一次（安全網），結果快取在靜態欄位。
 /// </para>
@@ -19,13 +19,16 @@ public static class YouTubeThumbLibrary
 {
     private const string Prefix = "ytthumb/";
 
-    /// <summary>內嵌尺寸：卡片在 1920 下寬 517，480 已足夠；再大只是把 exe 與 HTML 撐肥。</summary>
-    public const int Width = 480;
+    /// <summary>
+    /// 內嵌尺寸：卡片在 1920 下寬 517 CSS px，但高 DPI（125%／150%／2x 縮放很常見）
+    /// 會拿實際像素去填，480 在那些螢幕上會被放大而糊掉，所以抓 2 倍頭寸留餘裕。
+    /// </summary>
+    public const int Width = 960;
 
-    public const int Height = 270;
+    public const int Height = 540;
 
-    /// <summary>WebP 品質：80 在這個尺寸下看不出壓縮痕跡，一張約 12–25 KB。</summary>
-    public const int Quality = 80;
+    /// <summary>WebP 品質：85 在這個尺寸下文字邊緣不會糊，一張約 40–90 KB。</summary>
+    public const int Quality = 85;
 
     private static IReadOnlyList<YouTubeThumb>? _cache;
 

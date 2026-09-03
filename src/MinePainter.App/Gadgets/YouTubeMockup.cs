@@ -372,23 +372,21 @@ const THUMBS = __THUMBS__;
 // 圖庫是空的就退回純色底，其餘功能照常
 const BLANKS = ["#3b4a6b", "#2d5a4a", "#6b5a2d", "#4a2d6b", "#2a4a3a"];
 
-// 每次 render 重發一副牌：不夠 17 張才輪到重複，避免同一頁出現兩張一樣的圖
+// 每次 render 洗一副牌、每張最多發一次：圖庫不夠 count 張時，寧可多出的格子
+// 退回純色底，也不要讓同一部影片在同一頁重複出現
 const dealThumbs = (count) => {
-  if (THUMBS.length === 0) return [...Array(count)].map(() => null); // 沒放圖：整排退回純色底
-  const out = [];
-  while (out.length < count) {
-    const deck = THUMBS.slice();
-    for (let i = deck.length - 1; i > 0; i--) {
-      const j = rand(i + 1);
-      [deck[i], deck[j]] = [deck[j], deck[i]];
-    }
-    out.push(...deck.slice(0, count - out.length));
+  const deck = THUMBS.slice();
+  for (let i = deck.length - 1; i > 0; i--) {
+    const j = rand(i + 1);
+    [deck[i], deck[j]] = [deck[j], deck[i]];
   }
+  const out = deck.slice(0, count);
+  while (out.length < count) out.push(null);
   return out;
 };
 
 const makeFake = (thumb) => ({
-  title: thumb ? thumb.t : "（Assets/YouTubePreview 還沒有圖）",
+  title: thumb ? thumb.t : "（沒有更多不重複的縮圖了）",
   channel: pick(CHANNELS),
   views: formatViews(randomViews()),
   age: pick(AGES),
