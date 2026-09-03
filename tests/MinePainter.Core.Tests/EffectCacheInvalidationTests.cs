@@ -244,3 +244,41 @@ public class EffectCacheInvalidationTests
         session.Dispose();
     }
 }
+
+public class OutlineGrowTests
+{
+    private static unsafe uint CachePixel(RasterLayer layer, int lx, int ly)
+    {
+        var tile = layer.FxCache.Surface.GetTileForRead(TileIndex.FromPixel(lx, ly));
+        if (tile == null) return 0;
+        return ((uint*)tile.Pixels)[(ly & 255) * Tile.Size + (lx & 255)];
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(4)]
+    public void Outline_GrowingWidth_IsNotClipped(int smooth)
+    {
+        var doc = ImageCodec.CreateBlankDocument(512, 512, SKColors.Transparent);
+        using var session = new EditorSession(doc);
+        var layer = (RasterLayer)doc.ActiveLayer!;
+        lock (doc.SyncRoot) layer.Surface.Fill(new SKRectI(200, 200, 260, 260), SKColors.Red);
+        layer.Invalidate(new SKRectI(200, 200, 260, 260));
+
+        var fx = LayerEffect.Create(new ObjectOutlineEffect { Width = 6, Smooth = smooth, Color = SKColors.Black });
+        LayerEffectCommands.Add(doc, session.History, layer, fx);
+        LayerEffectRenderer.RenderLayerNow(doc, layer);
+        Assert.True((CachePixel(layer, 196, 230) >> 24) > 200);
+        Assert.Equal(0u, CachePixel(layer, 170, 230) >> 24);
+
+        // 拉大到 40：四邊在 35px 外都要有外框，且外框外緣不能是被直線切掉的
+        LayerEffectCommands.Replace(doc, session.History, layer,
+            fx with { Effect = new ObjectOutlineEffect { Width = 40, Smooth = smooth, Color = SKColors.Black } });
+        LayerEffectRenderer.RenderLayerNow(doc, layer);
+        foreach (var (x, y) in new[] { (165, 230), (295, 230), (230, 165), (230, 295) })
+            Assert.True((CachePixel(layer, x, y) >> 24) > 200, $"outline missing at ({x},{y}) smooth={smooth}");
+        // 角落：距離 (200,200) 為 35 的斜方向也要有（圓角、且平滑會把物件角落磨圓幾格，不是直線切齊）
+        Assert.True((CachePixel(layer, 200 - 25, 200 - 25) >> 24) > 200, $"corner missing smooth={smooth}");
+        Assert.Equal(0u, CachePixel(layer, 200 - 45, 230) >> 24);
+    }
+}

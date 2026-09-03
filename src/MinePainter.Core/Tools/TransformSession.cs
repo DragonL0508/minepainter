@@ -105,6 +105,18 @@ public sealed class TransformSession : IDisposable
     /// <summary>四角模式中的四角（null＝矩形模式）。陣列視為 immutable，每次改動換新實例（render thread 直接讀）。</summary>
     public SKPoint[]? Quad => _quad;
 
+    /// <summary>TargetRect 往外加效果外擴（外框／陰影／光暈畫在像素之外，框要包住它們）。</summary>
+    private SKRect PaddedTargetRect
+    {
+        get
+        {
+            var pad = HandleDragController.EffectPad(Target);
+            var r = TargetRect;
+            if (pad > 0) r.Inflate(pad, pad);
+            return r;
+        }
+    }
+
     /// <summary>目前框在畫面上的外接矩形：四角模式取四角外框，矩形模式就是 TargetRect。</summary>
     public SKRect FrameRect => _warp != null ? _warp.Bounds : _quad != null ? QuadGeometry.Bounds(_quad) : TargetRect;
 
@@ -125,8 +137,11 @@ public sealed class TransformSession : IDisposable
         if (!CanUseQuad) return false;
 
         _quadBase = Matrix; // 矩形模式的累積矩陣（此時 _quad 仍為 null）
-        var center = new SKPoint(TargetRect.MidX, TargetRect.MidY);
-        _quadStart = QuadGeometry.Rotated(QuadGeometry.Corners(TargetRect), center, RotationDeg);
+        // 起始四角用「含效果外擴」的框：把手才會框在外框／陰影之外。單應映射定義在整個平面上，
+        // 參考矩形取哪個都一樣，像素照樣對得上。
+        var padded = PaddedTargetRect;
+        var center = new SKPoint(padded.MidX, padded.MidY);
+        _quadStart = QuadGeometry.Rotated(QuadGeometry.Corners(padded), center, RotationDeg);
         _quad = (SKPoint[])_quadStart.Clone();
         // 目前蓋章的像素位置 = 現在的框 − 純平移位移（蓋章一律在 Offset=Base 基準）
         _stampedQuad = QuadGeometry.Translated(_quadStart, -OffsetDelta.X, -OffsetDelta.Y);
@@ -176,10 +191,12 @@ public sealed class TransformSession : IDisposable
         if (!CanUseQuad) return false;
 
         _warpBase = Matrix; // 目前（矩形或四角模式）的累積矩陣
+        // 網格框同樣含效果外擴（貝茲映射的參考框取哪個都一樣）
+        var paddedRect = PaddedTargetRect;
         var frame = _quad != null
             ? QuadGeometry.Bounds(_quad)
-            : QuadGeometry.Bounds(QuadGeometry.Rotated(QuadGeometry.Corners(TargetRect),
-                new SKPoint(TargetRect.MidX, TargetRect.MidY), RotationDeg));
+            : QuadGeometry.Bounds(QuadGeometry.Rotated(QuadGeometry.Corners(paddedRect),
+                new SKPoint(paddedRect.MidX, paddedRect.MidY), RotationDeg));
         _warpStart = WarpMesh.Flat(frame);
         _warp = _warpStart;
         _stampedWarp = _warpStart.Translated(-OffsetDelta.X, -OffsetDelta.Y);

@@ -35,7 +35,7 @@ internal static class DistanceTransform
     /// 先做形態學閉運算（膨脹 r 再侵蝕 r）把小於 r 的凹縫／細洞補平，再回傳到「補平後形狀」的距離。
     /// 外框的「平滑」用這個：邊緣的小抖動不會再讓外框跟著抖。r ≤ 0 時等同 <see cref="FromAlpha"/>。
     /// </summary>
-    public static float[] FromAlphaClosed(EffectContext ctx, int pad, int r)
+    public static float[] FromAlphaClosed(EffectContext ctx, int pad, int r, int distanceBlur = -1)
     {
         var dist = FromAlpha(ctx, pad);
         if (r <= 0) return dist;
@@ -65,7 +65,13 @@ internal static class DistanceTransform
             dist[i] = SeedFromCoverage((int)MathF.Round(c * 255));
         }
         Propagate(dist, w, h);
-        return dist;
+
+        // 最後再把距離場本身低通一次（兩趟方框）：外框外緣是距離場的等值線，
+        // 來源的殘餘小起伏在距離場裡是寬約 2√(2·width) 的淺凹凸，這一步把它們抹平。
+        // 直邊的距離場是線性的、模糊後不變；離內容 < 2·半徑 的地方會混到內側的 0，
+        // 所以半徑由呼叫端依外框寬度限制（外框效果傳 min(r, width/2)），外緣不受影響。
+        var rd = distanceBlur < 0 ? r : distanceBlur;
+        return rd <= 0 ? dist : BoxBlur(BoxBlur(dist, w, h, rd), w, h, rd);
     }
 
     /// <summary>
@@ -278,7 +284,7 @@ public sealed record ObjectOutlineEffect : IEffect
         var width = ClampedWidth;
         var smooth = ClampedSmooth;
         var pad = width + smooth * 2 + 2;
-        var dist = DistanceTransform.FromAlphaClosed(ctx, pad, smooth);
+        var dist = DistanceTransform.FromAlphaClosed(ctx, pad, smooth, Math.Min(smooth, width / 2));
         var dw = ctx.Width + pad * 2;
         var soft = Math.Max(0.5f, width * Softness / 100f);
         var color = Color;
