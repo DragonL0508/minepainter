@@ -1,4 +1,4 @@
-using Avalonia;
+﻿using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 using Avalonia.Threading;
@@ -14,6 +14,12 @@ public partial class App : Application
         AvaloniaXamlLoader.Load(this);
         // 畫布排版（Skia）看不到 avares 的內嵌字型，得在任何文字排版之前手動交給 Core
         Services.EmbeddedFonts.Register();
+
+        // 所有彈出層（選單、下拉、flyout、tooltip）一律置頂。
+        // 浮動面板是主視窗的 owned window，永遠壓在主視窗上面 —— 選單的 popup 也是
+        // owned window，兩者同一層，面板被點過（activate）之後就會蓋住剛彈出的選單。
+        // 置頂讓 popup 一定在最上面（使用者 2026-09-04 回報「浮窗擋住下拉式選單」）。
+        Avalonia.Controls.Primitives.Popup.TopmostProperty.OverrideDefaultValue<Avalonia.Controls.Primitives.Popup>(true);
 
         // MINEPAINTER_DEBUG_FONTCACHE=<MB>：Skia 字形快取上限（效能對照；預設 2MB／2048 個字形）
         if (int.TryParse(Environment.GetEnvironmentVariable("MINEPAINTER_DEBUG_FONTCACHE"), out var fontCacheMb) && fontCacheMb > 0)

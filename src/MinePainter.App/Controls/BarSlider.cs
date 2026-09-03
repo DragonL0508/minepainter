@@ -58,8 +58,22 @@ public sealed class BarSlider : Control
     /// <summary>條底部的視覺軌（色相環／黑白漸層），提示數值意義。</summary>
     public SliderTrack Track { get => GetValue(TrackProperty); set => SetValue(TrackProperty, value); }
 
-    /// <summary>雙擊要回到的值（null＝沒有預設值可回，雙擊不做事）。</summary>
-    public double? DefaultValue { get; set; }
+    /// <summary>
+    /// 雙擊左鍵要回到的值。**全專案的拉條都有這個行為**（使用者 2026-09-04 明示要一致）：
+    /// XAML 建立的自動以標記上寫的 Value 為預設（見 <see cref="EndInit"/>），
+    /// 程式建立的請在建構時指定 —— 沒指定就會是 0，多半不是你要的。
+    /// </summary>
+    public double? DefaultValue
+    {
+        get => _defaultValue;
+        set
+        {
+            _defaultValue = value;
+            ApplyResetTip();
+        }
+    }
+
+    private double? _defaultValue;
 
     public event Action<double>? ValueChanged;
     public event Action<double>? DragCompleted;
@@ -74,6 +88,32 @@ public sealed class BarSlider : Control
     /// <summary>白色填滿上的字（黑）。與底條的對比由 BarTrack（亮色主題加深的底條）負責。</summary>
     private static readonly IBrush FillTextBrush = new SolidColorBrush(Color.FromRgb(0x16, 0x16, 0x1A));
     private bool _hover;
+
+    /// <summary>
+    /// XAML 建立時：標記上寫的初始值就是「預設值」（EndInit 時屬性都已套上、還沒被程式改過）。
+    /// 這樣新增拉條不會忘了給預設值 —— 忘了給就是不一致的來源。
+    /// </summary>
+    public override void EndInit()
+    {
+        base.EndInit();
+        _defaultValue ??= Value;
+        ApplyResetTip();
+    }
+
+    private string? _autoTip;
+
+    /// <summary>沒有自己的提示時，補一句「雙擊重設為 X」讓這個行為看得見（預設值改了就跟著更新）。</summary>
+    private void ApplyResetTip()
+    {
+        if (_defaultValue is not { } def) return;
+        var existing = ToolTip.GetTip(this);
+        if (existing != null && !ReferenceEquals(existing, _autoTip)) return; // 呼叫端自己設了提示，尊重它
+        _autoTip = $"雙擊重設為 {FormatValue(def)}";
+        ToolTip.SetTip(this, _autoTip);
+    }
+
+    private string FormatValue(double v) =>
+        v.ToString(Decimals > 0 ? "F" + Decimals : "0") + Suffix;
 
     static BarSlider()
     {
@@ -314,8 +354,7 @@ public sealed class BarSlider : Control
     {
         base.OnPointerWheelChanged(e);
         var step = Decimals > 0 ? Math.Pow(10, -Decimals) : Math.Max(1, (Maximum - Minimum) / 100);
-        // 往下滾＝變大、往上滾＝變小（與 NumberBox 一致）。
-        SetAndNotify(Value - Math.Sign(e.Delta.Y) * step);
+        SetAndNotify(Value + WheelInput.Direction(e) * WheelInput.Notches(e) * step); // 往上滾＝變大
         DragCompleted?.Invoke(Value);
         e.Handled = true;
     }

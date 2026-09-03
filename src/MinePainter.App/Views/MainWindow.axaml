@@ -1,4 +1,4 @@
-<Window xmlns="https://github.com/avaloniaui"
+﻿<Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:views="using:MinePainter.App.Views"
         xmlns:controls="using:MinePainter.App.Controls"
@@ -189,7 +189,8 @@
         <StackPanel x:Name="SmoothingGroup" Orientation="Horizontal" Spacing="5" VerticalAlignment="Center"
                     ToolTip.Tip="手抖穩定：越高線條越滑、筆尖越落後游標">
           <TextBlock Text="平滑：" FontSize="12" VerticalAlignment="Center" />
-          <controls:BarSlider x:Name="SmoothingBar" Minimum="0" Maximum="100" Value="50" Width="120" Suffix="%" />
+          <controls:BarSlider x:Name="SmoothingBar" Minimum="0" Maximum="100" Value="50" Width="120" Suffix="%"
+                              ToolTip.Tip="手抖穩定：越高線條越滑、筆尖越落後游標&#10;雙擊重設為 50%" />
         </StackPanel>
 
         <StackPanel x:Name="OpacityGroup" Orientation="Horizontal" Spacing="5" VerticalAlignment="Center">
@@ -257,7 +258,8 @@
         <StackPanel x:Name="BgEraserGroup" Orientation="Horizontal" Spacing="5" VerticalAlignment="Center" IsVisible="False">
           <TextBlock Text="柔邊：" FontSize="12" VerticalAlignment="Center"
                      ToolTip.Tip="色差超過容許度後的漸層帶寬度；髮絲、毛邊靠它拿到半透明" />
-          <controls:BarSlider x:Name="SoftnessBar" Minimum="0" Maximum="100" Value="50" Width="120" Suffix="%" />
+          <controls:BarSlider x:Name="SoftnessBar" Minimum="0" Maximum="100" Value="50" Width="120" Suffix="%"
+                              ToolTip.Tip="色差超過容許度後的漸層帶寬度；髮絲、毛邊靠它拿到半透明&#10;雙擊重設為 50%" />
           <TextBlock Text="取樣：" FontSize="12" VerticalAlignment="Center" />
           <ComboBox x:Name="BgSamplingCombo" Width="72" FontSize="12"
                     ToolTip.Tip="連續：每一步都以筆刷中心的顏色為背景色

@@ -1,4 +1,4 @@
-using Avalonia;
+﻿using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
@@ -66,7 +66,11 @@ public sealed class PalettePanelContent : UserControl
         _wheel = new ColorWheel { VerticalAlignment = VerticalAlignment.Top };
         _wheel.HueSatChanged += OnWheelChanged;
 
-        _valueBar = new BarSlider { Minimum = 0, Maximum = 100, Value = 0, Label = "明度", Suffix = "%", Height = 20 };
+        // 雙擊重設（全專案一致）：顏色類拉條的「預設」＝0，三個通道都歸零就是預設前景色（黑）
+        _valueBar = new BarSlider
+        {
+            Minimum = 0, Maximum = 100, Value = 0, Label = "明度", Suffix = "%", Height = 20, DefaultValue = 0,
+        };
         _valueBar.ValueChanged += _ => OnValueBarChanged();
 
         _current = new Border
@@ -195,7 +199,7 @@ public sealed class PalettePanelContent : UserControl
 
     private BarSlider MakeChannel(string label)
     {
-        var bar = new BarSlider { Minimum = 0, Maximum = 255, Label = label, Height = 20 };
+        var bar = new BarSlider { Minimum = 0, Maximum = 255, Label = label, Height = 20, DefaultValue = 0 };
         bar.ValueChanged += _ => OnChannelChanged();
         return bar;
     }

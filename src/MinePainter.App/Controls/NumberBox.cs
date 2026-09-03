@@ -1,4 +1,4 @@
-using Avalonia;
+﻿using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 
@@ -133,11 +133,10 @@ public sealed class NumberBox : UserControl
     protected override void OnPointerWheelChanged(PointerWheelEventArgs e)
     {
         base.OnPointerWheelChanged(e);
-        // 往下滾＝變大、往上滾＝變小。
-        var up = -Math.Sign(e.Delta.Y);
+        var up = WheelInput.Direction(e); // 往上滾＝變大
         if (up != 0)
         {
-            var notches = Math.Max(1, (int)Math.Round(Math.Abs(e.Delta.Y)));
+            var notches = WheelInput.Notches(e);
             var v = _value;
             for (var i = 0; i < notches; i++)
                 v = AdaptiveStep ? NextAdaptive(v, up > 0) : v + up * Step;

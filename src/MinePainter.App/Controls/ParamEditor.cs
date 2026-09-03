@@ -1,4 +1,4 @@
-using Avalonia;
+﻿using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Layout;
@@ -150,7 +150,7 @@ public sealed class ParamEditor : StackPanel
         };
         bar.DragCompleted += _ => { if (!_suppress) Committed?.Invoke(Current); };
         bar.Tag = s;
-        SetResettable(bar, DefaultOf(s.Get), s.Decimals);
+        SetResettable(bar, DefaultOf(s.Get));
         if (!s.IsSeed) return bar;
 
         // 亂數種子：加一顆「重新產生」骰子（paint.net 的 Reseed）
@@ -189,7 +189,8 @@ public sealed class ParamEditor : StackPanel
             Value = an.Get(Current),
             VerticalAlignment = VerticalAlignment.Center,
         };
-        SetResettable(bar, DefaultOf(an.Get), 0);
+        SetResettable(bar, DefaultOf(an.Get));
+        dial.DefaultValue = DefaultOf(an.Get); // 轉盤與拉條是同一個值，雙擊行為也一致
         dial.ValueChanged += v =>
         {
             if (_suppress) return;
@@ -214,12 +215,10 @@ public sealed class ParamEditor : StackPanel
         return new DockPanel { Children = { dial, bar } };
     }
 
-    /// <summary>滑桿雙擊回預設值（paint.net 的「重設」；沒有預設值可回時不掛）。</summary>
-    private static void SetResettable(BarSlider bar, double? def, int decimals)
+    /// <summary>滑桿雙擊回預設值（提示由 BarSlider 自己補；效果沒有宣告預設值時維持原值）。</summary>
+    private static void SetResettable(BarSlider bar, double? def)
     {
-        if (def == null) return;
-        bar.DefaultValue = def;
-        ToolTip.SetTip(bar, $"雙擊重設為 {def.Value.ToString(decimals > 0 ? "F" + decimals : "0")}{bar.Suffix}");
+        if (def != null) bar.DefaultValue = def;
     }
 
     private Control BuildColor(ColorParam col)
@@ -338,7 +337,12 @@ public sealed class ParamEditor : StackPanel
             remove.IsEnabled = editor.Stops.Count > 2;
             _suppress = false;
         }
-        editor.SelectionChanged += _ => SyncSelected();
+        editor.SelectionChanged += _ =>
+        {
+            SyncSelected();
+            // 雙擊重設（全專案一致）：節點位置沒有「出廠預設」，回到「選中它的當下」最合理
+            position.DefaultValue = editor.SelectedStop.Position * 100;
+        };
         editor.Changed += stops =>
         {
             if (_suppress) return;
@@ -347,6 +351,7 @@ public sealed class ParamEditor : StackPanel
         };
         editor.Committed += _ => { if (!_suppress) Committed?.Invoke(Current); };
         SyncSelected();
+        position.DefaultValue = editor.SelectedStop.Position * 100;
 
         var label = new TextBlock { Text = gr.Label, FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
         var row = new DockPanel { Margin = new Thickness(0, 2, 0, 0) };

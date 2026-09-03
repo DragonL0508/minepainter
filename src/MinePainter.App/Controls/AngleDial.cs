@@ -1,4 +1,4 @@
-using Avalonia;
+﻿using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
@@ -22,6 +22,12 @@ public sealed class AngleDial : Control
 
     public event Action<double>? ValueChanged;
     public event Action<double>? DragCompleted;
+
+    /// <summary>雙擊左鍵要回到的值（與拉條同一套約定，見 <see cref="BarSlider.DefaultValue"/>）。</summary>
+    public double? DefaultValue { get; set; }
+
+    /// <summary>滾輪一格轉幾度。</summary>
+    public double Step { get; set; } = 1;
 
     private bool _dragging;
 
@@ -76,10 +82,39 @@ public sealed class AngleDial : Control
         if (notify) ValueChanged?.Invoke(deg);
     }
 
+    /// <summary>設定角度並通知（滾輪／雙擊用；不經過指標位置換算）。</summary>
+    private void SetAndNotify(double deg)
+    {
+        if (Minimum >= 0 && deg < 0) deg += 360;
+        deg = Math.Clamp(deg, Minimum, Maximum);
+        if (Math.Abs(deg - Value) < 0.001) return;
+        SetCurrentValue(ValueProperty, deg);
+        ValueChanged?.Invoke(deg);
+        DragCompleted?.Invoke(deg);
+    }
+
+    protected override void OnPointerWheelChanged(PointerWheelEventArgs e)
+    {
+        base.OnPointerWheelChanged(e);
+        SetAndNotify(Value + WheelInput.Direction(e) * WheelInput.Notches(e) * Step); // 往上滾＝變大
+        e.Handled = true;
+    }
+
     protected override void OnPointerPressed(PointerPressedEventArgs e)
     {
         base.OnPointerPressed(e);
         if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
+
+        // 雙擊＝回到預設值（第一下已經把指針轉到指標處，這一下要蓋掉它）
+        if (e.ClickCount == 2 && DefaultValue is { } def)
+        {
+            _dragging = false;
+            e.Pointer.Capture(null);
+            SetAndNotify(def);
+            e.Handled = true;
+            return;
+        }
+
         _dragging = true;
         e.Pointer.Capture(this);
         Apply(e.GetPosition(this), e.KeyModifiers, notify: true);
