@@ -1,6 +1,11 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Input;
 using Avalonia.Layout;
+using Avalonia.Threading;
+using Material.Icons;
+using Material.Icons.Avalonia;
+using MinePainter.App.Platform;
 using SkiaSharp;
 
 namespace MinePainter.App.Controls;
@@ -9,6 +14,8 @@ namespace MinePainter.App.Controls;
 /// 選色面板（效果參數的顏色用）：色輪（色相／飽和度）＋明度＋不透明度＋十六進位，
 /// 上方一列「最近使用」＋色票格（灰階一欄、12 色相各六階）—— 白／黑／純色一點就到，
 /// 不必在色輪中心跟明度滑桿之間來回摸。
+/// 十六進位旁邊有滴管：按住拖到螢幕任何地方放開即取色（拖的途中即時預覽），
+/// 或點一下進入吸色模式、再點一下取色（Esc 取消）。
 /// 拖曳中發 <see cref="Changed"/>（即時預覽），放開發 <see cref="Committed"/>。
 /// </summary>
 public sealed class ColorPickerPanel : StackPanel
@@ -25,6 +32,8 @@ public sealed class ColorPickerPanel : StackPanel
     private readonly Button[] _recentButtons = new Button[Views.PalettePanelContent.SwatchColumns];
     private bool _suppress;
     private SKColor _color = SKColors.Black;
+    private DispatcherTimer? _pickTimer;
+    private SKColor _pickOrigin;
 
     private const double Cell = 15; // 13 欄 × 15 = 195，塞得進 200 寬的面板
 
@@ -71,6 +80,7 @@ public sealed class ColorPickerPanel : StackPanel
             Spacing = 6,
             Children = { _swatch, new TextBlock { Text = "#", FontSize = 12, VerticalAlignment = VerticalAlignment.Center }, _hex },
         };
+        if (ScreenColorSampler.IsSupported) hexRow.Children.Add(BuildEyedropper());
         Children.Add(BuildRecentRow());
         Children.Add(BuildSwatchGrid());
         Children.Add(_wheel);
@@ -78,7 +88,118 @@ public sealed class ColorPickerPanel : StackPanel
         Children.Add(_alpha);
         Children.Add(hexRow);
         Committed += c => Views.PalettePanelContent.RememberRecent(c);
+        DetachedFromVisualTree += (_, _) => StopPickMode(restore: true);
         SyncFromColor();
+    }
+
+    // ---- 螢幕吸色 ----
+
+    private Control BuildEyedropper()
+    {
+        var btn = new Button
+        {
+            Width = 22,
+            Height = 22,
+            Padding = new Thickness(0),
+            Content = new MaterialIcon { Kind = MaterialIconKind.Eyedropper, Width = 14, Height = 14 },
+            Cursor = new Cursor(StandardCursorType.Cross),
+        };
+        ToolTip.SetTip(btn, "吸色：按住拖到螢幕上任何顏色放開；或點一下、再到畫面上點一下（Esc 取消）");
+
+        var dragging = false;
+        var moved = false;
+        btn.AddHandler(InputElement.PointerPressedEvent, (_, e) =>
+        {
+            if (!e.GetCurrentPoint(btn).Properties.IsLeftButtonPressed) return;
+            if (_pickTimer != null) { StopPickMode(restore: true); e.Handled = true; return; }
+            dragging = true;
+            moved = false;
+            _pickOrigin = _color;
+            e.Pointer.Capture(btn);
+            e.Handled = true;
+        }, Avalonia.Interactivity.RoutingStrategies.Tunnel);
+        btn.AddHandler(InputElement.PointerMovedEvent, (_, e) =>
+        {
+            if (!dragging) return;
+            // 離開按鈕本身才算「拖」——在按鈕上晃一下不該吸到按鈕自己的顏色
+            if (!moved && new Rect(btn.Bounds.Size).Contains(e.GetPosition(btn))) return;
+            moved = true;
+            ApplyScreenSample(commit: false);
+            e.Handled = true;
+        }, Avalonia.Interactivity.RoutingStrategies.Tunnel);
+        btn.AddHandler(InputElement.PointerReleasedEvent, (_, e) =>
+        {
+            if (!dragging) return;
+            dragging = false;
+            e.Pointer.Capture(null);
+            e.Handled = true;
+            if (moved)
+            {
+                ApplyScreenSample(commit: true);
+                return;
+            }
+            StartPickMode(btn);
+        }, Avalonia.Interactivity.RoutingStrategies.Tunnel);
+        btn.AddHandler(InputElement.PointerCaptureLostEvent, (_, _) =>
+        {
+            if (!dragging) return;
+            dragging = false;
+            if (moved) ApplyScreenSample(commit: true);
+        });
+        return btn;
+    }
+
+    /// <summary>吸色模式：modal 視窗外的點擊到不了這裡，所以用計時器輪詢游標＋左鍵狀態。</summary>
+    private void StartPickMode(Button btn)
+    {
+        StopPickMode(restore: false);
+        _pickOrigin = _color;
+        btn.Classes.Add("accent");
+        var wasDown = ScreenColorSampler.IsLeftButtonDown();
+        _pickTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(30), DispatcherPriority.Input, (_, _) =>
+        {
+            if (_pickTimer == null) return;
+            if (ScreenColorSampler.IsEscapeDown())
+            {
+                StopPickMode(restore: true);
+                return;
+            }
+            var down = ScreenColorSampler.IsLeftButtonDown();
+            if (down && !wasDown)
+            {
+                ApplyScreenSample(commit: true);
+                StopPickMode(restore: false);
+                return;
+            }
+            wasDown = down;
+            ApplyScreenSample(commit: false); // 游標掃過即時預覽
+        });
+        _pickTimer.Tag = btn;
+        _pickTimer.Start();
+    }
+
+    private void StopPickMode(bool restore)
+    {
+        if (_pickTimer == null) return;
+        var timer = _pickTimer;
+        _pickTimer = null;
+        timer.Stop();
+        if (timer.Tag is Button btn) btn.Classes.Remove("accent");
+        if (restore && _color != _pickOrigin)
+        {
+            Color = _pickOrigin;
+            Changed?.Invoke(_color);
+        }
+    }
+
+    private void ApplyScreenSample(bool commit)
+    {
+        if (ScreenColorSampler.SampleUnderCursor() is not { } rgb) return;
+        var c = rgb.WithAlpha(_color.Alpha); // 跟色票一樣保留目前的不透明度
+        if (c == _color && !commit) return;
+        Color = c;
+        Changed?.Invoke(c);
+        if (commit) Committed?.Invoke(c);
     }
 
     // ---- 色票（點一下直接選色，保留目前的不透明度）----
