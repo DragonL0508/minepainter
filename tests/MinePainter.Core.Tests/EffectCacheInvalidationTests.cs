@@ -323,4 +323,28 @@ public class TextOutlineOverhangTests
         Assert.True(ct <= it - 39 && cb >= ib + 39 && cl <= il - 39 && cr >= ir + 39,
             $"outline cache ({cl},{ct})-({cr},{cb}) vs ink ({il},{it})-({ir},{ib})");
     }
+
+    [Fact]
+    public void Bounds_ContainsOwnEffects_WhenTextIsStretchedHorizontally()
+    {
+        // 文字被拉寬（ScaleX=2）時外框／陰影／光暈在 x 方向也跟著放大：Bounds 左右要蓋得住實際著墨
+        var el = new TextElement
+        {
+            Text = "Wgj", FontFamily = "Arial", FontSize = 200, ScaleX = 2f, Position = new SKPoint(400, 300),
+            Stroke = new TextStroke { Width = 30, Outer = new TextStroke { Width = 30, Color = SKColors.Red } },
+            Shadow = new TextShadow { Distance = 30, Blur = 30, Spread = 10 },
+            Glow = new TextGlow { Size = 40, Spread = 10 },
+        };
+        const int W = 2000, H = 1000;
+        using var bmp = new SKBitmap(new SKImageInfo(W, H, SKColorType.Bgra8888, SKAlphaType.Premul));
+        using (var c = new SKCanvas(bmp)) { c.Clear(SKColors.Transparent); el.Render(c); }
+        int il = int.MaxValue, it = int.MaxValue, ir = -1, ib = -1;
+        for (var y = 0; y < H; y++)
+        for (var x = 0; x < W; x++)
+            if (bmp.GetPixel(x, y).Alpha > 0) { il = Math.Min(il, x); it = Math.Min(it, y); ir = Math.Max(ir, x); ib = Math.Max(ib, y); }
+        Assert.True(ir > il && ib > it);
+        var b = el.Bounds;
+        Assert.True(b.Left <= il && b.Right >= ir && b.Top <= it && b.Bottom >= ib,
+            $"Bounds ({b.Left},{b.Top})-({b.Right},{b.Bottom}) must contain ink ({il},{it})-({ir},{ib})");
+    }
 }

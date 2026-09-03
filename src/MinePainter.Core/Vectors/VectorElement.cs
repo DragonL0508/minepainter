@@ -197,6 +197,13 @@ public sealed record TextElement : VectorElement
         }
     }
 
+    /// <summary>
+    /// 效果外擴在 x 方向的倍率：繪製時整體套 canvas.Scale(ScaleX, 1)，外框／陰影／光暈的寬度
+    /// 在水平方向也跟著被拉寬（拉寬兩倍的字，外框左右就是兩倍厚）——外擴量不乘上去，
+    /// 左右就少算、被 tile 直線切掉。縮窄時不縮（保守）。
+    /// </summary>
+    private float EffectPadScaleX => Math.Max(1f, Math.Abs(ScaleX));
+
     /// <summary>外框／陰影／光暈往外長出來的量（對稱取最大值，保守）。</summary>
     private float EffectPad
     {
@@ -228,7 +235,7 @@ public sealed record TextElement : VectorElement
         // 只映射排版框（含著墨），效果外擴在變形後再往外加（效果本來就是在算繪結果上長出去的）
         var deformed = Deform!.MapBounds(MapLocalToDoc(CoreLocalBounds));
         var pad = EffectPad + 2;
-        deformed.Inflate(pad, pad);
+        deformed.Inflate(pad * EffectPadScaleX, pad);
         return SKRectI.Ceiling(deformed);
     }
 
@@ -271,7 +278,7 @@ public sealed record TextElement : VectorElement
         {
             var local = CoreLocalBounds;
             var pad = EffectPad;
-            if (pad > 0) local.Inflate(pad, pad);
+            if (pad > 0) local.Inflate(pad * EffectPadScaleX, pad);
             return local;
         }
     }
