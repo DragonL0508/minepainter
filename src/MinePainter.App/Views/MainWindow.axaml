@@ -137,6 +137,12 @@
                       ToolTip.Tip="關（預設，同 paint.net）：放大時顯示真實像素、硬邊；開：放大時雙線性插值，看起來平滑但看不到真實像素邊界。只影響畫面顯示，不影響輸出。" />
           </MenuItem>
 
+          <!-- 小工具：之後放各種獨立小玩具，先留空殼（空的 MenuItem 沒有子清單、點下去不會展開，
+               所以放一個停用的佔位項，點開時看得出是「還沒有東西」而不是壞掉） -->
+          <MenuItem x:Name="GadgetsMenu" Header="小工具(_G)">
+            <MenuItem x:Name="GadgetsPlaceholderItem" Header="（尚無小工具）" IsEnabled="False" />
+          </MenuItem>
+
           <MenuItem Header="設定(_S)">
             <MenuItem Header="快捷鍵(_K)…" Click="OnShortcutsClicked" />
             <MenuItem Header="主題(_T)…" Click="OnThemeClicked" />
