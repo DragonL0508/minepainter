@@ -1286,7 +1286,7 @@ public sealed class EditorSession : IDisposable
     }
 
     /// <summary>
-    /// 取作用中圖層在選取範圍內的像素（無選取＝整個畫布範圍；只取像素，不含文字物件）。
+    /// 取作用中圖層在選取範圍內「看得到的樣子」（無選取＝整個畫布範圍）。
     /// 呼叫者接手回傳影像的擁有權；沒有內容可複製時回傳 null。
     /// </summary>
     public SKImage? CopyToImage() => CopyToImage(out _);
@@ -1294,11 +1294,19 @@ public sealed class EditorSession : IDisposable
     /// <summary>
     /// 同 <see cref="CopyToImage()"/>，另外回報取像的左上角文件座標，
     /// 讓貼上能貼回原處（<paramref name="origin"/> 在回傳 null 時無意義）。
+    ///
+    /// 取的是**算繪後的樣子**：效果堆疊（外框／陰影…）與文字物件都在裡面，群組則是整組合成後的樣子。
+    /// 貼到別的程式去要的就是眼睛看到的那張圖，不是圖層底下那份原始像素
+    /// （文字圖層根本沒有像素，只取基底的話會複製到一張空白）。
     /// </summary>
     public SKImage? CopyToImage(out SKPointI origin)
     {
         origin = default;
-        if (Document.ActiveLayer is not RasterLayer layer) return null;
+        if (Document.ActiveLayer is not { CanHaveEffects: true } node) return null;
+
+        // 效果快取要先是最新的（複製是使用者按下去才發生的一次性動作，等得起）
+        if (node.HasActiveEffects) LayerEffectRenderer.RenderLayerNow(Document, node);
+
         var selection = Selection is { IsEmpty: false } s ? s : null;
         var bounds = selection != null
             ? SKRectI.Intersect(selection.Bounds, Document.Bounds)
@@ -1316,12 +1324,69 @@ public sealed class EditorSession : IDisposable
         {
             canvas.Save();
             canvas.Translate(-bounds.Left, -bounds.Top);
-            FloatingSelection.DrawLayerPixels(layer, canvas, bounds);
+            DrawNodeAppearanceLocked(node, canvas, bounds);
             canvas.Restore();
             if (selection != null) FloatingSelection.ApplySelectionMask(selection, canvas, bounds);
         }
         canvas.Flush();
         return surface.Snapshot();
+    }
+
+    /// <summary>
+    /// 把一個節點「畫面上的樣子」畫進 canvas（doc 座標）。在 Document.SyncRoot 內呼叫。
+    /// 效果快取已算好時它就是最終樣貌（文字物件也已經併在裡面）。
+    /// </summary>
+    private static void DrawNodeAppearanceLocked(LayerNode node, SKCanvas canvas, SKRectI docRect)
+    {
+        if (node.EffectsRendered)
+        {
+            DrawSurface(node.FxCache.Surface, node.EffectOffset, canvas, docRect);
+            return;
+        }
+
+        switch (node)
+        {
+            case RasterLayer raster:
+                FloatingSelection.DrawLayerPixels(raster, canvas, docRect);
+                foreach (var el in raster.Elements)
+                {
+                    if (el.Id == raster.HiddenElementId) continue;
+                    el.Render(canvas);
+                }
+                break;
+
+            case GroupLayer group:
+                DrawGroupPixels(group, canvas, docRect);
+                break;
+        }
+    }
+
+    private static void DrawSurface(TileSurface source, SKPointI offset, SKCanvas canvas, SKRectI docRect)
+    {
+        var rect = new SKRectI(
+            docRect.Left - offset.X, docRect.Top - offset.Y,
+            docRect.Right - offset.X, docRect.Bottom - offset.Y);
+        foreach (var idx in TileIndex.CoveringRect(rect))
+        {
+            var tile = source.GetTileForRead(idx);
+            if (tile == null) continue;
+            using var pixmap = tile.AsPixmap();
+            using var img = SKImage.FromPixels(pixmap);
+            var tileRect = idx.ToPixelRect();
+            canvas.DrawImage(img, tileRect.Left + offset.X, tileRect.Top + offset.Y);
+        }
+    }
+
+    private static unsafe void DrawGroupPixels(GroupLayer group, SKCanvas canvas, SKRectI docRect)
+    {
+        var pixels = Compositing.Compositor.StaticGroupSourceLocked(group, docRect);
+        if (pixels.Length < docRect.Width * docRect.Height) return;
+        fixed (uint* ptr = pixels)
+        {
+            var info = new SKImageInfo(docRect.Width, docRect.Height, SKColorType.Bgra8888, SKAlphaType.Premul);
+            using var img = SKImage.FromPixels(info, (IntPtr)ptr, docRect.Width * 4);
+            canvas.DrawImage(img, docRect.Left, docRect.Top);
+        }
     }
 
     /// <summary>

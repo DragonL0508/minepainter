@@ -1,9 +1,12 @@
-﻿using MinePainter.Core.History;
+﻿using MinePainter.Core.Adjustments;
+using MinePainter.Core.Effects;
+using MinePainter.Core.History;
 using MinePainter.Core.IO;
 using MinePainter.Core.Layers;
 using MinePainter.Core.Selections;
 using MinePainter.Core.Tiles;
 using MinePainter.Core.Tools;
+using MinePainter.Core.Vectors;
 using SkiaSharp;
 using Xunit;
 
@@ -205,6 +208,70 @@ public class ClipboardOpsTests
         session.Selection = null;
         using var whole = session.CopyToImage(out var wholeOrigin);
         Assert.Equal(new SKPointI(0, 0), wholeOrigin); // 無選取＝整個畫布，原點就是 (0,0)
+    }
+
+    [Fact]
+    public void Copy_IncludesRenderedEffects()
+    {
+        using var session = NewSession();
+        var layer = (RasterLayer)session.Document.ActiveLayer!;
+        lock (session.Document.SyncRoot) layer.Surface.Fill(new SKRectI(0, 0, 64, 64), new SKColor(100, 100, 100));
+        layer.InvalidateAll();
+
+        LayerEffectCommands.Add(session.Document, session.History, layer,
+            LayerEffect.Create(new AdjustmentEffect(new InvertAdjustment())));
+
+        using var image = session.CopyToImage();
+        Assert.NotNull(image);
+        using var bmp = SKBitmap.FromImage(image);
+        // 複製出去的是眼睛看到的樣子（已反相），不是圖層底下那份原始像素
+        Assert.Equal(155, bmp.GetPixel(10, 10).Red);
+        Assert.Equal(100, Px(layer, 10, 10).Red); // 基底像素完全沒被動到
+    }
+
+    [Fact]
+    public void Copy_OnTextLayer_ReturnsTheRenderedText()
+    {
+        using var session = NewSession();
+        var doc = session.Document;
+        var text = VectorCommands.CreateTextLayerSilently(doc);
+        var element = new TextElement
+        {
+            Text = "AB", Position = new SKPoint(20, 20), FontSize = 80, Color = SKColors.Red,
+        };
+        lock (doc.SyncRoot) text.AddElement(element);
+        VectorCommands.CommitNewTextLayer(doc, session.History, text, element, "新增文字");
+
+        using var image = session.CopyToImage();
+        Assert.NotNull(image);
+        using var bmp = SKBitmap.FromImage(image!);
+        var painted = 0;
+        for (var y = 0; y < bmp.Height; y += 2)
+        for (var x = 0; x < bmp.Width; x += 2)
+            if (bmp.GetPixel(x, y).Alpha > 0) painted++;
+        Assert.True(painted > 0, "文字圖層沒有像素，只取基底會複製到一張空白");
+    }
+
+    [Fact]
+    public void Copy_OnGroup_ReturnsTheComposite()
+    {
+        using var session = NewSession();
+        var doc = session.Document;
+        var group = new GroupLayer { Name = "群組" };
+        var child = new RasterLayer { Name = "內容" };
+        lock (doc.SyncRoot)
+        {
+            doc.Root.Add(group);
+            group.Add(child);
+            child.Surface.Fill(new SKRectI(0, 0, 40, 40), SKColors.Blue);
+            doc.ActiveLayer = group;
+        }
+        child.InvalidateAll();
+
+        using var image = session.CopyToImage();
+        Assert.NotNull(image);
+        using var bmp = SKBitmap.FromImage(image!);
+        Assert.Equal(SKColors.Blue, bmp.GetPixel(10, 10)); // 以前選群組時複製不到東西
     }
 
     [Fact]

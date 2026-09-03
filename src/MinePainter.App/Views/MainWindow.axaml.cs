@@ -2016,6 +2016,13 @@ public partial class MainWindow : Window
             return;
         }
 
+        // 剪下 = 複製 + 挖掉。挖不掉的（文字圖層沒有像素、群組不是繪製對象）就只是複製，
+        // 不能報「已剪下」—— 內容其實還在。
+        if (session.Document.ActiveLayer is not RasterLayer { IsTextLayer: false })
+        {
+            Toasts.Show("已複製；這個圖層的內容不能剪下（文字要先平面化、群組要選裡面的圖層）");
+            return;
+        }
         var hadSelection = session.Selection is { IsEmpty: false };
         RunCommand(EditCommands.EraseSelection);
         Toasts.Show(hadSelection ? "已剪下選取範圍" : "已剪下整個圖層");
