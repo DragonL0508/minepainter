@@ -16,8 +16,9 @@ public static class FontCatalog
 {
     private static string[]? _families;
 
-    /// <summary>已安裝的字型家族（去重、依語系排序）。</summary>
+    /// <summary>已安裝的字型家族＋內嵌的保底字型（去重、依語系排序）。</summary>
     public static string[] Families => _families ??= SKFontManager.Default.FontFamilies
+        .Append(EmbeddedFonts.FamilyName) // 系統沒安裝也選得到（尤其英文版 Windows 沒中文字型時）
         .Distinct()
         .OrderBy(f => f, StringComparer.CurrentCulture)
         .ToArray();
@@ -71,7 +72,10 @@ public static class FontCatalog
     {
         try
         {
-            var family = new FontFamily(name);
+            // 內嵌字型不在系統裡，只能以 avares 位址取用
+            var family = string.Equals(name, EmbeddedFonts.FamilyName, StringComparison.OrdinalIgnoreCase)
+                ? new FontFamily(EmbeddedFonts.FamilyUri)
+                : new FontFamily(name);
             _ = new Typeface(family).GlyphTypeface;
             return family;
         }

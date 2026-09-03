@@ -1,4 +1,6 @@
 using Avalonia;
+using Avalonia.Media;
+using Avalonia.Media.Fonts;
 
 namespace MinePainter.App;
 
@@ -35,6 +37,16 @@ internal static class Program
                 // 預設 8MB 會讓大量 tile 貼圖每幀重新上傳（cache thrash）；
                 // tile 常駐 GPU 是上屏效能的前提。
                 MaxGpuResourceSizeBytes = 512L * 1024 * 1024,
+            })
+            .With(new FontManagerOptions
+            {
+                // 英文版 Windows 可能一支中日韓字型都沒有（Microsoft JhengHei 這類屬 Features on
+                // Demand），系統後備找不到字 → UI 中文全是豆腐框。內嵌一支墊底，語系無關。
+                // 只當後備不當預設：有系統中文字型的機器維持原本的 Segoe UI 外觀。
+                FontFallbacks =
+                [
+                    new FontFallback { FontFamily = new FontFamily(Services.EmbeddedFonts.FamilyUri) },
+                ],
             })
             .LogToTrace();
 }

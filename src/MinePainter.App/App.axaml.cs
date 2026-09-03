@@ -9,7 +9,12 @@ namespace MinePainter.App;
 
 public partial class App : Application
 {
-    public override void Initialize() => AvaloniaXamlLoader.Load(this);
+    public override void Initialize()
+    {
+        AvaloniaXamlLoader.Load(this);
+        // 畫布排版（Skia）看不到 avares 的內嵌字型，得在任何文字排版之前手動交給 Core
+        Services.EmbeddedFonts.Register();
+    }
 
     public override void OnFrameworkInitializationCompleted()
     {

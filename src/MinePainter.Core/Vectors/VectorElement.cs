@@ -717,8 +717,10 @@ public sealed record TextElement : VectorElement
             _bold = bold;
             _italic = italic;
             _letterSpacing = letterSpacing;
-            _primary = SKTypeface.FromFamilyName(family, style) ?? SKTypeface.Default;
-            _owned.Add(_primary);
+            // 保底字型不在系統裡（是內嵌的），FromFamilyName 找不到它；它也全程共用一份，不進 _owned
+            var primary = BundledFont.ForFamily(family) ?? SKTypeface.FromFamilyName(family, style);
+            if (primary != null && primary != BundledFont.Typeface) _owned.Add(primary);
+            _primary = primary ?? BundledFont.Typeface ?? SKTypeface.Default;
         }
 
         /// <summary>主字面的 font（基線/底線位置一律以它為準，後備段落畫在同一條基線上）。</summary>
@@ -838,10 +840,12 @@ public sealed record TextElement : VectorElement
             if (_primary.ContainsGlyph(codepoint)) return _primary;
             if (_fallbackByCodepoint.TryGetValue(codepoint, out var cached)) return cached ?? _primary;
 
+            // 先問系統（中文版 Windows 就用得到 JhengHei 這些）；整台沒有 CJK 字型時才用內嵌的保底字型
             var match = SKFontManager.Default.MatchCharacter(_primary.FamilyName, _style, null, codepoint);
             if (match != null) _owned.Add(match);
+            else match = BundledFont.Match(codepoint);
             _fallbackByCodepoint[codepoint] = match;
-            return match ?? _primary; // 連系統後備都沒有 → 用主字面畫 .notdef
+            return match ?? _primary; // 連保底字型都沒這個字 → 用主字面畫 .notdef
         }
 
         private SKFont CreateFont(SKTypeface typeface)

@@ -2673,8 +2673,12 @@ public partial class MainWindow : Window
         FontFamilyCombo.SelectionBoxItemTemplate = Services.FontCatalog.SelectionBoxTemplate();
         foreach (var f in _fontFamilies) FontFamilyCombo.Items.Add(f);
 
+        // 預設微軟正黑；英文版 Windows 常常沒裝中文字型，退到內嵌的 Noto Sans TC
         var defaultIdx = Array.IndexOf(_fontFamilies, "Microsoft JhengHei");
+        if (defaultIdx < 0) defaultIdx = Array.IndexOf(_fontFamilies, Services.EmbeddedFonts.FamilyName);
         FontFamilyCombo.SelectedIndex = defaultIdx >= 0 ? defaultIdx : 0;
+        if (FontFamilyCombo.SelectedItem is string picked && Canvas.Session is { } textSession)
+            textSession.Text.FontFamily = picked;
         RepopulateFontStyles(FontFamilyCombo.SelectedItem as string ?? "", 400);
 
         foreach (var k in new[] { "矩形", "橢圓", "直線" }) ShapeKindCombo.Items.Add(k);
