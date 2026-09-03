@@ -17,6 +17,9 @@ internal static class StartupSounds
     private static MixingSampleProvider? _mixer;
     private static bool _disabled;
 
+    /// <summary>播放音量（1 = 原檔）：原檔偏大聲，啟動時嚇人，壓到 30%。</summary>
+    private const float Volume = 0.3f;
+
     public static bool Enabled => AppSettings.Instance.StartupSounds;
 
     /// <summary>啟動畫面出現。</summary>
@@ -61,6 +64,7 @@ internal static class StartupSounds
                     ISampleProvider sample = reader.ToSampleProvider();
                     if (sample.WaveFormat.Channels == 1) sample = new MonoToStereoSampleProvider(sample);
                     if (sample.WaveFormat.SampleRate != 44100) sample = new WdlResamplingSampleProvider(sample, 44100);
+                    sample = new VolumeSampleProvider(sample) { Volume = Volume };
                     _mixer!.AddMixerInput(sample);
                 }
             }
