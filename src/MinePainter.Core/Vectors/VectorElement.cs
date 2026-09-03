@@ -215,8 +215,11 @@ public sealed record TextElement : VectorElement
         {
             var doc = MapLocalToDoc(PaddedLocalBounds);
             if (!HasDeform) return SKRectI.Ceiling(doc);
-            var deformed = Deform!.MapBounds(doc);
-            deformed.Inflate(2, 2); // 邊界取樣的誤差餘裕
+            // 彎曲網格在框外是貝茲外插（三次成長），把含效果外擴的大框整個送進去會爆成離譜的範圍；
+            // 只映射排版框，效果外擴在變形後再往外加（效果本來就是在算繪結果上長出去的）
+            var deformed = Deform!.MapBounds(MapLocalToDoc(LocalBounds));
+            var pad = EffectPad + 2;
+            deformed.Inflate(pad, pad);
             return SKRectI.Ceiling(deformed);
         }
     }

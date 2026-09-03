@@ -369,3 +369,37 @@ public class NudgeTests
         Assert.Equal(new SKPointI(0, 0), layer.Offset);
     }
 }
+
+public class TextFrameSanityTests
+{
+    [Fact]
+    public void TextTransformFrame_HugsInk_AndWarpedBoundsStaySane()
+    {
+        using var session = new EditorSession(ImageCodec.CreateBlankDocument(512, 512, SKColors.Transparent));
+        var doc = session.Document;
+        var text = new RasterLayer { Name = "T" };
+        var el = new TextElement { Text = "Hello", Position = new SKPoint(100, 100), FontSize = 40 };
+        lock (doc.SyncRoot) { doc.Root.Add(text); text.AddElement(el); doc.ActiveLayer = text; }
+        session.ActiveTool = session.Move;
+        session.RefreshSelectionHandles();
+
+        var ink = el.FrameBounds;
+        var t = session.BeginTransform()!;
+        // 變形框 = 著墨框（不是含行高餘裕／效果邊的保守 Bounds）
+        Assert.Equal(ink.Left, t.SourceRect.Left, 1);
+        Assert.Equal(ink.Right, t.SourceRect.Right, 1);
+        Assert.Equal(ink.Bottom, t.SourceRect.Bottom, 1);
+
+        Assert.True(t.EnterWarpMode());
+        Assert.True(t.SetWarp(WarpMesh.Drag(t.Warp!, 5, new SKPoint(0, 15))));
+        t.Apply(preview: false);
+        session.CommitTransform();
+
+        var warped = (TextElement)text.Elements[0];
+        var b = warped.Bounds;
+        var f = warped.FrameBounds;
+        // 失效框可以比框大一點，但不能爆成幾倍大
+        Assert.True(b.Width < ink.Width * 2 && b.Height < ink.Height * 4, $"bounds {b} vs ink {ink}");
+        Assert.True(f.Width < ink.Width * 1.5f && f.Height < ink.Height * 2, $"frame {f} vs ink {ink}");
+    }
+}

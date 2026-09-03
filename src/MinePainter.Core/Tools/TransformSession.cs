@@ -477,8 +477,14 @@ public sealed class TransformSession : IDisposable
                 var elements = layer.HasElements ? layer.Elements.ToArray() : Array.Empty<VectorElement>();
                 foreach (var el in elements)
                 {
-                    var b = el.Bounds;
-                    Accumulate(new SKRect(b.Left, b.Top, b.Right, b.Bottom));
+                    // 使用者看到的框：FrameBounds（貼著字），不是 Bounds（失效用的保守外擴，含效果邊、行高餘裕）
+                    var b = el.FrameBounds;
+                    if (b.IsEmpty)
+                    {
+                        var pb = el.Bounds;
+                        b = new SKRect(pb.Left, pb.Top, pb.Right, pb.Bottom);
+                    }
+                    Accumulate(b);
                 }
 
                 if (pixels == null && elements.Length == 0) continue;
