@@ -54,6 +54,12 @@ set THUMBS=%~dp0src\MinePainter.Thumbnails
 set THUMBSOUT=%THUMBS%\bin\Release\net8.0-windows\win-x64\publish\MinePainterThumbs.dll
 set NATIVEDIR=%~dp0src\MinePainter.App\Assets\Native
 
+rem YouTube preview thumbnails: convert anything dropped in
+rem src\MinePainter.App\Assets\YouTubePreview\_source into the 480x270 .webp
+rem files that get embedded. No-op when nothing changed; never fails the build.
+echo === Packing YouTube preview thumbnails ===
+dotnet run --project tools\ThumbPack --verbosity quiet --nologo
+
 echo === Building .mpp thumbnail handler (NativeAOT) ===
 dotnet publish "%THUMBS%" -c Release -r win-x64 --nologo
 if errorlevel 1 (

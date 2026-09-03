@@ -70,8 +70,9 @@ public static class YouTubeThumbLibrary
     }
 
     /// <summary>
-    /// 把來源資料夾裡的圖片全部轉成內嵌用的 480×270 WebP 寫進輸出資料夾（檔名沿用＝標題）。
-    /// 給 tools/ThumbPack 用；回傳成功轉出的張數。
+    /// 把來源資料夾裡的圖片轉成內嵌用的 480×270 WebP 寫進輸出資料夾（檔名沿用＝標題）。
+    /// 已經有對應的 .webp 且比原檔新就跳過——這支會掛在每次 build 前跑，不能每次都重轉。
+    /// 給 tools/ThumbPack 用；回傳這次實際轉出的張數。
     /// </summary>
     public static int PackFolder(string sourceDir, string outputDir)
     {
@@ -82,6 +83,10 @@ public static class YouTubeThumbLibrary
                          is ".png" or ".jpg" or ".jpeg" or ".webp" or ".bmp")
                      .OrderBy(f => f, StringComparer.Ordinal))
         {
+            var target = Path.Combine(outputDir, Path.GetFileNameWithoutExtension(path) + ".webp");
+            if (File.Exists(target) && File.GetLastWriteTimeUtc(target) >= File.GetLastWriteTimeUtc(path))
+                continue;
+
             using var bitmap = SKBitmap.Decode(path);
             if (bitmap == null)
             {
@@ -96,12 +101,27 @@ public static class YouTubeThumbLibrary
                 continue;
             }
 
-            var target = Path.Combine(outputDir, Path.GetFileNameWithoutExtension(path) + ".webp");
             File.WriteAllBytes(target, webp);
             Console.WriteLine($"{Path.GetFileName(path)} → {Path.GetFileName(target)}（{webp.Length / 1024.0:0.0} KB）");
             count++;
         }
         return count;
+    }
+
+    /// <summary>
+    /// 就地把一張圖轉成內嵌尺寸的 WebP（已經是 480×270 就不動它，回傳 false）。
+    /// 給「直接丟一張 .webp 進來」的情況用：尺寸不對照樣會把 exe 撐肥。
+    /// </summary>
+    public static bool NormalizeFile(string path)
+    {
+        using var bitmap = SKBitmap.Decode(path);
+        if (bitmap == null) return false;
+        if (bitmap is { Width: Width, Height: Height }) return false;
+
+        var webp = Encode(bitmap);
+        if (webp == null) return false;
+        File.WriteAllBytes(path, webp);
+        return true;
     }
 
     /// <summary>置中裁切成 16:9 後縮到 480×270，轉 WebP。</summary>

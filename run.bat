@@ -6,6 +6,12 @@ cd /d "%~dp0"
 
 set EXE=src\MinePainter.App\bin\Release\net8.0\MinePainter.App.exe
 
+rem YouTube preview thumbnails: convert anything dropped in
+rem src\MinePainter.App\Assets\YouTubePreview\_source into the 480x270 .webp
+rem files that get embedded. No-op when nothing changed; never fails the build.
+echo Packing YouTube preview thumbnails...
+dotnet run --project tools\ThumbPack --verbosity quiet --nologo
+
 echo Building MinePainter (Release)...
 dotnet build src\MinePainter.App -c Release -v quiet --nologo
 if errorlevel 1 (
