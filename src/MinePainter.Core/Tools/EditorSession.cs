@@ -1,4 +1,4 @@
-using MinePainter.Core.Compositing;
+﻿using MinePainter.Core.Compositing;
 using MinePainter.Core.Documents;
 using MinePainter.Core.Effects;
 using MinePainter.Core.History;
@@ -1163,14 +1163,22 @@ public sealed class EditorSession : IDisposable
     /// 取作用中圖層在選取範圍內的像素（無選取＝整個畫布範圍；只取像素，不含文字物件）。
     /// 呼叫者接手回傳影像的擁有權；沒有內容可複製時回傳 null。
     /// </summary>
-    public SKImage? CopyToImage()
+    public SKImage? CopyToImage() => CopyToImage(out _);
+
+    /// <summary>
+    /// 同 <see cref="CopyToImage()"/>，另外回報取像的左上角文件座標，
+    /// 讓貼上能貼回原處（<paramref name="origin"/> 在回傳 null 時無意義）。
+    /// </summary>
+    public SKImage? CopyToImage(out SKPointI origin)
     {
+        origin = default;
         if (Document.ActiveLayer is not RasterLayer layer) return null;
         var selection = Selection is { IsEmpty: false } s ? s : null;
         var bounds = selection != null
             ? SKRectI.Intersect(selection.Bounds, Document.Bounds)
             : Document.Bounds;
         if (bounds.Width <= 0 || bounds.Height <= 0) return null;
+        origin = new SKPointI(bounds.Left, bounds.Top);
 
         var info = new SKImageInfo(bounds.Width, bounds.Height, SKColorType.Bgra8888, SKAlphaType.Premul);
         using var surface = SKSurface.Create(info);

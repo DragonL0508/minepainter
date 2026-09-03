@@ -1,4 +1,4 @@
-using MinePainter.Core.History;
+﻿using MinePainter.Core.History;
 using MinePainter.Core.IO;
 using MinePainter.Core.Layers;
 using MinePainter.Core.Selections;
@@ -188,6 +188,23 @@ public class ClipboardOpsTests
         Assert.NotNull(image);
         Assert.Equal(300, image!.Width);
         Assert.Equal(200, image.Height);
+    }
+
+    [Fact]
+    public void Copy_ReportsSelectionOrigin_ForPasteInPlace()
+    {
+        using var session = NewSession(300, 200);
+        using var path = new SKPath();
+        path.AddRect(SKRect.Create(40, 60, 50, 30));
+        session.Selection = SelectionMask.FromPath(path, session.Document.Bounds);
+
+        using var image = session.CopyToImage(out var origin);
+        Assert.NotNull(image);
+        Assert.Equal(new SKPointI(40, 60), origin); // 貼上要貼回這裡，不是可視範圍左上角
+
+        session.Selection = null;
+        using var whole = session.CopyToImage(out var wholeOrigin);
+        Assert.Equal(new SKPointI(0, 0), wholeOrigin); // 無選取＝整個畫布，原點就是 (0,0)
     }
 
     [Fact]

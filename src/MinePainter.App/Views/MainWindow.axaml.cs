@@ -1,4 +1,4 @@
-using Avalonia;
+﻿using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Presenters;
 using Avalonia.Controls.Primitives;
@@ -1972,13 +1972,13 @@ public partial class MainWindow : Window
         var session = CommitPending();
         if (session == null) return;
 
-        using var image = session.CopyToImage();
+        using var image = session.CopyToImage(out var origin);
         if (image == null)
         {
             Toasts.Show("沒有可複製的內容");
             return;
         }
-        Toasts.Show(Platform.ClipboardImage.TrySetImage(image)
+        Toasts.Show(Platform.ClipboardImage.TrySetImage(image, origin)
             ? $"已複製 {image.Width} × {image.Height}"
             : "複製失敗：無法存取剪貼簿");
     }
@@ -1988,13 +1988,13 @@ public partial class MainWindow : Window
         var session = CommitPending();
         if (session == null) return;
 
-        using var image = session.CopyToImage();
+        using var image = session.CopyToImage(out var origin);
         if (image == null)
         {
             Toasts.Show("沒有可剪下的內容");
             return;
         }
-        if (!Platform.ClipboardImage.TrySetImage(image))
+        if (!Platform.ClipboardImage.TrySetImage(image, origin))
         {
             Toasts.Show("剪下失敗：無法存取剪貼簿");
             return;
@@ -2072,11 +2072,16 @@ public partial class MainWindow : Window
         RefreshUiState();
     }
 
-    /// <summary>貼上位置：目前可視範圍的左上角，並夾到「整張影像盡量放得進畫布」的範圍。</summary>
+    /// <summary>
+    /// 貼上位置：本程式複製的內容貼回原座標（換圖層、換文件都一樣，位置不會被重置），
+    /// 外來影像則放在目前可視範圍的左上角。兩者都夾到「整張影像盡量放得進畫布」的範圍。
+    /// </summary>
     private SKPointI PastePosition(EditorSession session, int width, int height)
     {
         var doc = session.Document;
-        var topLeft = Canvas.ViewToDoc(new Point(0, 0));
+        var topLeft = Platform.ClipboardImage.TryGetCopyOrigin(width, height) is { } copyOrigin
+            ? new SKPoint(copyOrigin.X, copyOrigin.Y)
+            : Canvas.ViewToDoc(new Point(0, 0));
         var x = Math.Clamp((int)Math.Round(topLeft.X), 0, Math.Max(0, doc.Width - width));
         var y = Math.Clamp((int)Math.Round(topLeft.Y), 0, Math.Max(0, doc.Height - height));
         return new SKPointI(x, y);

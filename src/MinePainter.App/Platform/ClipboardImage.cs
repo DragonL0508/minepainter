@@ -1,4 +1,4 @@
-using System.Runtime.InteropServices;
+﻿using System.Runtime.InteropServices;
 using SkiaSharp;
 
 namespace MinePainter.App.Platform;
@@ -23,8 +23,16 @@ internal static class ClipboardImage
     private static readonly uint PngFormat =
         OperatingSystem.IsWindows() ? RegisterClipboardFormatW("PNG") : 0;
 
-    /// <summary>把影像放上剪貼簿。回傳是否成功。</summary>
-    public static bool TrySetImage(SKImage image)
+    /// <summary>私有格式：本程式複製時的來源座標與尺寸（x, y, w, h 四個 int32）。</summary>
+    private static readonly uint OriginFormat =
+        OperatingSystem.IsWindows() ? RegisterClipboardFormatW("MinePainter.CopyOrigin") : 0;
+
+    /// <summary>
+    /// 把影像放上剪貼簿。回傳是否成功。
+    /// <paramref name="origin"/> 是這份像素在文件裡的左上角座標，會用私有格式一起放上去，
+    /// 讓本程式貼上時能貼回原處。
+    /// </summary>
+    public static bool TrySetImage(SKImage image, SKPointI origin = default)
     {
         if (!OperatingSystem.IsWindows()) return false;
 
@@ -37,12 +45,45 @@ internal static class ClipboardImage
             if (!EmptyClipboard()) return false;
             var ok = SetData(PngFormat, png.ToArray());
             ok |= SetData(CF_DIB, dib); // 兩個格式擇一成功即可
+            if (ok) SetData(OriginFormat, BuildOrigin(origin, image.Width, image.Height));
             return ok;
         }
         finally
         {
             CloseClipboard();
         }
+    }
+
+    /// <summary>
+    /// 剪貼簿裡本程式留下的來源座標；不是本程式放的、或尺寸跟現在讀到的影像不吻合就回傳 null。
+    /// 別的程式複製時會先清空剪貼簿，這個格式跟著消失，所以不會有殘留的舊座標。
+    /// </summary>
+    public static SKPointI? TryGetCopyOrigin(int width, int height)
+    {
+        if (!OperatingSystem.IsWindows()) return null;
+        if (!TryOpen()) return null;
+        byte[]? bytes;
+        try
+        {
+            bytes = GetBytes(OriginFormat);
+        }
+        finally
+        {
+            CloseClipboard();
+        }
+        if (bytes == null || bytes.Length < 16) return null;
+        if (BitConverter.ToInt32(bytes, 8) != width || BitConverter.ToInt32(bytes, 12) != height) return null;
+        return new SKPointI(BitConverter.ToInt32(bytes, 0), BitConverter.ToInt32(bytes, 4));
+    }
+
+    private static byte[] BuildOrigin(SKPointI origin, int width, int height)
+    {
+        var bytes = new byte[16];
+        BitConverter.GetBytes(origin.X).CopyTo(bytes, 0);
+        BitConverter.GetBytes(origin.Y).CopyTo(bytes, 4);
+        BitConverter.GetBytes(width).CopyTo(bytes, 8);
+        BitConverter.GetBytes(height).CopyTo(bytes, 12);
+        return bytes;
     }
 
     /// <summary>從剪貼簿取影像（BGRA premul）。沒有影像或失敗時回傳 null。</summary>
