@@ -24,3 +24,6 @@ src/MinePainter.App/Assets/Native/
 .claude/
 skills-lock.json
 BackgroundRemover/
+
+# YouTube 縮圖預覽的縮圖原檔：只有轉好的 480×270 WebP 進版控與 exe
+src/MinePainter.App/Assets/YouTubePreview/_source/

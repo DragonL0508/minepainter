@@ -16,7 +16,7 @@
       小工具「YouTube 縮圖預覽」的週邊影片縮圖：檔名＝影片標題（見該資料夾的 README）。
       LogicalName 保留原檔名（含中文），程式靠 ytthumb/ 前綴掃出來；沒放圖也編得起來。
     -->
-    <EmbeddedResource Include="Assets\YouTubePreview\*.png;Assets\YouTubePreview\*.jpg;Assets\YouTubePreview\*.jpeg;Assets\YouTubePreview\*.webp"
+    <EmbeddedResource Include="Assets\YouTubePreview\*.webp"
                       LogicalName="ytthumb/%(Filename)%(Extension)" />
     <!--
       檔案總管的 .mpp 縮圖處理常式：publish.bat 會先把 MinePainter.Thumbnails 用

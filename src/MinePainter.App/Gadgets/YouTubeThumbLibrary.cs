@@ -7,18 +7,25 @@ namespace MinePainter.App.Gadgets;
 public sealed record YouTubeThumb(string Title, byte[] Webp);
 
 /// <summary>
-/// 「YouTube 縮圖預覽」週邊影片用的內建縮圖庫：Assets/YouTubePreview/ 下的圖片
+/// 「YouTube 縮圖預覽」週邊影片用的內建縮圖庫：Assets/YouTubePreview/ 下的 <c>.webp</c>
 /// 以 <c>ytthumb/檔名</c> 內嵌進組件，檔名（去副檔名）就是影片標題。
 /// <para>
-/// 讀進來後一律置中裁切成 16:9 並縮到 480×270 再轉 WebP：預覽網頁把每張圖 base64
-/// 內嵌，原尺寸直接塞會讓單一 HTML 破十 MB。結果快取在靜態欄位，只算一次。
+/// 進版控的一律是 <see cref="PackFolder"/> 轉好的 480×270 WebP，不是原檔：原尺寸 PNG
+/// 一張就一兩 MB，直接內嵌會讓 exe 肥好幾十 MB，而預覽網頁還要再 base64 一次。
+/// 尺寸不合的圖仍會在載入時補轉一次（安全網），結果快取在靜態欄位。
 /// </para>
 /// </summary>
 public static class YouTubeThumbLibrary
 {
     private const string Prefix = "ytthumb/";
-    private const int Width = 480;
-    private const int Height = 270;
+
+    /// <summary>內嵌尺寸：卡片在 1920 下寬 517，480 已足夠；再大只是把 exe 與 HTML 撐肥。</summary>
+    public const int Width = 480;
+
+    public const int Height = 270;
+
+    /// <summary>WebP 品質：80 在這個尺寸下看不出壓縮痕跡，一張約 12–25 KB。</summary>
+    public const int Quality = 80;
 
     private static IReadOnlyList<YouTubeThumb>? _cache;
 
@@ -37,12 +44,12 @@ public static class YouTubeThumbLibrary
             {
                 using var stream = assembly.GetManifestResourceStream(name);
                 if (stream == null) continue;
-                using var data = SKData.Create(stream);
-                using var bitmap = SKBitmap.Decode(data);
-                if (bitmap == null) continue; // 壞檔就跳過，不要讓整個小工具開不起來
+                using var memory = new MemoryStream();
+                stream.CopyTo(memory);
+                var raw = memory.ToArray();
 
-                var webp = Encode(bitmap);
-                if (webp == null) continue;
+                var webp = Normalize(raw);
+                if (webp == null) continue; // 壞檔就跳過，不要讓整個小工具開不起來
                 var file = name[Prefix.Length..];
                 list.Add(new YouTubeThumb(Path.GetFileNameWithoutExtension(file), webp));
             }
@@ -54,7 +61,50 @@ public static class YouTubeThumbLibrary
         return list;
     }
 
-    /// <summary>置中裁切成 16:9 後縮到 480×270，轉 WebP（q80）。</summary>
+    /// <summary>已經是 480×270 的就原封不動用（正常情況），否則當場補轉一次。</summary>
+    private static byte[]? Normalize(byte[] raw)
+    {
+        using var bitmap = SKBitmap.Decode(raw);
+        if (bitmap == null) return null;
+        return bitmap is { Width: Width, Height: Height } ? raw : Encode(bitmap);
+    }
+
+    /// <summary>
+    /// 把來源資料夾裡的圖片全部轉成內嵌用的 480×270 WebP 寫進輸出資料夾（檔名沿用＝標題）。
+    /// 給 tools/ThumbPack 用；回傳成功轉出的張數。
+    /// </summary>
+    public static int PackFolder(string sourceDir, string outputDir)
+    {
+        Directory.CreateDirectory(outputDir);
+        var count = 0;
+        foreach (var path in Directory.EnumerateFiles(sourceDir)
+                     .Where(f => Path.GetExtension(f).ToLowerInvariant()
+                         is ".png" or ".jpg" or ".jpeg" or ".webp" or ".bmp")
+                     .OrderBy(f => f, StringComparer.Ordinal))
+        {
+            using var bitmap = SKBitmap.Decode(path);
+            if (bitmap == null)
+            {
+                Console.WriteLine($"跳過（讀不出來）：{Path.GetFileName(path)}");
+                continue;
+            }
+
+            var webp = Encode(bitmap);
+            if (webp == null)
+            {
+                Console.WriteLine($"跳過（編碼失敗）：{Path.GetFileName(path)}");
+                continue;
+            }
+
+            var target = Path.Combine(outputDir, Path.GetFileNameWithoutExtension(path) + ".webp");
+            File.WriteAllBytes(target, webp);
+            Console.WriteLine($"{Path.GetFileName(path)} → {Path.GetFileName(target)}（{webp.Length / 1024.0:0.0} KB）");
+            count++;
+        }
+        return count;
+    }
+
+    /// <summary>置中裁切成 16:9 後縮到 480×270，轉 WebP。</summary>
     private static byte[]? Encode(SKBitmap source)
     {
         var scale = Math.Max(Width / (double)source.Width, Height / (double)source.Height);
@@ -71,7 +121,7 @@ public static class YouTubeThumbLibrary
         }
         surface.Canvas.Flush();
         using var image = surface.Snapshot();
-        using var encoded = image.Encode(SKEncodedImageFormat.Webp, 80);
+        using var encoded = image.Encode(SKEncodedImageFormat.Webp, Quality);
         return encoded?.ToArray();
     }
 }

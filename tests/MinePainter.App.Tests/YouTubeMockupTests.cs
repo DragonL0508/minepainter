@@ -93,4 +93,31 @@ public class YouTubeMockupTests
         Assert.Equal(1280, image.Width);
         File.Delete(path);
     }
+
+    [Fact]
+    public void 內建縮圖庫的圖都是內嵌尺寸()
+    {
+        // 進版控的應該是 ThumbPack 轉好的 480×270 WebP；有人直接丟原檔進來就會被抓到
+        Assert.All(YouTubeThumbLibrary.All, thumb =>
+        {
+            Assert.False(string.IsNullOrWhiteSpace(thumb.Title));
+            using var bitmap = SKBitmap.Decode(thumb.Webp);
+            Assert.NotNull(bitmap);
+            Assert.Equal(YouTubeThumbLibrary.Width, bitmap!.Width);
+            Assert.Equal(YouTubeThumbLibrary.Height, bitmap.Height);
+        });
+    }
+
+    [Fact]
+    public void 有內建縮圖時會內嵌進網頁()
+    {
+        if (YouTubeThumbLibrary.All.Count == 0) return; // 圖庫還沒放圖
+
+        using var doc = MakeDoc(64, 64);
+        var path = YouTubeMockup.Render(doc, new YouTubeMockupOptions { Title = "圖", Channel = "頻道" });
+        var html = File.ReadAllText(path);
+        Assert.Contains("data:image/webp;base64,", html);
+        Assert.Contains(YouTubeThumbLibrary.All[0].Title, html);
+        File.Delete(path);
+    }
 }
