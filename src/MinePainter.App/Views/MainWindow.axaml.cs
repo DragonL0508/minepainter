@@ -218,16 +218,16 @@ public partial class MainWindow : Window
                     }, TimeSpan.FromMilliseconds(1500));
                 }
             }
-            if (debugTextFx == "3")
+            if (debugTextFx is "3" or "4")
             {
-                // =3：切到文字工具、1.5 秒後把工具列的字型下拉打開（驗證下拉清單首次開啟的渲染）
+                // =3：切到文字工具、1.5 秒後把工具列的字型下拉打開（驗證下拉清單首次開啟的渲染）；=4 不開下拉（效能對照組）
                 SelectTool("text");
                 Avalonia.Threading.DispatcherTimer.RunOnce(() =>
                 {
                     // 視窗沒有焦點時 light-dismiss 會立刻把下拉關掉（截不到）；驗證模式先關掉它
                     foreach (var popup in FontFamilyCombo.GetTemplateChildren().OfType<Popup>())
                         popup.IsLightDismissEnabled = false;
-                    FontFamilyCombo.IsDropDownOpen = true;
+                    if (debugTextFx == "3") FontFamilyCombo.IsDropDownOpen = true;
 
                     // MINEPAINTER_DEBUG_PERF=<檔案>：每秒把畫布 fps、主視窗與下拉 popup 的 layout／render 次數寫進去
                     if (Environment.GetEnvironmentVariable("MINEPAINTER_DEBUG_PERF") is { Length: > 0 } perfFile)
