@@ -18,3 +18,9 @@ Thumbs.db
 
 # 發佈時由 publish.bat 產生的縮圖處理常式（AOT 原生 DLL），不進版控
 src/MinePainter.App/Assets/Native/
+
+# 開發工具的東西，不屬於專案
+.agents/
+.claude/
+skills-lock.json
+BackgroundRemover/
