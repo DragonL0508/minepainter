@@ -1,4 +1,4 @@
-using MinePainter.Core.History;
+﻿using MinePainter.Core.History;
 using MinePainter.Core.Layers;
 using MinePainter.Core.Selections;
 using MinePainter.Core.Tiles;
@@ -226,17 +226,20 @@ public sealed class EffectSession : IEffectPreviewTarget, IDisposable
     }
 
     /// <summary>來源範圍縮成小圖（選點器的底圖），最長邊 ≤ maxSize；caller 負責 Dispose。</summary>
-    public unsafe SKBitmap RenderThumbnail(int maxSize)
+    public SKBitmap RenderThumbnail(int maxSize) =>
+        IsEmpty ? ThumbnailOf([], SKRectI.Empty, maxSize) : ThumbnailOf(ReadSource(_regionDoc), _regionDoc, maxSize);
+
+    /// <summary>把一塊 BGRA premul 緩衝區縮成縮圖（群組效果也用這個 —— 它沒有自己的像素表面）。</summary>
+    public static unsafe SKBitmap ThumbnailOf(uint[] pixels, SKRectI rect, int maxSize)
     {
-        var w = Math.Max(1, _regionDoc.Width);
-        var h = Math.Max(1, _regionDoc.Height);
+        var w = Math.Max(1, rect.Width);
+        var h = Math.Max(1, rect.Height);
         var scale = Math.Min(1f, maxSize / (float)Math.Max(w, h));
         var tw = Math.Max(1, (int)MathF.Round(w * scale));
         var th = Math.Max(1, (int)MathF.Round(h * scale));
         var thumb = new SKBitmap(new SKImageInfo(tw, th, SKColorType.Bgra8888, SKAlphaType.Premul));
-        if (IsEmpty) return thumb;
+        if (pixels.Length < w * h) return thumb;
 
-        var pixels = ReadSource(_regionDoc);
         using var canvas = new SKCanvas(thumb);
         using var paint = new SKPaint { FilterQuality = SKFilterQuality.Medium };
         canvas.Clear(SKColors.Transparent);
@@ -251,25 +254,23 @@ public sealed class EffectSession : IEffectPreviewTarget, IDisposable
     }
 
     /// <summary>來源範圍的 RGB 合併直方圖（straight 色、只計 alpha &gt; 0；色階／自動色階用）。</summary>
-    public long[] Histogram()
+    public long[] Histogram() =>
+        _histogram ??= IsEmpty ? new long[256] : HistogramOf(ReadSource(_regionDoc), _selectionMask);
+
+    /// <summary>一塊緩衝區的 RGB 合併直方圖（straight 色、只計 alpha &gt; 0）。</summary>
+    public static long[] HistogramOf(uint[] pixels, byte[]? mask = null)
     {
-        if (_histogram != null) return _histogram;
         var hist = new long[256];
-        if (!IsEmpty)
+        for (var i = 0; i < pixels.Length; i++)
         {
-            var pixels = ReadSource(_regionDoc);
-            for (var i = 0; i < pixels.Length; i++)
-            {
-                if (_selectionMask != null && _selectionMask[i] == 0) continue;
-                var p = pixels[i];
-                if (EffectMath.A(p) == 0) continue;
-                EffectMath.Unpremul(p, out var b, out var g, out var r, out _);
-                hist[r]++;
-                hist[g]++;
-                hist[b]++;
-            }
+            if (mask != null && i < mask.Length && mask[i] == 0) continue;
+            var p = pixels[i];
+            if (EffectMath.A(p) == 0) continue;
+            EffectMath.Unpremul(p, out var b, out var g, out var r, out _);
+            hist[r]++;
+            hist[g]++;
+            hist[b]++;
         }
-        _histogram = hist;
         return hist;
     }
 

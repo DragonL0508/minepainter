@@ -1,4 +1,4 @@
-using Avalonia;
+﻿using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Layout;
@@ -165,7 +165,8 @@ public sealed class LayerPropertiesWindow : Window
             body.Children.Add(_adjustmentParams);
         }
 
-        if (node is RasterLayer)
+        // 效果堆疊：一般圖層與群組都有（群組＝整組合成後套一次；調整圖層沒有自己的像素）
+        if (node.CanHaveEffects)
         {
             body.Children.Add(new Separator { Margin = new Thickness(0, 3) });
             body.Children.Add(_effectsPanel);
@@ -362,7 +363,7 @@ public sealed class LayerPropertiesWindow : Window
             if (card.IsVisible && card.TranslatePoint(default, _effectsPanel) is { } pt) oldCardPositions[id] = pt;
         _cards.Clear();
         _effectsPanel.Children.Clear();
-        if (_node is not RasterLayer layer) return;
+        if (_node is not { CanHaveEffects: true } layer) return;
         var doc = _session.Document;
         IReadOnlyList<LayerEffect> effects;
         lock (doc.SyncRoot) effects = layer.Effects;
@@ -387,11 +388,15 @@ public sealed class LayerPropertiesWindow : Window
         addButton.Flyout = BuildAddFlyout(layer);
         var presetButton = ActionButton(MaterialIconKind.BookmarkOutline, "預設集", "套用／儲存整個堆疊");
         presetButton.Flyout = BuildPresetFlyout(layer, effects);
-        var bakeButton = ActionButton(MaterialIconKind.Stamper, "烙印", "把堆疊結果寫進像素並清空堆疊（可復原）");
-        bakeButton.IsEnabled = effects.Count > 0;
+        // 烙印是「把結果寫回這層的像素」—— 群組沒有自己的像素表面，做不了（要先合併群組）
+        var bakeButton = ActionButton(MaterialIconKind.Stamper, "烙印",
+            layer is RasterLayer
+                ? "把堆疊結果寫進像素並清空堆疊（可復原）"
+                : "群組沒有自己的像素，不能烙印（先合併群組再烙印）");
+        bakeButton.IsEnabled = effects.Count > 0 && layer is RasterLayer;
         bakeButton.Click += (_, _) =>
         {
-            if (LayerEffectCommands.Bake(_session, layer)) StateChanged?.Invoke();
+            if (layer is RasterLayer raster && LayerEffectCommands.Bake(_session, raster)) StateChanged?.Invoke();
             SyncFromModel();
         };
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
@@ -480,7 +485,7 @@ public sealed class LayerPropertiesWindow : Window
     /// 插入位置用拖曳開始時各列中線的快照判定 —— 插入線本身會把下面的列推開，
     /// 即時量會在邊界來回抖。
     /// </summary>
-    private sealed class ReorderDrag(LayerPropertiesWindow owner, RasterLayer layer, IReadOnlyList<LayerEffect> effects, StackPanel list)
+    private sealed class ReorderDrag(LayerPropertiesWindow owner, LayerNode layer, IReadOnlyList<LayerEffect> effects, StackPanel list)
     {
         public List<Control> Rows { get; } = new(); // 視覺順序（0 = 最上面 = 最後套用）
 
@@ -602,7 +607,7 @@ public sealed class LayerPropertiesWindow : Window
     }
 
     /// <summary>一道效果的卡片：步驟編號（含上下連線）｜開關｜名稱＋參數摘要｜圖示動作。拖曳卡片可排序。</summary>
-    private Control BuildEffectCard(RasterLayer layer, IReadOnlyList<LayerEffect> effects, int i, ReorderDrag drag)
+    private Control BuildEffectCard(LayerNode layer, IReadOnlyList<LayerEffect> effects, int i, ReorderDrag drag)
     {
         var doc = _session.Document;
         var fx = effects[i];
@@ -823,7 +828,7 @@ public sealed class LayerPropertiesWindow : Window
         return text;
     }
 
-    private Controls.ClickSubmenuMenuFlyout BuildAddFlyout(RasterLayer layer)
+    private Controls.ClickSubmenuMenuFlyout BuildAddFlyout(LayerNode layer)
     {
         var flyout = new Controls.ClickSubmenuMenuFlyout();
         var adjust = new MenuItem { Header = "調整" };
@@ -850,7 +855,7 @@ public sealed class LayerPropertiesWindow : Window
         return flyout;
     }
 
-    private async void AddToStack(RasterLayer layer, IEffect effect, bool showDialog)
+    private async void AddToStack(LayerNode layer, IEffect effect, bool showDialog)
     {
         var entry = LayerEffect.Create(effect, _session.Selection?.Clone().Mask, _session.Foreground);
         if (!showDialog)
@@ -879,7 +884,7 @@ public sealed class LayerPropertiesWindow : Window
     /// 預設集鈕：只做「儲存」（套用／管理都在預設集面板做——那邊有資料夾與預覽）。
     /// 存進預設集面板目前選取的資料夾；面板沒開就存根目錄。
     /// </summary>
-    private Controls.ClickSubmenuMenuFlyout BuildPresetFlyout(RasterLayer layer, IReadOnlyList<LayerEffect> current)
+    private Controls.ClickSubmenuMenuFlyout BuildPresetFlyout(LayerNode layer, IReadOnlyList<LayerEffect> current)
     {
         var flyout = new Controls.ClickSubmenuMenuFlyout();
         var folder = PresetsPanelContent.ActiveFolder;

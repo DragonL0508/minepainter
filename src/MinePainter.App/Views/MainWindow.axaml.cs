@@ -152,11 +152,12 @@ public partial class MainWindow : Window
                 Toasts.Show("先開一份文件");
                 return;
             }
-            RasterLayer? layer;
-            lock (session.Document.SyncRoot) layer = session.Document.ActiveLayer as RasterLayer;
+            LayerNode? layer;
+            lock (session.Document.SyncRoot)
+                layer = session.Document.ActiveLayer is { CanHaveEffects: true } n ? n : null;
             if (layer == null)
             {
-                Toasts.Show("目前圖層不是點陣圖層（群組不能套效果）");
+                Toasts.Show("調整圖層不能套效果堆疊");
                 return;
             }
             switch (mode)
@@ -1530,18 +1531,20 @@ public partial class MainWindow : Window
         var session = CommitPending();
         if (session == null) return;
         var doc = session.Document;
-        RasterLayer? target;
+        LayerNode? target;
         bool hit;
         lock (doc.SyncRoot)
         {
             target = LayerAtLocked(doc, docPoint);
             hit = target != null;
-            target ??= doc.ActiveLayer as RasterLayer
-                       ?? doc.Descendants().OfType<RasterLayer>().LastOrDefault();
+            // 落在空白處：套到目前選的東西（群組也可以 —— 整組一起吃）
+            target ??= doc.ActiveLayer is { CanHaveEffects: true } active
+                ? active
+                : doc.Descendants().OfType<RasterLayer>().LastOrDefault();
         }
         if (target == null)
         {
-            Toasts.Show("文件裡沒有可以套效果的點陣圖層");
+            Toasts.Show("文件裡沒有可以套效果的圖層或群組");
             return;
         }
         if (hit)
@@ -1552,7 +1555,7 @@ public partial class MainWindow : Window
     }
 
     /// <summary>圖層還沒有效果堆疊就直接套；已經有了就問要覆蓋還是疊加。</summary>
-    private async Task ApplyPresetAskingAsync(EditorSession session, RasterLayer layer, EffectPreset preset)
+    private async Task ApplyPresetAskingAsync(EditorSession session, LayerNode layer, EffectPreset preset)
     {
         IReadOnlyList<LayerEffect> existing;
         lock (session.Document.SyncRoot) existing = layer.Effects;
@@ -1598,7 +1601,7 @@ public partial class MainWindow : Window
     }
 
     /// <summary>套用預設集到某層（一步 undo），同步圖層面板／屬性視窗並回報。</summary>
-    private void ApplyPresetToLayer(EditorSession session, RasterLayer layer, EffectPreset preset, bool replace)
+    private void ApplyPresetToLayer(EditorSession session, LayerNode layer, EffectPreset preset, bool replace)
     {
         if (preset.Effects.Count == 0)
         {
@@ -2388,6 +2391,19 @@ public partial class MainWindow : Window
     {
         var session = CommitPending();
         if (session == null) return;
+        // 群組：自動色階也走群組的效果堆疊（直方圖取整組合成後的樣子）
+        if (session.Document.ActiveLayer is GroupLayer group)
+        {
+            var groupEntry = LayerEffect.Create(new AdjustmentEffect(new LevelsAdjustment()),
+                session.Selection?.Clone().Mask, session.Foreground);
+            using var groupPreview = new LayerEffectPreview(session, group, groupEntry, isNew: true);
+            var groupLevels = LevelsAdjustment.FromHistogram(groupPreview.Histogram());
+            groupPreview.Commit(new AdjustmentEffect(groupLevels));
+            _lastEffect = new AdjustmentEffect(groupLevels);
+            Toasts.Show("自動色階（已記錄在群組）");
+            AfterEffect();
+            return;
+        }
         if (session.Document.ActiveLayer is not RasterLayer layer)
         {
             Toasts.Show("請先選擇一個圖層");
@@ -2418,9 +2434,16 @@ public partial class MainWindow : Window
     {
         var session = CommitPending();
         if (session == null) return;
+
+        // 群組：效果一律進群組的效果堆疊（作用在整組合成後的樣子，組內每一層都吃得到）
+        if (session.Document.ActiveLayer is GroupLayer group)
+        {
+            await ApplyToLayerStackAsync(session, group, effect, name, showDialog);
+            return;
+        }
         if (session.Document.ActiveLayer is not RasterLayer layer)
         {
-            Toasts.Show("請先選擇一個點陣圖層");
+            Toasts.Show("請先選擇一個點陣圖層或群組");
             return;
         }
         if (Services.AppSettings.Instance.NonDestructiveEffects || layer.IsTextLayer)
@@ -2465,7 +2488,7 @@ public partial class MainWindow : Window
     }
 
     /// <summary>非破壞性：效果進圖層效果堆疊（有選取就帶遮罩），對話框即時預覽由合成器背景重算。</summary>
-    private async Task ApplyToLayerStackAsync(EditorSession session, RasterLayer layer, IEffect effect, string name, bool showDialog)
+    private async Task ApplyToLayerStackAsync(EditorSession session, LayerNode layer, IEffect effect, string name, bool showDialog)
     {
         var entry = LayerEffect.Create(effect, session.Selection?.Clone().Mask, session.Foreground);
         using var preview = new LayerEffectPreview(session, layer, entry, isNew: true);
@@ -2473,7 +2496,7 @@ public partial class MainWindow : Window
         {
             preview.Commit(effect);
             _lastEffect = effect;
-            Toasts.Show($"{name}（已記錄在圖層）");
+            Toasts.Show($"{name}（已記錄在{(layer is GroupLayer ? "群組" : "圖層")}）");
             AfterEffect();
             return;
         }
@@ -2486,7 +2509,7 @@ public partial class MainWindow : Window
             preview.Commit(dialog.Result);
             _lastEffect = dialog.Result;
             Services.EffectParamMemory.Remember(dialog.Result);
-            Toasts.Show($"{name}（已記錄在圖層）");
+            Toasts.Show($"{name}（已記錄在{(layer is GroupLayer ? "群組" : "圖層")}）");
         }
         else
         {
@@ -2496,7 +2519,7 @@ public partial class MainWindow : Window
     }
 
     /// <summary>圖層屬性視窗要求重新編輯堆疊裡的某一筆。</summary>
-    public async Task EditLayerEffectAsync(RasterLayer layer, LayerEffect entry)
+    public async Task EditLayerEffectAsync(LayerNode layer, LayerEffect entry)
     {
         var session = CommitPending();
         if (session == null) return;

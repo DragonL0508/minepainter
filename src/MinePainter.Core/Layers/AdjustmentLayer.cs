@@ -1,4 +1,4 @@
-using MinePainter.Core.Adjustments;
+﻿using MinePainter.Core.Adjustments;
 using SkiaSharp;
 
 namespace MinePainter.Core.Layers;
@@ -20,4 +20,7 @@ public sealed class AdjustmentLayer : LayerNode
 
     public override SKRectI ContentBounds =>
         Document is { } doc ? new SKRectI(0, 0, doc.Width, doc.Height) : SKRectI.Empty;
+
+    /// <summary>調整圖層沒有自己的像素（它作用在下方的合成結果上），套效果堆疊沒有意義。</summary>
+    public override bool CanHaveEffects => false;
 }

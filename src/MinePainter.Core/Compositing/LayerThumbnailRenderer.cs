@@ -1,4 +1,4 @@
-using MinePainter.Core.Documents;
+﻿using MinePainter.Core.Documents;
 using MinePainter.Core.Layers;
 using SkiaSharp;
 
@@ -99,6 +99,19 @@ public static class LayerThumbnailRenderer
 
             case GroupLayer group:
             {
+                // 群組有效果堆疊且已算好：縮圖就是「整組套過效果」的那份（面板上看得到效果的樣子）
+                if (group.EffectsRendered)
+                {
+                    using var paint = new SKPaint { FilterQuality = SKFilterQuality.Medium };
+                    foreach (var (idx, tile) in group.FxCache.Surface.Tiles)
+                    {
+                        var rect = idx.ToPixelRect();
+                        using var pixmap = tile.AsPixmap();
+                        using var img = SKImage.FromPixels(pixmap); // 零拷貝；持 SyncRoot 期間使用
+                        canvas.DrawImage(img, rect.Left, rect.Top, paint);
+                    }
+                    break;
+                }
                 // 群組縮圖 = 子節點由下而上疊合。只求可辨識，不重現群組的隔離合成語意。
                 foreach (var child in group.Children)
                 {

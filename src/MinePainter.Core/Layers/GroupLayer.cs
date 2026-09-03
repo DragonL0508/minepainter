@@ -1,4 +1,4 @@
-using MinePainter.Core.Compositing;
+﻿using MinePainter.Core.Compositing;
 using MinePainter.Core.Documents;
 using SkiaSharp;
 
@@ -72,5 +72,9 @@ public sealed class GroupLayer : LayerNode, IDisposable
         foreach (var child in _children) child.AttachToDocument(doc);
     }
 
-    public void Dispose() => Cache.Dispose();
+    public void Dispose()
+    {
+        Cache.Dispose();
+        FxCache.Dispose(); // 群組也有效果堆疊（見 LayerNode）
+    }
 }

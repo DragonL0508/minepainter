@@ -1,4 +1,4 @@
-using System.IO.Compression;
+﻿using System.IO.Compression;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using MinePainter.Core.Adjustments;
@@ -241,30 +241,6 @@ public static class MppFormat
                 }
                 if (raster.HasElements)
                     node.Elements = raster.Elements.Select(BuildElement).ToList();
-                if (raster.HasEffects)
-                {
-                    node.Effects = new List<EffectDto>();
-                    foreach (var fx in raster.Effects)
-                    {
-                        var dto = new EffectDto
-                        {
-                            Id = fx.Id,
-                            Type = EffectSerializer.TypeIdOf(fx.Effect),
-                            Params = EffectSerializer.Save(fx.Effect),
-                            Enabled = fx.Enabled,
-                            Color = (uint)fx.Color,
-                        };
-                        if (fx.Mask is { } mask && !mask.Bounds.IsEmpty)
-                        {
-                            var mb = mask.Bounds;
-                            var entry = $"masks/{fx.Id:N}.png";
-                            masks.Add((entry, ReadMaskAlpha(mask, mb), mb));
-                            dto.MaskEntry = entry;
-                            dto.MaskBounds = [mb.Left, mb.Top, mb.Right, mb.Bottom];
-                        }
-                        node.Effects.Add(dto);
-                    }
-                }
                 break;
 
             case AdjustmentLayer adj:
@@ -276,7 +252,37 @@ public static class MppFormat
             default:
                 throw new NotSupportedException($"未知圖層類型：{layer.GetType().Name}");
         }
+
+        // 效果堆疊掛在 LayerNode：一般圖層與群組（整組一起吃）都寫得出來
+        if (layer.HasEffects) node.Effects = BuildEffectDtos(layer, masks);
         return node;
+    }
+
+    private static List<EffectDto> BuildEffectDtos(
+        LayerNode layer, List<(string Entry, byte[] Alpha, SKRectI Bounds)> masks)
+    {
+        var list = new List<EffectDto>();
+        foreach (var fx in layer.Effects)
+        {
+            var dto = new EffectDto
+            {
+                Id = fx.Id,
+                Type = EffectSerializer.TypeIdOf(fx.Effect),
+                Params = EffectSerializer.Save(fx.Effect),
+                Enabled = fx.Enabled,
+                Color = (uint)fx.Color,
+            };
+            if (fx.Mask is { } mask && !mask.Bounds.IsEmpty)
+            {
+                var mb = mask.Bounds;
+                var entry = $"masks/{fx.Id:N}.png";
+                masks.Add((entry, ReadMaskAlpha(mask, mb), mb));
+                dto.MaskEntry = entry;
+                dto.MaskBounds = [mb.Left, mb.Top, mb.Right, mb.Bottom];
+            }
+            list.Add(dto);
+        }
+        return list;
     }
 
     private static Element BuildElement(VectorElement el) => el switch
@@ -442,6 +448,8 @@ public static class MppFormat
         layer.IsVisible = node.Visible;
         layer.Opacity = node.Opacity;
         layer.BlendMode = Enum.TryParse<BlendMode>(node.Blend, out var blend) ? blend : BlendMode.Normal;
+        // 效果堆疊掛在 LayerNode：一般圖層與群組同一條路徑
+        if (layer.CanHaveEffects && LoadEffects(node, zip) is { Count: > 0 } fx) layer.SetEffects(fx);
         return layer;
     }
 
@@ -560,9 +568,15 @@ public static class MppFormat
         foreach (var el in node.Elements ?? [])
             layer.AddElement(BuildElement(el));
 
+        return layer;
+    }
+
+    /// <summary>檔案裡的效果堆疊（一般圖層與群組共用）。未知效果略過，不擋開檔。</summary>
+    private static List<LayerEffect> LoadEffects(Node node, ZipArchive zip)
+    {
+        var list = new List<LayerEffect>();
         if (node.Effects is { Count: > 0 } effects)
         {
-            var list = new List<LayerEffect>();
             foreach (var dto in effects)
             {
                 IEffect effect;
@@ -590,10 +604,8 @@ public static class MppFormat
                     Color = new SKColor(dto.Color),
                 });
             }
-            layer.SetEffects(list);
         }
-
-        return layer;
+        return list;
     }
 
     // ---- 效果遮罩 PNG（BGRA，值放 alpha） ----

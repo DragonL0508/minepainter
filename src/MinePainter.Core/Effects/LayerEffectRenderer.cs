@@ -1,4 +1,4 @@
-using MinePainter.Core.Documents;
+﻿using MinePainter.Core.Documents;
 using MinePainter.Core.History;
 using MinePainter.Core.Layers;
 using MinePainter.Core.Tiles;
@@ -66,11 +66,17 @@ public sealed class LayerEffectCache : IDisposable
 public static class LayerEffectRenderer
 {
     /// <summary>某層的效果快取剛寫回（worker 執行緒上觸發）：縮圖等「不走合成器」的畫面靠它更新。</summary>
-    public static event Action<RasterLayer>? LayerRendered;
+    public static event Action<LayerNode>? LayerRendered;
+
+    /// <summary>
+    /// 群組效果的來源像素：把這一組合成起來的樣子讀成 doc 座標的緩衝區。
+    /// 由合成器提供（它才有筆劃緩衝／浮動內容那些進行中的預覽）；在 Document.SyncRoot 內呼叫。
+    /// </summary>
+    public delegate uint[] GroupPixelReader(GroupLayer group, SKRectI docRect);
 
     private sealed class Job
     {
-        public required RasterLayer Layer;
+        public required LayerNode Layer;
         public required SKRectI Region;   // 快取涵蓋的範圍（圖層座標：內容＋效果外擴）
         public required SKRectI Compute;  // 這次算的範圍（圖層座標）
         public required SKRectI Write;    // 寫回的範圍（圖層座標；Compute 以外的部分清成透明）
@@ -82,7 +88,8 @@ public static class LayerEffectRenderer
     }
 
     /// <summary>算完所有待處理的圖層；回傳是否有任何圖層被更新（呼叫端據此決定要不要再跑一輪）。</summary>
-    public static bool RenderPending(Document doc, CancellationToken ct = default)
+    public static bool RenderPending(Document doc, CancellationToken ct = default,
+        GroupPixelReader? groupReader = null)
     {
         var any = false;
         while (true)
@@ -91,7 +98,7 @@ public static class LayerEffectRenderer
             Job? job;
             lock (doc.SyncRoot)
             {
-                job = TakeJobLocked(doc);
+                job = TakeJobLocked(doc, groupReader: groupReader);
             }
             if (job == null) return any;
 
@@ -127,7 +134,7 @@ public static class LayerEffectRenderer
     /// 同步把某一層算到最新（烙印／匯出／拖曳快照前用）。
     /// 合成器 worker 可能已經取走這層的工作、正在鎖外計算 —— 那就等它寫回，不然會拿到舊快取。
     /// </summary>
-    public static void RenderLayerNow(Document doc, RasterLayer layer)
+    public static void RenderLayerNow(Document doc, LayerNode layer, GroupPixelReader? groupReader = null)
     {
         while (true)
         {
@@ -135,7 +142,7 @@ public static class LayerEffectRenderer
             lock (doc.SyncRoot)
             {
                 if (!layer.HasActiveEffects || layer.Document != doc) return;
-                job = TakeJobLocked(doc, layer);
+                job = TakeJobLocked(doc, layer, groupReader);
                 if (job == null)
                 {
                     if (layer.FxCache.InFlight <= 0) return;
@@ -165,12 +172,30 @@ public static class LayerEffectRenderer
     /// 與 <see cref="RenderPending"/> 的差別：合成器 worker 已取走、正在鎖外算的工作也會等它寫回，
     /// 否則 RenderComposite 會拿到「效果尚未套用」的基底像素（偶發）。
     /// </summary>
-    public static void RenderAllNow(Document doc)
+    public static void RenderAllNow(Document doc, GroupPixelReader? groupReader = null)
     {
-        List<RasterLayer> layers;
-        lock (doc.SyncRoot)
-            layers = doc.Descendants().OfType<RasterLayer>().Where(l => l.HasActiveEffects).ToList();
-        foreach (var layer in layers) RenderLayerNow(doc, layer);
+        List<LayerNode> layers;
+        // 由內而外：群組效果的來源是「這一組合成起來的樣子」，子層要先算完
+        lock (doc.SyncRoot) layers = EffectOrder(doc).Where(l => l.HasActiveEffects).ToList();
+        foreach (var layer in layers) RenderLayerNow(doc, layer, groupReader);
+    }
+
+    /// <summary>
+    /// 效果的計算順序：後序（子層先於它所在的群組）。
+    /// 群組效果吃的是子層算完之後的樣子，順序反了會先用舊的算一次再重算。
+    /// </summary>
+    private static IEnumerable<LayerNode> EffectOrder(Document doc) => EffectOrderOf(doc.Root);
+
+    private static IEnumerable<LayerNode> EffectOrderOf(GroupLayer group)
+    {
+        foreach (var child in group.Children)
+        {
+            if (child is GroupLayer g)
+            {
+                foreach (var nested in EffectOrderOf(g)) yield return nested;
+            }
+            yield return child;
+        }
     }
 
     /// <summary>作用中效果的總 margin（有限值相加；整層來源的效果不計）。</summary>
@@ -184,7 +209,7 @@ public static class LayerEffectRenderer
         return Math.Max(src == EffectContext.WholeLayer ? 0 : Math.Max(0, src), effect.OutputMargin);
     }
 
-    public static int TotalMargin(RasterLayer layer)
+    public static int TotalMargin(LayerNode layer)
     {
         var margin = 0;
         foreach (var e in layer.Effects)
@@ -198,8 +223,11 @@ public static class LayerEffectRenderer
     /// <summary>
     /// 圖層內容在圖層座標的範圍（基底像素 ∪ 物件，不含畫布內編輯中被藏起來的物件）。
     /// </summary>
-    public static SKRectI ContentRegion(RasterLayer layer)
+    public static SKRectI ContentRegion(LayerNode node)
     {
+        // 群組：效果吃的是整組合成起來的樣子，範圍就是這一組的內容（doc 座標＝快取座標）
+        if (node is not RasterLayer layer) return node.ContentBounds;
+
         var bounds = layer.Surface.ContentBounds;
         foreach (var el in layer.Elements)
         {
@@ -213,11 +241,11 @@ public static class LayerEffectRenderer
         return bounds;
     }
 
-    private static Job? TakeJobLocked(Document doc, RasterLayer? only = null)
+    private static Job? TakeJobLocked(Document doc, LayerNode? only = null, GroupPixelReader? groupReader = null)
     {
-        foreach (var node in doc.Descendants())
+        foreach (var layer in EffectOrder(doc))
         {
-            if (node is not RasterLayer layer) continue;
+            if (!layer.CanHaveEffects) continue;
             if (only != null && !ReferenceEquals(layer, only)) continue;
             var cache = layer.FxCache;
             if (!layer.HasActiveEffects)
@@ -243,24 +271,25 @@ public static class LayerEffectRenderer
 
             // 物件是 doc 座標：Offset 變了而物件沒跟著動，物件在圖層座標裡就搬家了
             // （像素跟物件一起動時，物件的 ReplaceElement 已經標髒）。只標物件範圍，不整層重算。
-            if (cache.HasLastOffset && cache.LastOffset != layer.Offset && layer.HasElements)
+            if (layer is RasterLayer { HasElements: true } withElements &&
+                cache.HasLastOffset && cache.LastOffset != layer.EffectOffset)
             {
-                foreach (var el in layer.Elements)
+                foreach (var el in withElements.Elements)
                 {
                     var b = el.Bounds;
                     if (b.IsEmpty) continue;
                     cache.MarkDirty(new SKRectI(b.Left - cache.LastOffset.X, b.Top - cache.LastOffset.Y,
                         b.Right - cache.LastOffset.X, b.Bottom - cache.LastOffset.Y));
-                    cache.MarkDirty(new SKRectI(b.Left - layer.Offset.X, b.Top - layer.Offset.Y,
-                        b.Right - layer.Offset.X, b.Bottom - layer.Offset.Y));
+                    cache.MarkDirty(new SKRectI(b.Left - withElements.Offset.X, b.Top - withElements.Offset.Y,
+                        b.Right - withElements.Offset.X, b.Bottom - withElements.Offset.Y));
                 }
             }
-            cache.LastOffset = layer.Offset;
+            cache.LastOffset = layer.EffectOffset;
             cache.HasLastOffset = true;
 
             // 以畫布為框架的效果：畫布相對位置變了就得整層重算（其他效果與畫布無關）
-            var canvasInLayer = new SKRectI(-layer.Offset.X, -layer.Offset.Y,
-                doc.Width - layer.Offset.X, doc.Height - layer.Offset.Y);
+            var canvasInLayer = new SKRectI(-layer.EffectOffset.X, -layer.EffectOffset.Y,
+                doc.Width - layer.EffectOffset.X, doc.Height - layer.EffectOffset.Y);
             if (canvasDependent && canvasInLayer != cache.LastCanvas)
             {
                 cache.MarkAllDirty();
@@ -315,7 +344,7 @@ public static class LayerEffectRenderer
 
             var masks = new List<byte[]?>(effects.Count);
             foreach (var e in effects)
-                masks.Add(e.Mask == null || compute.IsEmpty ? null : ReadMask(e.Mask, compute, layer.Offset));
+                masks.Add(e.Mask == null || compute.IsEmpty ? null : ReadMask(e.Mask, compute, layer.EffectOffset));
 
             return new Job
             {
@@ -324,13 +353,25 @@ public static class LayerEffectRenderer
                 Compute = compute,
                 Write = write,
                 Full = full,
-                Pixels = compute.IsEmpty ? [] : ReadPixelsWithElements(layer, compute),
+                Pixels = compute.IsEmpty ? [] : ReadSourceLocked(layer, compute, groupReader),
                 Effects = effects,
                 Masks = masks,
                 DocSize = new SKSizeI(doc.Width, doc.Height),
             };
         }
         return null;
+    }
+
+    /// <summary>
+    /// 效果堆疊的來源像素：點陣圖層＝基底像素＋這層的物件；群組＝整組合成起來的樣子。
+    /// 在 Document.SyncRoot 內呼叫。
+    /// </summary>
+    private static uint[] ReadSourceLocked(LayerNode layer, SKRectI rect, GroupPixelReader? groupReader)
+    {
+        if (layer is RasterLayer raster) return ReadPixelsWithElements(raster, rect);
+        if (layer is not GroupLayer group) return new uint[Math.Max(0, rect.Width * rect.Height)];
+        // 沒給讀取器（烙印、預覽、測試直接呼叫）就用離線版：不含進行中的筆劃／浮動內容
+        return (groupReader ?? Compositing.Compositor.StaticGroupSourceLocked)(group, rect);
     }
 
     private static uint[] Compute(Job job, CancellationToken ct)
@@ -420,9 +461,10 @@ public static class LayerEffectRenderer
         }
 
         cache.Rendered = true;
+        var off = layer.EffectOffset;
         var docRect = new SKRectI(
-            write.Left + layer.Offset.X, write.Top + layer.Offset.Y,
-            write.Right + layer.Offset.X, write.Bottom + layer.Offset.Y);
+            write.Left + off.X, write.Top + off.Y,
+            write.Right + off.X, write.Bottom + off.Y);
         layer.InvalidateComposite(docRect);
         LayerRendered?.Invoke(layer);
     }

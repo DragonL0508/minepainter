@@ -1,4 +1,4 @@
-using MinePainter.Core.Compositing;
+﻿using MinePainter.Core.Compositing;
 using MinePainter.Core.Documents;
 using MinePainter.Core.Effects;
 using MinePainter.Core.Tiles;
@@ -19,7 +19,6 @@ public sealed class RasterLayer : LayerNode, IDisposable
 {
     private readonly List<VectorElement> _elements = new();
     private Guid? _hiddenElementId;
-    private IReadOnlyList<LayerEffect> _effects = [];
 
     public TileSurface Surface { get; private set; }
 
@@ -32,46 +31,13 @@ public sealed class RasterLayer : LayerNode, IDisposable
         FxCache.MarkAllDirty();
     }
 
-    // ---- 非破壞性效果堆疊 ----
+    // ---- 非破壞性效果堆疊（清單／快取在 LayerNode，群組也有一份）----
 
-    /// <summary>套在這層像素上的效果（由先到後）。不可變清單：換整份參考（undo 同構）。</summary>
-    public IReadOnlyList<LayerEffect> Effects => _effects;
-
-    public bool HasEffects => _effects.Count > 0;
-
-    public bool HasActiveEffects
-    {
-        get
-        {
-            foreach (var e in _effects) if (e.Enabled) return true;
-            return false;
-        }
-    }
-
-    /// <summary>效果堆疊套用後的快取（compositor / LayerEffectRenderer 專用）。</summary>
-    public LayerEffectCache FxCache { get; } = new();
-
-    /// <summary>換整份效果清單（在 Document.SyncRoot 內），整層重算。</summary>
-    public void SetEffects(IReadOnlyList<LayerEffect> effects)
-    {
-        _effects = effects;
-        InvalidateEffects();
-    }
-
-    /// <summary>效果堆疊整層重算並重新合成。</summary>
-    public void InvalidateEffects()
-    {
-        FxCache.MarkAllDirty();
-        if (!HasActiveEffects) FxCache.Rendered = false;
-        var doc = Document;
-        if (doc != null) InvalidateComposite(doc.Bounds);
-    }
+    /// <summary>效果快取跟著圖層座標走，平移整層不必重算（見 LayerNode.EffectOffset）。</summary>
+    public override SKPointI EffectOffset => Offset;
 
     /// <summary>合成時該拿哪份像素：有作用中的效果且已算過 → 效果快取；否則基底。</summary>
-    public TileSurface DisplaySurface => HasActiveEffects && FxCache.Rendered ? FxCache.Surface : Surface;
-
-    /// <summary>效果快取此刻是否代表這層的畫面（拖曳覆疊可直接拿它的快照）。</summary>
-    public bool EffectsRendered => HasActiveEffects && FxCache.Rendered;
+    public TileSurface DisplaySurface => EffectsRendered ? FxCache.Surface : Surface;
 
     /// <summary>
     /// 畫面上這層佔的範圍（doc 座標，tile 粒度）：內容 ∪ 效果快取（外框／陰影會超出內容）。

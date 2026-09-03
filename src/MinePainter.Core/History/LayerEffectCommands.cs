@@ -1,4 +1,4 @@
-using MinePainter.Core.Documents;
+﻿using MinePainter.Core.Documents;
 using MinePainter.Core.Effects;
 using MinePainter.Core.Layers;
 using MinePainter.Core.Tiles;
@@ -7,10 +7,14 @@ using SkiaSharp;
 
 namespace MinePainter.Core.History;
 
-/// <summary>圖層效果堆疊的可復原操作（整份清單換參考 = 一步 undo）。</summary>
+/// <summary>
+/// 圖層效果堆疊的可復原操作（整份清單換參考 = 一步 undo）。
+/// 對象是 <see cref="LayerNode"/>：一般圖層與群組共用同一套（群組的效果吃的是整組合成後的樣子）。
+/// 只有「烙印」需要真的把像素寫回去，所以那一個仍限定點陣圖層。
+/// </summary>
 public static class LayerEffectCommands
 {
-    public static void SetEffects(Document doc, HistoryManager history, RasterLayer layer,
+    public static void SetEffects(Document doc, HistoryManager history, LayerNode layer,
         IReadOnlyList<LayerEffect> before, IReadOnlyList<LayerEffect> after, string label)
     {
         if (ReferenceEquals(before, after)) return;
@@ -23,14 +27,14 @@ public static class LayerEffectCommands
             redo: d => { lock (d.SyncRoot) layer.SetEffects(after); }));
     }
 
-    public static void Add(Document doc, HistoryManager history, RasterLayer layer, LayerEffect effect)
+    public static void Add(Document doc, HistoryManager history, LayerNode layer, LayerEffect effect)
     {
         var before = layer.Effects;
         var after = before.Append(effect).ToList();
         SetEffects(doc, history, layer, before, after, $"效果：{effect.Name}");
     }
 
-    public static void Remove(Document doc, HistoryManager history, RasterLayer layer, Guid id)
+    public static void Remove(Document doc, HistoryManager history, LayerNode layer, Guid id)
     {
         var before = layer.Effects;
         var target = before.FirstOrDefault(e => e.Id == id);
@@ -39,7 +43,7 @@ public static class LayerEffectCommands
         SetEffects(doc, history, layer, before, after, $"移除效果：{target.Name}");
     }
 
-    public static void Replace(Document doc, HistoryManager history, RasterLayer layer, LayerEffect replacement, string? label = null)
+    public static void Replace(Document doc, HistoryManager history, LayerNode layer, LayerEffect replacement, string? label = null)
     {
         var before = layer.Effects;
         var index = IndexOf(before, replacement.Id);
@@ -49,7 +53,7 @@ public static class LayerEffectCommands
         SetEffects(doc, history, layer, before, after, label ?? $"調整效果：{replacement.Name}");
     }
 
-    public static void SetEnabled(Document doc, HistoryManager history, RasterLayer layer, Guid id, bool enabled)
+    public static void SetEnabled(Document doc, HistoryManager history, LayerNode layer, Guid id, bool enabled)
     {
         var target = layer.Effects.FirstOrDefault(e => e.Id == id);
         if (target == null || target.Enabled == enabled) return;
@@ -57,7 +61,7 @@ public static class LayerEffectCommands
     }
 
     /// <summary>delta = -1 往下（更早套用）、+1 往上（更晚套用）。</summary>
-    public static void Move(Document doc, HistoryManager history, RasterLayer layer, Guid id, int delta)
+    public static void Move(Document doc, HistoryManager history, LayerNode layer, Guid id, int delta)
     {
         var before = layer.Effects;
         var index = IndexOf(before, id);

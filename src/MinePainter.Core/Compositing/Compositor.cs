@@ -259,7 +259,7 @@ public sealed class Compositor : IDisposable
                     // 效果堆疊先於 tile：有圖層的效果快取髒了就先算（鎖外計算，不擋 UI）
                     try
                     {
-                        Effects.LayerEffectRenderer.RenderPending(_document, token);
+                        Effects.LayerEffectRenderer.RenderPending(_document, token, ReadGroupSourceLocked);
                     }
                     catch (OperationCanceledException)
                     {
@@ -369,11 +369,56 @@ public sealed class Compositor : IDisposable
     }
 
     /// <summary>
+    /// 群組效果的來源像素：把這一組合成起來的樣子讀成 doc 座標的緩衝區（未套群組自身的
+    /// opacity/blend —— 那是疊到下方時才套的）。進行中的筆劃／浮動內容也要畫進去，
+    /// 否則在有效果的群組裡畫畫，畫到一半的筆劃會整個看不見。
+    /// 在 Document.SyncRoot 內、compositor 執行緒上呼叫。
+    /// </summary>
+    private uint[] ReadGroupSourceLocked(GroupLayer group, SKRectI docRect) =>
+        ReadGroupPixelsLocked(group, docRect, _strokeBuffer,
+            _floatingProvider?.Invoke(), _detachedProvider?.Invoke() ?? (null, false));
+
+    private static unsafe uint[] ReadGroupPixelsLocked(GroupLayer group, SKRectI docRect,
+        StrokeBuffer? strokeBuffer, Selections.FloatingSelection? floating,
+        (Guid? Id, bool IncludesElements) detachedLayer)
+    {
+        var pixels = new uint[Math.Max(0, docRect.Width * docRect.Height)];
+        if (docRect.Width <= 0 || docRect.Height <= 0) return pixels;
+
+        fixed (uint* ptr = pixels)
+        {
+            var info = new SKImageInfo(docRect.Width, docRect.Height, SKColorType.Bgra8888, SKAlphaType.Premul);
+            using var surface = SKSurface.Create(info, (IntPtr)ptr, docRect.Width * 4);
+            if (surface == null) return pixels;
+            surface.Canvas.Clear(SKColors.Transparent);
+
+            // CompositeGroup 的 canvas 原點＝tileRect 左上，所以一格一格畫；
+            // 效果的計算範圍通常比一格大很多，這裡就是「把這塊重新合成一次」的成本。
+            foreach (var idx in TileIndex.CoveringRect(docRect))
+            {
+                var tileRect = idx.ToPixelRect();
+                var inter = SKRectI.Intersect(tileRect, docRect);
+                if (inter.Width <= 0 || inter.Height <= 0) continue;
+                using var tileSurface = SKSurface.Create(Tile.Info);
+                if (tileSurface == null) continue;
+                tileSurface.Canvas.Clear(SKColors.Transparent);
+                if (!CompositeGroup(group, tileSurface, tileRect, strokeBuffer, floating, detachedLayer)) continue;
+                tileSurface.Canvas.Flush();
+                using var img = tileSurface.Snapshot();
+                surface.Canvas.DrawImage(img, tileRect.Left - docRect.Left, tileRect.Top - docRect.Top);
+            }
+            surface.Canvas.Flush();
+        }
+        return pixels;
+    }
+
+    /// <summary>
     /// 同步合成整份文件（匯出/縮圖用）。在呼叫端執行緒完成，內部自行取 SyncRoot。
     /// </summary>
     public static SKImage RenderComposite(Document doc)
     {
-        Effects.LayerEffectRenderer.RenderAllNow(doc); // 效果堆疊要先是最新的（含 worker 正在算的）
+        // 效果堆疊要先是最新的（含 worker 正在算的）；群組效果的來源不含進行中的預覽
+        Effects.LayerEffectRenderer.RenderAllNow(doc, StaticGroupSourceLocked);
         var info = new SKImageInfo(doc.Width, doc.Height, SKColorType.Bgra8888, SKAlphaType.Premul);
         using var full = SKSurface.Create(info);
         full.Canvas.Clear(SKColors.Transparent);
@@ -395,6 +440,10 @@ public sealed class Compositor : IDisposable
         full.Canvas.Flush();
         return full.Snapshot();
     }
+
+    /// <summary>離線路徑（匯出／縮圖／烙印）用的群組來源：不含進行中的筆劃與浮動內容。</summary>
+    internal static uint[] StaticGroupSourceLocked(GroupLayer group, SKRectI docRect) =>
+        ReadGroupPixelsLocked(group, docRect, null, null, (null, false));
 
     private bool CompositeGroup(GroupLayer group, SKSurface surface, SKRectI tileRect) =>
         CompositeGroup(group, surface, tileRect, _strokeBuffer,
@@ -512,8 +561,13 @@ public sealed class Compositor : IDisposable
 
                 case GroupLayer nested:
                 {
-                    // isolated composite：先拿群組內容的快取 tile，再以群組 opacity/blend 疊上
-                    var contentTile = RenderGroupTile(nested, tileRect, strokeBuffer, floating, detachedLayer);
+                    // isolated composite：先拿群組內容的快取 tile，再以群組 opacity/blend 疊上。
+                    // 群組有效果堆疊且已算好時，拿的是「整組套過效果」的那份（外框／陰影包住整組，
+                    // 而不是每個子層各一份）；還沒算好就先畫原本的內容，不要讓整組消失。
+                    var groupIdx = TileIndex.FromPixel(tileRect.Left, tileRect.Top);
+                    var contentTile = nested.EffectsRendered
+                        ? nested.FxCache.Surface.GetTileForRead(groupIdx)
+                        : RenderGroupTile(nested, tileRect, strokeBuffer, floating, detachedLayer);
                     if (contentTile != null)
                     {
                         using var paint = new SKPaint

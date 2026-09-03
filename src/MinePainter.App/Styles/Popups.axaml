@@ -1,0 +1,17 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <!--
+    所有彈出層（選單、下拉、flyout）一律置頂。
+
+    浮動面板是主視窗的 owned window，永遠壓在主視窗上面；選單的 popup 也是 owned window，
+    兩者同一層，面板被點過（activate）之後就會蓋住剛彈出的選單
+    （使用者 2026-09-04 回報「浮窗擋住下拉式選單」）。
+
+    只能用樣式設，不能用 Popup.TopmostProperty.OverrideDefaultValue —— Avalonia 已經替
+    Popup 自己註冊過這個屬性的 metadata，再覆寫會在啟動時丟
+    「Metadata is already set for Topmost on Popup」。
+  -->
+  <Style Selector="Popup">
+    <Setter Property="Topmost" Value="True" />
+  </Style>
+</Styles>

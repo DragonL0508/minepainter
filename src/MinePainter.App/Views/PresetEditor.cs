@@ -1,4 +1,4 @@
-using Avalonia.Controls;
+﻿using Avalonia.Controls;
 using Avalonia.Threading;
 using MinePainter.App.Services;
 using MinePainter.Core.Documents;
@@ -60,7 +60,7 @@ public static class PresetEditor
 
         // 效果快取算完（worker 執行緒）→ 預覽圖跟著換。要先訂閱再觸發合成，
         // 不然 worker 可能在訂閱前就算完、之後沒事件，預覽就停在沒效果的「Aa」
-        Action<RasterLayer> rendered = l =>
+        Action<LayerNode> rendered = l =>
         {
             if (ReferenceEquals(l, layer)) Dispatcher.UIThread.Post(win.RefreshPreview);
         };

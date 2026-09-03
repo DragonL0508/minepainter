@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using System.Text.Json.Serialization;
 using MinePainter.Core.Effects;
 using MinePainter.Core.History;
@@ -274,7 +274,7 @@ public static class EffectPresetStore
     /// 把預設集套到圖層（一步 undo）。<paramref name="replace"/> = 取代整個堆疊，否則接在現有堆疊之後。
     /// 效果的主色取目前前景色（雲朵、物件外框那些「預設帶主色」的會用到）。
     /// </summary>
-    public static void Apply(EditorSession session, RasterLayer layer, EffectPreset preset, bool replace)
+    public static void Apply(EditorSession session, LayerNode layer, EffectPreset preset, bool replace)
     {
         var doc = session.Document;
         IReadOnlyList<LayerEffect> before;

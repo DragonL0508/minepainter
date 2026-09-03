@@ -1,4 +1,4 @@
-using Avalonia;
+﻿using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
@@ -517,21 +517,22 @@ public sealed class PresetsPanelContent : UserControl
             Notify?.Invoke("先開一份文件");
             return;
         }
-        RasterLayer? layer;
+        LayerNode? layer;
         IReadOnlyList<Core.Effects.LayerEffect> effects;
         lock (session.Document.SyncRoot)
         {
-            layer = session.Document.ActiveLayer as RasterLayer;
+            // 群組也有效果堆疊（整組一起吃），預設集對兩者是同一份資料
+            layer = session.Document.ActiveLayer is { CanHaveEffects: true } n ? n : null;
             effects = layer?.Effects ?? Array.Empty<Core.Effects.LayerEffect>();
         }
         if (layer == null)
         {
-            Notify?.Invoke("目前圖層不是點陣圖層");
+            Notify?.Invoke("目前圖層不能有效果堆疊");
             return;
         }
         if (effects.Count == 0)
         {
-            Notify?.Invoke("目前圖層沒有效果堆疊可以存");
+            Notify?.Invoke($"目前{(layer is GroupLayer ? "群組" : "圖層")}沒有效果堆疊可以存");
             return;
         }
         if (Owner() is not { } owner) return;

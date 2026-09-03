@@ -1,4 +1,4 @@
-using MinePainter.Core.History;
+﻿using MinePainter.Core.History;
 using MinePainter.Core.Layers;
 using MinePainter.Core.Tools;
 using SkiaSharp;
@@ -13,16 +13,16 @@ namespace MinePainter.Core.Effects;
 public sealed class LayerEffectPreview : IEffectPreviewTarget, IDisposable
 {
     private readonly EditorSession _session;
-    private readonly RasterLayer _layer;
+    private readonly LayerNode _layer;
     private readonly IReadOnlyList<LayerEffect> _original;
     private readonly bool _isNew;
     private EffectSession? _source; // 直方圖／縮圖用（基底像素）
     private LayerEffect _entry;
 
     public LayerEffect Entry => _entry;
-    public RasterLayer Layer => _layer;
+    public LayerNode Layer => _layer;
 
-    public LayerEffectPreview(EditorSession session, RasterLayer layer, LayerEffect entry, bool isNew)
+    public LayerEffectPreview(EditorSession session, LayerNode layer, LayerEffect entry, bool isNew)
     {
         _session = session;
         _layer = layer;
@@ -48,11 +48,36 @@ public sealed class LayerEffectPreview : IEffectPreviewTarget, IDisposable
         }
     }
 
-    public long[] Histogram() => Source.Histogram();
+    public long[] Histogram() =>
+        Source is { } s ? s.Histogram() : EffectSession.HistogramOf(GroupPixels(out _));
 
-    public SKBitmap RenderThumbnail(int maxSize) => Source.RenderThumbnail(maxSize);
+    public SKBitmap RenderThumbnail(int maxSize) =>
+        Source is { } s ? s.RenderThumbnail(maxSize) : EffectSession.ThumbnailOf(GroupPixels(out var r), r, maxSize);
 
-    private EffectSession Source => _source ??= new EffectSession(_session, _layer);
+    /// <summary>破壞性預覽的來源（直方圖／縮圖用）；群組沒有自己的像素表面，回 null 走下面那條。</summary>
+    private EffectSession? Source =>
+        _layer is RasterLayer raster ? _source ??= new EffectSession(_session, raster) : null;
+
+    /// <summary>
+    /// 群組的來源像素：整組合成起來的樣子（限縮到選取範圍，與點陣圖層的取樣範圍同一套規則）。
+    /// </summary>
+    private uint[] GroupPixels(out SKRectI region)
+    {
+        var doc = _session.Document;
+        region = SKRectI.Empty;
+        if (_layer is not GroupLayer group) return [];
+        lock (doc.SyncRoot)
+        {
+            var selection = _session.Selection is { IsEmpty: false } sel ? sel : null;
+            region = SKRectI.Intersect(selection?.Bounds ?? doc.Bounds, doc.Bounds);
+            if (region.Width <= 0 || region.Height <= 0)
+            {
+                region = SKRectI.Empty;
+                return [];
+            }
+            return Compositing.Compositor.StaticGroupSourceLocked(group, region);
+        }
+    }
 
     /// <summary>確定：以「原清單 → 目前清單」記一步。</summary>
     public void Commit(IEffect finalEffect)

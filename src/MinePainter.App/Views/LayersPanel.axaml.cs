@@ -1,4 +1,4 @@
-using Avalonia;
+﻿using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
@@ -106,7 +106,7 @@ public partial class LayersPanel : UserControl
     private readonly Avalonia.Threading.DispatcherTimer _thumbTimer = new() { Interval = TimeSpan.FromMilliseconds(120) };
 
     /// <summary>worker 執行緒：記下哪層算完，UI 端節流 120ms 一次重畫縮圖（連續繪畫時每步都會觸發）。</summary>
-    private void OnLayerEffectsRendered(RasterLayer layer)
+    private void OnLayerEffectsRendered(LayerNode layer)
     {
         if (_session == null || layer.Document != _session.Document) return;
         lock (_thumbDirty) _thumbDirty.Add(layer);
@@ -447,6 +447,9 @@ public partial class LayersPanel : UserControl
         row.NameText.Text = node switch
         {
             // 群組的箭頭改由展開鈕呈現，名稱不再帶「▸」前綴
+            GroupLayer { HasEffects: true } g => _collapsed.Contains(g)
+                ? $"{node.Name}（{g.Children.Count}）  ✦fx"
+                : $"{node.Name}  ✦fx",
             GroupLayer g => _collapsed.Contains(g) ? $"{node.Name}（{g.Children.Count}）" : node.Name,
             AdjustmentLayer => $"◐ {node.Name}",
             RasterLayer { IsTextLayer: true, HasEffects: true } => $"T  {node.Name}  ✦fx",
