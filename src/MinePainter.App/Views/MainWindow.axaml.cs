@@ -1755,6 +1755,43 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// 小工具「YouTube 縮圖預覽」：把目前文件的合成結果塞進一份本機的假 YouTube 頁面，
+    /// 用系統預設瀏覽器開起來看縮圖在真實版面裡的樣子（不連網、不上傳）。
+    /// </summary>
+    private async void OnYouTubePreviewClicked(object? sender, RoutedEventArgs e)
+    {
+        var session = Canvas.Session;
+        if (session == null)
+        {
+            Toasts.Show("先開一份文件");
+            return;
+        }
+
+        CommitCanvasTextEdit();       // 預覽的是合成結果，先把進行中的編輯落地
+        session.CommitPendingEdits(); // 浮動內容、變形框等所有進行中編輯一次涵蓋
+
+        var dialog = new YouTubePreviewWindow(SuggestedName("我的縮圖"));
+        await dialog.ShowDialog(this);
+        if (!dialog.Confirmed) return;
+
+        var doc = session.Document;
+        var options = dialog.Options;
+        try
+        {
+            // 合成 + base64 內嵌對大圖不算便宜，丟背景執行緒免得視窗卡住
+            var path = await Task.Run(() => Gadgets.YouTubeMockup.Render(doc, options));
+            System.Diagnostics.Process.Start(
+                new System.Diagnostics.ProcessStartInfo(path) { UseShellExecute = true });
+            Toasts.Show("已在瀏覽器開啟 YouTube 縮圖預覽");
+        }
+        catch (Exception ex)
+        {
+            Toasts.Show("縮圖預覽失敗：" + ex.Message);
+            LogError("YouTube 縮圖預覽", ex);
+        }
+    }
+
     /// <summary>把例外完整寫進 %APPDATA%\MinePainter\error.log（回報問題用）。</summary>
     private static void LogError(string operation, Exception ex)
     {
@@ -2726,6 +2763,7 @@ public partial class MainWindow : Window
         _shortcutActions["layer.flipV"] = () => OnFlipLayerVerticalClicked(null, new RoutedEventArgs());
         _shortcutActions["layer.properties"] = () => OnLayerPropertiesClicked(null, new RoutedEventArgs());
         _shortcutActions["layer.removeBackground"] = () => OnRemoveBackgroundClicked(null, new RoutedEventArgs());
+        _shortcutActions["gadget.youtubePreview"] = () => OnYouTubePreviewClicked(null, new RoutedEventArgs());
 
         _shortcutActions["adjust.autoLevel"] = () => _ = ApplyAutoLevelAsync();
         foreach (var entry in AdjustmentRegistry.All)

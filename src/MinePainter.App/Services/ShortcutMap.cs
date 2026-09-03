@@ -66,6 +66,8 @@ public static class ShortcutMap
         new("layer.transformPerspective", "圖層", "透視變形", null),
         new("layer.transformDistort", "圖層", "扭曲變形", null),
 
+        new("gadget.youtubePreview", "小工具", "YouTube 縮圖預覽", null),
+
         new("view.zoomIn", "檢視", "放大", new KeyGesture(Key.OemPlus, KeyModifiers.Control)),
         new("view.zoomOut", "檢視", "縮小", new KeyGesture(Key.OemMinus, KeyModifiers.Control)),
         new("view.actualSize", "檢視", "實際大小", new KeyGesture(Key.D0, KeyModifiers.Control)),
