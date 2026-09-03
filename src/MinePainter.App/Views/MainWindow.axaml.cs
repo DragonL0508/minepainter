@@ -144,7 +144,7 @@ public partial class MainWindow : Window
         // 預設集面板：雙擊／右鍵套到目前圖層；拖到畫布的落點處理在 OnDrop
         _presetsContent.SessionProvider = () => Canvas.Session;
         _presetsContent.Notify += Toasts.Show;
-        _presetsContent.ApplyRequested += (preset, replace) =>
+        _presetsContent.ApplyRequested += (preset, mode) =>
         {
             var session = CommitPending();
             if (session == null)
@@ -159,7 +159,12 @@ public partial class MainWindow : Window
                 Toasts.Show("目前圖層不是點陣圖層（群組不能套效果）");
                 return;
             }
-            ApplyPresetToLayer(session, layer, preset, replace);
+            switch (mode)
+            {
+                case PresetsPanelContent.ApplyMode.Ask: _ = ApplyPresetAskingAsync(session, layer, preset); break;
+                case PresetsPanelContent.ApplyMode.Replace: ApplyPresetToLayer(session, layer, preset, replace: true); break;
+                default: ApplyPresetToLayer(session, layer, preset, replace: false); break;
+            }
         };
 
         // 浮動面板黏著主視窗：移動、改變大小、最大化都跟著走
@@ -180,6 +185,8 @@ public partial class MainWindow : Window
             ShowPanels();
             StartPerfLabelTimer();
             Canvas.Focus();
+            // 字型下拉的字重列舉／GlyphTypeface 探測預熱（一秒後、閒置時做），切字型才不會第一次碰到就卡
+            Avalonia.Threading.DispatcherTimer.RunOnce(Services.FontCatalog.WarmUp, TimeSpan.FromSeconds(1));
 
             // 開發驗證用（GUI 驗證不得注入輸入，這是看到那些畫面的正規途徑）：
             // MINEPAINTER_DEBUG_TEXTFX=1 啟動即開進階文字設定；
@@ -200,7 +207,7 @@ public partial class MainWindow : Window
             if (!string.IsNullOrEmpty(debugEffect)) SeedDebugEffect(debugEffect);
 
             var debugTextFx = Environment.GetEnvironmentVariable("MINEPAINTER_DEBUG_TEXTFX");
-            if (debugTextFx is "1" or "2") SeedDebugText();
+            if (debugTextFx is "1" or "2" or "5") SeedDebugText();
 
             // MINEPAINTER_DEBUG_PRESETS=1 或 =<資料夾>：啟動即打開預設集面板（搭配 MINEPAINTER_PRESETS_DIR 指到測試用的庫）；
             // MINEPAINTER_DEBUG_PRESETS_DROP=<x>,<y>：1.5 秒後把庫裡第一個預設集當作丟在畫布那個 doc 座標（驗證落點套用）
@@ -208,31 +215,66 @@ public partial class MainWindow : Window
             {
                 PresetsToggle.IsChecked = true;
                 if (debugPresets != "1") _presetsContent.ShowFolder(debugPresets);
-                if (Environment.GetEnvironmentVariable("MINEPAINTER_DEBUG_PRESETS_DROP")?.Split(',') is [var xs, var ys] &&
+                if (Environment.GetEnvironmentVariable("MINEPAINTER_DEBUG_PRESETS_DROP")?.Split(',') is [var xs, var ys, .. var rest] &&
                     float.TryParse(xs, out var dx) && float.TryParse(ys, out var dy))
                 {
-                    Avalonia.Threading.DispatcherTimer.RunOnce(() =>
+                    // 第三個值 = 丟幾次（第二次起落在已有堆疊的圖層上，會跳覆蓋／疊加詢問）
+                    var times = rest is [var ts] && int.TryParse(ts, out var t) ? t : 1;
+                    for (var i = 0; i < times; i++)
                     {
-                        if (EffectPresetStore.LoadAll().FirstOrDefault() is { } first)
-                            DropPresetOnCanvas(first, new SKPoint(dx, dy));
-                    }, TimeSpan.FromMilliseconds(1500));
+                        Avalonia.Threading.DispatcherTimer.RunOnce(() =>
+                        {
+                            if (EffectPresetStore.LoadAll().FirstOrDefault() is { } first)
+                                DropPresetOnCanvas(first, new SKPoint(dx, dy));
+                        }, TimeSpan.FromMilliseconds(1500 + i * 1200));
+                    }
                 }
             }
-            if (debugTextFx is "3" or "4")
+            if (debugTextFx is "3" or "4" or "5")
             {
-                // =3：切到文字工具、1.5 秒後把工具列的字型下拉打開（驗證下拉清單首次開啟的渲染）；=4 不開下拉（效能對照組）
+                // =3：切到文字工具、1.5 秒後把工具列的字型下拉打開（驗證下拉清單首次開啟的渲染）；
+                // =4 不開下拉（效能對照組）；=5 先放一段選取中的文字（同 =2）再開下拉
                 SelectTool("text");
                 Avalonia.Threading.DispatcherTimer.RunOnce(() =>
                 {
                     // 視窗沒有焦點時 light-dismiss 會立刻把下拉關掉（截不到）；驗證模式先關掉它
                     foreach (var popup in FontFamilyCombo.GetTemplateChildren().OfType<Popup>())
                         popup.IsLightDismissEnabled = false;
-                    if (debugTextFx == "3") FontFamilyCombo.IsDropDownOpen = true;
+                    if (debugTextFx != "4") FontFamilyCombo.IsDropDownOpen = true;
 
-                    // MINEPAINTER_DEBUG_PERF=<檔案>：每秒把畫布 fps、主視窗與下拉 popup 的 layout／render 次數寫進去
+                    // MINEPAINTER_DEBUG_PERF=<檔案>：每秒把畫布 fps、主視窗與下拉 popup 的 layout 次數寫進去；
+                    // MINEPAINTER_DEBUG_PERF_CYCLE=<毫秒>：每隔那麼久把字型下拉切到下一個字型（模擬使用者連續切換），
+                    // 一併記每次切換在 UI 執行緒花的毫秒（平均／最大）與 GC 次數
                     if (Environment.GetEnvironmentVariable("MINEPAINTER_DEBUG_PERF") is { Length: > 0 } perfFile)
                     {
-                        int mainLayout = 0, popupLayout = 0, popupRender = 0;
+                        // MINEPAINTER_DEBUG_PERF_BENCH=1：先對所有字型量一遍兩個嫌疑函式（各自的總時間與最慢的家族）
+                        if (Environment.GetEnvironmentVariable("MINEPAINTER_DEBUG_PERF_BENCH") == "1")
+                        {
+                            var sw = System.Diagnostics.Stopwatch.StartNew();
+                            double stylesTotal = 0, safeTotal = 0, stylesMax = 0, safeMax = 0;
+                            string stylesWorst = "", safeWorst = "";
+                            foreach (var fam in _fontFamilies)
+                            {
+                                var t0 = sw.Elapsed.TotalMilliseconds;
+                                Services.FontCatalog.StylesFor(fam);
+                                var t1 = sw.Elapsed.TotalMilliseconds;
+                                Services.FontCatalog.SafeFontFamily(fam);
+                                var t2 = sw.Elapsed.TotalMilliseconds;
+                                stylesTotal += t1 - t0;
+                                safeTotal += t2 - t1;
+                                if (t1 - t0 > stylesMax) { stylesMax = t1 - t0; stylesWorst = fam; }
+                                if (t2 - t1 > safeMax) { safeMax = t2 - t1; safeWorst = fam; }
+                            }
+                            var t3 = sw.Elapsed.TotalMilliseconds;
+                            foreach (var fam in _fontFamilies) Services.FontCatalog.SafeFontFamily(fam);
+                            var safeSecond = sw.Elapsed.TotalMilliseconds - t3;
+                            File.AppendAllText(perfFile,
+                                $"bench families={_fontFamilies.Length} StylesFor total={stylesTotal:F0}ms max={stylesMax:F1}ms ({stylesWorst}) " +
+                                $"SafeFontFamily total={safeTotal:F0}ms max={safeMax:F1}ms ({safeWorst}) secondPass={safeSecond:F0}ms\n");
+                        }
+                        int mainLayout = 0, popupLayout = 0, switches = 0;
+                        double switchMs = 0, switchMax = 0;
+                        var gc0 = GC.CollectionCount(0);
                         LayoutUpdated += (_, _) => mainLayout++;
                         var popup = FontFamilyCombo.GetTemplateChildren().OfType<Popup>().FirstOrDefault();
                         if (popup?.Child is { } child)
@@ -241,15 +283,40 @@ public partial class MainWindow : Window
                             if (TopLevel.GetTopLevel(child) is { } popupRoot)
                                 popupRoot.LayoutUpdated += (_, _) => popupLayout++;
                         }
+                        if (int.TryParse(Environment.GetEnvironmentVariable("MINEPAINTER_DEBUG_PERF_CYCLE"), out var cycleMs) && cycleMs > 0)
+                        {
+                            var cycle = new Avalonia.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(cycleMs) };
+                            cycle.Tick += (_, _) =>
+                            {
+                                var sw = System.Diagnostics.Stopwatch.StartNew();
+                                try
+                                {
+                                    FontFamilyCombo.SelectedIndex = (FontFamilyCombo.SelectedIndex + 1) % FontFamilyCombo.ItemCount;
+                                }
+                                catch (Exception ex)
+                                {
+                                    File.AppendAllText(perfFile, $"  [cycle] EXCEPTION at {FontFamilyCombo.SelectedItem}: {ex}\n");
+                                }
+                                var ms = sw.Elapsed.TotalMilliseconds;
+                                switches++;
+                                switchMs += ms;
+                                switchMax = Math.Max(switchMax, ms);
+                            };
+                            cycle.Start();
+                        }
                         var perfTimer = new Avalonia.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
                         var lastFrame = Canvas.Stats.FrameIndex;
                         perfTimer.Tick += (_, _) =>
                         {
                             var frames = Canvas.Stats.FrameIndex - lastFrame;
                             lastFrame = Canvas.Stats.FrameIndex;
+                            var gcNow = GC.CollectionCount(0);
                             File.AppendAllText(perfFile,
-                                $"{DateTime.Now:HH:mm:ss} fps={Canvas.Stats.Fps:F0} canvasFrames={frames} mainLayout={mainLayout} popupLayout={popupLayout} popupRender={popupRender}\n");
-                            mainLayout = popupLayout = popupRender = 0;
+                                $"{DateTime.Now:HH:mm:ss} fps={Canvas.Stats.Fps:F0} canvasFrames={frames} mainLayout={mainLayout} popupLayout={popupLayout} " +
+                                $"switches={switches} avgMs={(switches > 0 ? switchMs / switches : 0):F1} maxMs={switchMax:F1} gc0={gcNow - gc0} font={FontFamilyCombo.SelectedItem}\n");
+                            mainLayout = popupLayout = switches = 0;
+                            switchMs = switchMax = 0;
+                            gc0 = gcNow;
                         };
                         perfTimer.Start();
                     }
@@ -1290,7 +1357,23 @@ public partial class MainWindow : Window
         {
             lock (doc.SyncRoot) doc.ActiveLayer = target; // 套到哪層就選哪層，圖層面板看得到
         }
-        ApplyPresetToLayer(session, target, preset, replace: false);
+        _ = ApplyPresetAskingAsync(session, target, preset);
+    }
+
+    /// <summary>圖層還沒有效果堆疊就直接套；已經有了就問要覆蓋還是疊加。</summary>
+    private async Task ApplyPresetAskingAsync(EditorSession session, RasterLayer layer, EffectPreset preset)
+    {
+        IReadOnlyList<LayerEffect> existing;
+        lock (session.Document.SyncRoot) existing = layer.Effects;
+        if (existing.Count == 0)
+        {
+            ApplyPresetToLayer(session, layer, preset, replace: false);
+            return;
+        }
+        var dialog = new PresetApplyDialog(preset.Name, layer.Name, existing.Select(e => e.Name).ToList());
+        await dialog.ShowDialog(this);
+        if (dialog.Result == PresetApplyDialog.Choice.Cancel) return;
+        ApplyPresetToLayer(session, layer, preset, replace: dialog.Result == PresetApplyDialog.Choice.Replace);
     }
 
     /// <summary>落點（doc 座標）附近 5×5 內有不透明像素的最上層點陣圖層（含效果輸出）；沒有就 null。</summary>
@@ -2870,7 +2953,9 @@ public partial class MainWindow : Window
             if (family == null) return;
             // 換家族時重列可用字重，並落在最接近目前字重的一檔
             var currentWeight = SelectedText?.Element.FontWeight ?? Canvas.Session?.Text.FontWeight ?? 400;
+            PerfTrace.Begin();
             RepopulateFontStyles(family, currentWeight);
+            PerfTrace.Lap("styles");
             var weight = SelectedFontWeight();
             if (Canvas.Session is { } s)
             {
@@ -2878,8 +2963,12 @@ public partial class MainWindow : Window
                 s.Text.FontWeight = weight;
             }
             ApplyTextEdit(el => el with { FontFamily = family, FontWeight = weight });
+            PerfTrace.Lap("applyEdit");
             CommitTextEdit();
+            PerfTrace.Lap("commit");
             UpdateCanvasEditBoxStyle();
+            PerfTrace.Lap("editBox");
+            PerfTrace.End("fontSwitch");
         };
         FontStyleCombo.SelectionChanged += (_, _) =>
         {
@@ -3685,5 +3774,36 @@ public partial class MainWindow : Window
         RedoMenuItem.Header = session.History.RedoLabel is { } rl ? $"重做 {rl}(_R)" : "重做(_R)";
 
         SyncVectorOptionsFromSelection();
+    }
+
+    /// <summary>MINEPAINTER_DEBUG_PERF 有設時，把一段流程各步的毫秒寫進同一個記錄檔（沒設就全是空操作）。</summary>
+    private static class PerfTrace
+    {
+        private static readonly string? File = Environment.GetEnvironmentVariable("MINEPAINTER_DEBUG_PERF");
+        private static readonly System.Diagnostics.Stopwatch Watch = new();
+        private static readonly System.Text.StringBuilder Line = new();
+        private static double _last;
+
+        public static void Begin()
+        {
+            if (File == null) return;
+            Watch.Restart();
+            _last = 0;
+            Line.Clear();
+        }
+
+        public static void Lap(string name)
+        {
+            if (File == null) return;
+            var now = Watch.Elapsed.TotalMilliseconds;
+            Line.Append($" {name}={now - _last:F1}");
+            _last = now;
+        }
+
+        public static void End(string what)
+        {
+            if (File == null) return;
+            System.IO.File.AppendAllText(File, $"  [{what}] total={Watch.Elapsed.TotalMilliseconds:F1}{Line}\n");
+        }
     }
 }

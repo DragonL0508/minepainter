@@ -23,10 +23,17 @@ public static class FontCatalog
         .OrderBy(f => f, StringComparer.CurrentCulture)
         .ToArray();
 
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, FontStyleOption[]> StyleCache = new();
+    private static readonly Dictionary<string, FontFamily> FamilyCache = new();
+    private static bool _warmed;
+
     /// <summary>
     /// 家族可用的直立字重（斜體交給 I 鈕），依字重排序；列不出來時退回單一 Regular 400。
+    /// 結果快取：DirectWrite 列舉一個家族最慢要 40ms，切字型時每次重列會直接掉幀。
     /// </summary>
-    public static FontStyleOption[] StylesFor(string family)
+    public static FontStyleOption[] StylesFor(string family) => StyleCache.GetOrAdd(family ?? "", EnumerateStyles);
+
+    private static FontStyleOption[] EnumerateStyles(string family)
     {
         var options = new List<FontStyleOption>();
         try
@@ -52,6 +59,31 @@ public static class FontCatalog
         return options.ToArray();
     }
 
+    /// <summary>
+    /// 啟動後預熱：字重列舉丟到背景執行緒（純 Skia，與 UI 無關），GlyphTypeface 探測在 UI 執行緒
+    /// 閒置時分批做（Avalonia 的字型物件要在 UI 執行緒建）。之後切字型就只剩查表。
+    /// </summary>
+    public static void WarmUp()
+    {
+        if (_warmed) return;
+        _warmed = true;
+        var families = Families;
+        Task.Run(() =>
+        {
+            foreach (var f in families) StylesFor(f);
+        });
+
+        var index = 0;
+        void Step()
+        {
+            var end = Math.Min(index + 8, families.Length);
+            for (; index < end; index++) SafeFontFamily(families[index]);
+            if (index < families.Length)
+                Avalonia.Threading.Dispatcher.UIThread.Post(Step, Avalonia.Threading.DispatcherPriority.Background);
+        }
+        Avalonia.Threading.Dispatcher.UIThread.Post(Step, Avalonia.Threading.DispatcherPriority.Background);
+    }
+
     /// <summary>最接近指定字重的索引（清單不可為空）。</summary>
     public static int ClosestIndex(FontStyleOption[] options, int weight)
     {
@@ -69,6 +101,15 @@ public static class FontCatalog
     /// FontFamily 會在排版時 crash —— 先探測，失敗就退回預設字面（Skia 渲染端自己會 fallback）。
     /// </summary>
     public static FontFamily SafeFontFamily(string name)
+    {
+        if (string.IsNullOrEmpty(name)) return FontFamily.Default;
+        if (FamilyCache.TryGetValue(name, out var cached)) return cached;
+        var resolved = ProbeFontFamily(name);
+        FamilyCache[name] = resolved;
+        return resolved;
+    }
+
+    private static FontFamily ProbeFontFamily(string name)
     {
         try
         {

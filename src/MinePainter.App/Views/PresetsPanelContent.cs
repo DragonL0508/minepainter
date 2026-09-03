@@ -30,6 +30,15 @@ public sealed class PresetsPanelContent : UserControl
     /// <summary>正在被拖曳的預設集（同一個程式內，主視窗 Drop 時直接拿；null = 沒在拖）。</summary>
     public static EffectPreset? Dragging { get; private set; }
 
+    private static PresetsPanelContent? _instance;
+
+    /// <summary>
+    /// 「現在該把新預設集存到哪」：面板看得到就是它選取的資料夾，面板沒開／沒選就是根目錄（""）。
+    /// 圖層屬性視窗的「儲存預設集」用這個。
+    /// </summary>
+    public static string ActiveFolder =>
+        _instance is { IsEffectivelyVisible: true } panel ? panel._currentFolder : "";
+
     private const int ThumbWidth = 84;
     private const int ThumbHeight = 60;
 
@@ -51,14 +60,23 @@ public sealed class PresetsPanelContent : UserControl
     /// <summary>目前的編輯 session（套用／儲存要用）。</summary>
     public Func<EditorSession?>? SessionProvider { get; set; }
 
-    /// <summary>要求把預設集套到目前圖層（true = 取代堆疊）。由主視窗執行並回報。</summary>
-    public event Action<EffectPreset, bool>? ApplyRequested;
+    public enum ApplyMode
+    {
+        /// <summary>沒堆疊直接套，有堆疊問覆蓋或疊加（雙擊走這條）。</summary>
+        Ask,
+        Append,
+        Replace,
+    }
+
+    /// <summary>要求把預設集套到目前圖層。由主視窗執行並回報。</summary>
+    public event Action<EffectPreset, ApplyMode>? ApplyRequested;
 
     /// <summary>給主視窗顯示 toast 的訊息。</summary>
     public event Action<string>? Notify;
 
     public PresetsPanelContent()
     {
+        _instance = this;
         // ---- 工具列 ----
         var toolbar = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 3 };
         toolbar.Children.Add(ToolButton(MaterialIconKind.ContentSave, "把目前圖層的效果堆疊存成預設集（存進選取的資料夾）", (_, _) => _ = SaveCurrentAsync()));
@@ -342,7 +360,7 @@ public sealed class PresetsPanelContent : UserControl
         var effects = preset.Effects.Count == 0
             ? "（空堆疊）"
             : string.Join("、", preset.Effects.Select(e => e.Enabled ? e.Effect.Name : e.Effect.Name + "（關）"));
-        ToolTip.SetTip(tile, $"{preset.DisplayPath}\n{effects}\n\n拖到畫布：套用到落點那一層\n雙擊：套用到目前圖層");
+        ToolTip.SetTip(tile, $"{preset.DisplayPath}\n{effects}\n\n拖到畫布：套用到落點那一層\n雙擊：套用到目前圖層（已有堆疊會問覆蓋或疊加）");
 
         tile.PointerEntered += (_, _) => tile.Background = AppTheme.HeaderBrush;
         tile.PointerExited += (_, _) => tile.Background = Brushes.Transparent;
@@ -355,7 +373,7 @@ public sealed class PresetsPanelContent : UserControl
             if (e.ClickCount >= 2)
             {
                 pressAt = null;
-                ApplyRequested?.Invoke(preset, false);
+                ApplyRequested?.Invoke(preset, ApplyMode.Ask);
                 e.Handled = true;
                 return;
             }
@@ -379,9 +397,9 @@ public sealed class PresetsPanelContent : UserControl
         // 右鍵選單
         var menu = new ClickSubmenuMenuFlyout();
         var apply = new MenuItem { Header = "套用到目前圖層（加在堆疊之後）" };
-        apply.Click += (_, _) => ApplyRequested?.Invoke(preset, false);
+        apply.Click += (_, _) => ApplyRequested?.Invoke(preset, ApplyMode.Append);
         var replace = new MenuItem { Header = "取代目前圖層的堆疊" };
-        replace.Click += (_, _) => ApplyRequested?.Invoke(preset, true);
+        replace.Click += (_, _) => ApplyRequested?.Invoke(preset, ApplyMode.Replace);
         var rename = new MenuItem { Header = "重新命名…" };
         rename.Click += (_, _) => _ = RenameAsync(preset);
         var move = new MenuItem { Header = "移到資料夾" };

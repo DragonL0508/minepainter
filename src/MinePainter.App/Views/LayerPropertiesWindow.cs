@@ -870,32 +870,19 @@ public sealed class LayerPropertiesWindow : Window
         SyncFromModel();
     }
 
+    /// <summary>
+    /// 預設集鈕：只做「儲存」（套用／管理都在預設集面板做——那邊有資料夾與預覽）。
+    /// 存進預設集面板目前選取的資料夾；面板沒開就存根目錄。
+    /// </summary>
     private Controls.ClickSubmenuMenuFlyout BuildPresetFlyout(RasterLayer layer, IReadOnlyList<LayerEffect> current)
     {
         var flyout = new Controls.ClickSubmenuMenuFlyout();
-        var presets = EffectPresetStore.LoadAll();
-        if (presets.Count == 0)
+        var folder = PresetsPanelContent.ActiveFolder;
+        var saveItem = new MenuItem
         {
-            flyout.Items.Add(new MenuItem { Header = "（尚無預設集）", IsEnabled = false });
-        }
-        foreach (var preset in presets)
-        {
-            var p = preset;
-            var item = new MenuItem { Header = p.DisplayPath };
-            var apply = new MenuItem { Header = "套用（加在現有堆疊之後）" };
-            apply.Click += (_, _) => ApplyPreset(layer, p, replace: false);
-            var replaceItem = new MenuItem { Header = "取代目前堆疊" };
-            replaceItem.Click += (_, _) => ApplyPreset(layer, p, replace: true);
-            var delete = new MenuItem { Header = "刪除這個預設集" };
-            delete.Click += (_, _) => { EffectPresetStore.Delete(p); SyncFromModel(); };
-            item.Items.Add(apply);
-            item.Items.Add(replaceItem);
-            item.Items.Add(new Separator());
-            item.Items.Add(delete);
-            flyout.Items.Add(item);
-        }
-        flyout.Items.Add(new Separator());
-        var saveItem = new MenuItem { Header = "儲存目前堆疊為預設集…", IsEnabled = current.Count > 0 };
+            Header = folder.Length == 0 ? "儲存目前堆疊為預設集…（根目錄）" : $"儲存目前堆疊為預設集…（{folder}）",
+            IsEnabled = current.Count > 0,
+        };
         saveItem.Click += async (_, _) =>
         {
             var prompt = new TextPromptDialog("儲存預設集", "名稱", _node.Name + " 效果");
@@ -903,30 +890,13 @@ public sealed class LayerPropertiesWindow : Window
             if (!prompt.Confirmed) return;
             IReadOnlyList<LayerEffect> effects;
             lock (_session.Document.SyncRoot) effects = layer.Effects;
-            EffectPresetStore.Save(prompt.Text, effects);
+            EffectPresetStore.Save(prompt.Text, effects, PresetsPanelContent.ActiveFolder);
             SyncFromModel();
         };
         flyout.Items.Add(saveItem);
-        var openFolder = new MenuItem { Header = "開啟預設集資料夾" };
-        openFolder.Click += (_, _) =>
-        {
-            try
-            {
-                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(EffectPresetStore.FolderPath) { UseShellExecute = true });
-            }
-            catch (Exception)
-            {
-            }
-        };
-        flyout.Items.Add(openFolder);
+        var hint = new MenuItem { Header = "套用／整理請用「預設集」面板（右上角開關）", IsEnabled = false };
+        flyout.Items.Add(hint);
         return flyout;
-    }
-
-    private void ApplyPreset(RasterLayer layer, EffectPreset preset, bool replace)
-    {
-        EffectPresetStore.Apply(_session, layer, preset, replace);
-        StateChanged?.Invoke();
-        SyncFromModel();
     }
 
     // ---- 詳細資訊（唯讀） ----
