@@ -148,7 +148,7 @@ public static class YouTubeMockup
 
     /// <summary>
     /// 仿 YouTube 首頁：頂列、側欄導覽、分類 chips、影片網格。
-    /// 週邊影片全是假資料（CSS 漸層縮圖），只有第一格用使用者的圖。
+    /// 3 欄 × 6 列共 18 部，週邊全是假資料（CSS 漸層縮圖），使用者的圖每次落在隨機一格。
     /// 標「實測」的數字來自 1920 寬深色實機量測，要改先確認有新的量測資料。
     /// </summary>
     private const string Template = """
@@ -165,7 +165,6 @@ public static class YouTubeMockup
   --chip: rgba(255,255,255,.1); --chip-active: #f1f1f1; --chip-active-fg: #0f0f0f;
   --line: #303030; --search: #121212; --search-line: #303030; --hover: rgba(255,255,255,.1);
   --guide-w: 240px;   /* #guide-content 實測 240 */
-  --grid-min: 480px;  /* 內容寬 1648 要排成 3 欄（卡片實測 533） */
 }
 html[data-theme="light"] {
   --bg: #fff; --fg: #0f0f0f; --muted: #606060;
@@ -189,18 +188,23 @@ body {
 .logo { display: flex; align-items: center; gap: 5px; width: 129px; font-size: 20px; font-weight: 500; letter-spacing: -1px; }
 .logo .play { width: 30px; height: 21px; border-radius: 6px; background: #f00; display: grid; place-items: center; }
 .logo .play::after { content: ""; border-left: 8px solid #fff; border-top: 5px solid transparent; border-bottom: 5px solid transparent; margin-left: 2px; }
-/* #center 實測 732 × 40 */
-.search { flex: 1; max-width: 732px; margin: 0 auto; display: flex; height: 40px; }
+/* #center 實測 732 × 40。用絕對定位對齊「視窗」正中央：flex 置中會被左邊的
+   選單鈕與 logo 推歪，跟實機一樣要以畫面中線為準 */
+.search {
+  position: absolute; left: 50%; transform: translateX(-50%);
+  width: min(732px, calc(100% - 340px)); display: flex; height: 40px;
+}
 .search input {
   flex: 1; height: 40px; border: 1px solid var(--search-line); border-right: 0;
   border-radius: 40px 0 0 40px; background: var(--search); color: var(--fg);
-  padding: 0 16px; font-size: 16px; outline: none;
+  padding: 0 16px; font-size: 16px; outline: none; min-width: 0;
 }
 .search button {
   width: 64px; height: 40px; border: 1px solid var(--search-line); border-radius: 0 40px 40px 0;
-  background: var(--chip); color: var(--fg); cursor: pointer; font-size: 15px;
+  background: var(--chip); color: var(--fg); cursor: pointer;
+  display: grid; place-items: center; padding: 0;
 }
-.top .avatar { margin-left: auto; }
+.search button svg { width: 20px; height: 20px; }
 
 .avatar {
   width: 32px; height: 32px; border-radius: 50%; overflow: hidden; flex: none;
@@ -239,9 +243,10 @@ body {
 .fake.d { background: linear-gradient(135deg, #4a2d6b, #2a4a7a); }
 .fake.e { background: linear-gradient(135deg, #2a4a3a, #5a5a2a); }
 
-/* 網格：#contents 實測 padding-top 24；卡片 533×400、margin 0 8px 32px（＝欄距 16、列距 32） */
+/* 網格：#contents 實測 padding-top 24；卡片 533×400、margin 0 8px 32px（＝欄距 16、列距 32）。
+   固定 3 欄 × 6 列＝18 部，跟 1920 寬實機一樣；窄視窗才降欄避免溢出 */
 .grid {
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--grid-min), 1fr));
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 32px 16px; padding-top: 24px;
 }
 .card .meta { display: flex; gap: 12px; padding-top: 12px; }
@@ -263,8 +268,9 @@ body {
   background: #2c2c2c; color: #eee; border: 1px solid #444; border-radius: 6px;
   padding: 5px 9px; font-size: 12px; cursor: pointer; font-family: inherit;
 }
-@media (max-width: 1300px) { :root { --grid-min: 320px; } }
 @media (max-width: 1100px) { .side { display: none; } }
+@media (max-width: 1000px) { .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 640px) { .grid { grid-template-columns: minmax(0, 1fr); } .search { display: none; } }
 </style>
 </head>
 <body>
@@ -274,9 +280,12 @@ body {
   <div class="logo"><span class="play"></span>YouTube<sup style="font-size:10px;opacity:.7">TW</sup></div>
   <div class="search">
     <input value="__CHANNEL__" readonly>
-    <button>🔍</button>
+    <button aria-label="搜尋">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <circle cx="10.5" cy="10.5" r="6.5" /><line x1="15.6" y1="15.6" x2="21" y2="21" />
+      </svg>
+    </button>
   </div>
-  <div class="avatar" data-avatar>__AVATAR_LETTER__</div>
 </div>
 
 <div class="shell">
@@ -304,6 +313,7 @@ body {
 
 <div class="mp-bar">
   <b>MinePainter 預覽</b>
+  <button id="shuffleBtn">重新整理</button>
   <button id="themeBtn">深／淺色</button>
 </div>
 
@@ -314,7 +324,7 @@ const MINE = {
   // 頻道名可能被轉成 &quot; 之類的實體，取首字不能自己 slice，用 C# 算好的
   letter: "__AVATAR_LETTER__",
 };
-// 週邊影片全是假的，用來把版面撐出真實密度
+// 週邊影片全是假的，用來把版面撐出真實密度（3 欄 × 6 列，使用者那部佔掉一格）
 const FAKE = [
   ["殭屍陷阱這樣蓋，一晚清空整片刷怪塔", "紅石小教室", "8.3萬次觀看", "2 天前", "12:47", "b"],
   ["我用 30 天蓋了一座會呼吸的城市", "方塊建築師", "142萬次觀看", "3 週前", "24:05", "c"],
@@ -324,6 +334,15 @@ const FAKE = [
   ["這個地形產生器讓我不想再手動蓋山", "方塊建築師", "11萬次觀看", "4 天前", "18:22", "b"],
   ["用命令方塊做出會追人的雕像", "指令實驗室", "3.9萬次觀看", "9 天前", "7:44", "c"],
   ["整理了一份 1.21 全自動農場清單", "礦坑筆記", "89萬次觀看", "2 個月前", "31:16", "d"],
+  ["下界交通網一次搞懂，座標換算不用算", "礦坑筆記", "34萬次觀看", "11 天前", "13:08", "e"],
+  ["只用泥土能蓋到多誇張", "方塊建築師", "7.2萬次觀看", "1 天前", "16:41", ""],
+  ["把整座村莊搬到空中要花多久", "像素工坊", "19萬次觀看", "3 天前", "22:57", "b"],
+  ["刷怪塔效率實測：五種設計一次比完", "紅石小教室", "56萬次觀看", "2 週前", "27:03", "c"],
+  ["這個資源包讓我重新認識夜晚", "指令實驗室", "4.4萬次觀看", "8 天前", "6:35", "d"],
+  ["生存第一天就該做的七件事", "礦坑筆記", "213萬次觀看", "5 個月前", "11:19", "e"],
+  ["用書和筆做出可翻頁的地圖集", "指令實驗室", "2.8萬次觀看", "4 小時前", "8:52", ""],
+  ["我把主城重蓋了第四次", "方塊建築師", "9.6萬次觀看", "6 天前", "35:12", "b"],
+  ["附魔台擺位到底有沒有差", "像素工坊", "41萬次觀看", "1 個月前", "10:26", "c"],
 ];
 
 const thumbHtml = (f) => f
@@ -343,16 +362,21 @@ const cardHtml = (f) => `
     </div>
   </article>`;
 
-// 使用者的影片排第一格，後面接假的
-document.getElementById("grid").innerHTML = [null, ...FAKE].map(cardHtml).join("");
+// 使用者那部每次落在隨機的一格：縮圖在角落、在中間、被別人夾住看起來差很多
+const grid = document.getElementById("grid");
+const render = () => {
+  const cards = FAKE.slice();
+  cards.splice(Math.floor(Math.random() * (cards.length + 1)), 0, null);
+  grid.innerHTML = cards.map(cardHtml).join("");
+  // 頻道頭像：選了「用這張圖」只換自己那格，假影片維持字母
+  if ("__AVATAR_MODE__" === "image") {
+    const own = grid.querySelector("[data-own-avatar='1']");
+    if (own) own.innerHTML = `<img src="__AVATAR__" alt="">`;
+  }
+};
+render();
 
-// 頻道頭像：選了「用這張圖」只換自己的（頂列與第一格），假影片維持字母
-if ("__AVATAR_MODE__" === "image") {
-  document.querySelectorAll("[data-avatar], [data-own-avatar='1']").forEach((el) => {
-    el.innerHTML = `<img src="__AVATAR__" alt="">`;
-  });
-}
-
+document.getElementById("shuffleBtn").onclick = render;
 document.getElementById("themeBtn").onclick = () => {
   const root = document.documentElement;
   root.dataset.theme = root.dataset.theme === "dark" ? "light" : "dark";
