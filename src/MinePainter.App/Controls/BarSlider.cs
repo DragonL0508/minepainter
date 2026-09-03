@@ -1,4 +1,4 @@
-using Avalonia;
+﻿using Avalonia;
 using Avalonia.Animation;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -314,7 +314,8 @@ public sealed class BarSlider : Control
     {
         base.OnPointerWheelChanged(e);
         var step = Decimals > 0 ? Math.Pow(10, -Decimals) : Math.Max(1, (Maximum - Minimum) / 100);
-        SetAndNotify(Value + Math.Sign(e.Delta.Y) * step);
+        // 往下滾＝變大、往上滾＝變小（與 NumberBox 一致）。
+        SetAndNotify(Value - Math.Sign(e.Delta.Y) * step);
         DragCompleted?.Invoke(Value);
         e.Handled = true;
     }
