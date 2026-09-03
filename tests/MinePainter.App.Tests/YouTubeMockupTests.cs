@@ -71,6 +71,7 @@ public class YouTubeMockupTests
     [InlineData(0, "0 次觀看")]
     [InlineData(9999, "9,999 次觀看")]
     [InlineData(12345, "1.2萬次觀看")]
+    [InlineData(1_833_000, "183萬次觀看")] // 滿十只留整數
     [InlineData(1_200_000, "120萬次觀看")]
     [InlineData(345_000_000, "3.4億次觀看")] // 無條件捨去，跟 YouTube 一樣
     public void 觀看數照繁中習慣格式化(long views, string expected)

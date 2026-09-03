@@ -99,9 +99,10 @@ public static class YouTubeMockup
         if (views >= 10_000) return Trim(views / 10_000.0) + "萬次觀看";
         return views.ToString("N0", CultureInfo.InvariantCulture) + " 次觀看";
 
-        // YouTube 是無條件捨去（1.29 萬顯示 1.2 萬），不是四捨五入
+        // 一律無條件捨去（1.29 萬＝1.2 萬）；滿十只留整數（183.3 萬＝183 萬），跟實站一致
         static string Trim(double value)
         {
+            if (value >= 10) return Math.Floor(value).ToString("0", CultureInfo.InvariantCulture);
             var truncated = Math.Floor(value * 10) / 10;
             return truncated.ToString(truncated == Math.Floor(truncated) ? "0" : "0.0",
                 CultureInfo.InvariantCulture);
@@ -237,11 +238,8 @@ body {
   position: absolute; right: 8px; bottom: 8px; background: rgba(0,0,0,.8); color: #fff;
   font: 500 12px/18px inherit; padding: 0 4px; border-radius: 4px;
 }
-.fake { width: 100%; height: 100%; background: linear-gradient(135deg, #3b4a6b, #6b3b52); }
-.fake.b { background: linear-gradient(135deg, #2d5a4a, #1f3c56); }
-.fake.c { background: linear-gradient(135deg, #6b5a2d, #7a3a2a); }
-.fake.d { background: linear-gradient(135deg, #4a2d6b, #2a4a7a); }
-.fake.e { background: linear-gradient(135deg, #2a4a3a, #5a5a2a); }
+/* 假影片的縮圖是當場畫的 SVG（見腳本的 fakeThumb），撐滿整個縮圖框 */
+.thumb svg { display: block; width: 100%; height: 100%; }
 
 /* 網格：#contents 實測 padding-top 24；卡片 533×400、margin 0 8px 32px（＝欄距 16、列距 32）。
    固定 3 欄 × 6 列＝18 部，跟 1920 寬實機一樣；窄視窗才降欄避免溢出 */
@@ -324,40 +322,123 @@ const MINE = {
   // 頻道名可能被轉成 &quot; 之類的實體，取首字不能自己 slice，用 C# 算好的
   letter: "__AVATAR_LETTER__",
 };
-// 週邊影片全是假的，用來把版面撐出真實密度（3 欄 × 6 列，使用者那部佔掉一格）
-const FAKE = [
-  ["殭屍陷阱這樣蓋，一晚清空整片刷怪塔", "紅石小教室", "8.3萬次觀看", "2 天前", "12:47", "b"],
-  ["我用 30 天蓋了一座會呼吸的城市", "方塊建築師", "142萬次觀看", "3 週前", "24:05", "c"],
-  ["【實況】從零開始的空島生存 EP.1", "像素工坊", "5,204 次觀看", "5 小時前", "1:58:31", "d"],
-  ["新手最常搞錯的 10 個附魔順序", "礦坑筆記", "27萬次觀看", "1 個月前", "9:12", "e"],
-  ["把村民交易做到破產只需要這一招", "紅石小教室", "63萬次觀看", "6 天前", "15:30", ""],
-  ["這個地形產生器讓我不想再手動蓋山", "方塊建築師", "11萬次觀看", "4 天前", "18:22", "b"],
-  ["用命令方塊做出會追人的雕像", "指令實驗室", "3.9萬次觀看", "9 天前", "7:44", "c"],
-  ["整理了一份 1.21 全自動農場清單", "礦坑筆記", "89萬次觀看", "2 個月前", "31:16", "d"],
-  ["下界交通網一次搞懂，座標換算不用算", "礦坑筆記", "34萬次觀看", "11 天前", "13:08", "e"],
-  ["只用泥土能蓋到多誇張", "方塊建築師", "7.2萬次觀看", "1 天前", "16:41", ""],
-  ["把整座村莊搬到空中要花多久", "像素工坊", "19萬次觀看", "3 天前", "22:57", "b"],
-  ["刷怪塔效率實測：五種設計一次比完", "紅石小教室", "56萬次觀看", "2 週前", "27:03", "c"],
-  ["這個資源包讓我重新認識夜晚", "指令實驗室", "4.4萬次觀看", "8 天前", "6:35", "d"],
-  ["生存第一天就該做的七件事", "礦坑筆記", "213萬次觀看", "5 個月前", "11:19", "e"],
-  ["用書和筆做出可翻頁的地圖集", "指令實驗室", "2.8萬次觀看", "4 小時前", "8:52", ""],
-  ["我把主城重蓋了第四次", "方塊建築師", "9.6萬次觀看", "6 天前", "35:12", "b"],
-  ["附魔台擺位到底有沒有差", "像素工坊", "41萬次觀看", "1 個月前", "10:26", "c"],
+// ── 假影片：標題、頻道、頭像、縮圖全部當場生成，每次重新整理都不一樣 ──────────
+const rand = (n) => Math.floor(Math.random() * n);
+const pick = (a) => a[rand(a.length)];
+const pad2 = (n) => String(n).padStart(2, "0");
+
+const CHANNELS = [
+  "紅石小教室", "方塊建築師", "像素工坊", "礦坑筆記", "指令實驗室",
+  "綠寶石頻道", "一格工程部", "夜視玩家", "苦力怕日常", "建築藍圖社",
+];
+// [題材, 縮圖上的大字]：大字跟標題同一個題材，看起來才像同一部影片
+const TOPICS = [
+  ["紅石電路", "紅石"], ["刷怪塔", "刷怪塔"], ["附魔", "附魔"], ["村民交易", "村民"],
+  ["自動農場", "農場"], ["下界交通", "下界"], ["生存基地", "基地"], ["地形建築", "地形"],
+  ["指令方塊", "指令"], ["資源包", "材質"], ["礦車軌道", "礦車"], ["水電站", "水電"],
+];
+const TITLES = [
+  (t) => `${t}這樣做，效率直接翻倍`,
+  (t) => `我用 ${5 + rand(60)} 天做了一座${t}`,
+  (t) => `【實況】生存日記 EP.${1 + rand(40)}：${t}`,
+  (t) => `新手最常搞錯的 ${3 + rand(9)} 個${t}細節`,
+  (t) => `${t}完全指南，一支影片講完`,
+  (t) => `把${t}做到極限會發生什麼事`,
+  (t) => `這個${t}設計讓我不想再手動蓋`,
+  (t) => `${t}實測：五種做法一次比完`,
+  (t) => `${t}只用一格空間能做到什麼程度`,
+  (t) => `${t}的隱藏機制，官方從來沒說`,
+  (t) => `${t}改了第四版，這次終於滿意`,
+  (t) => `${t}翻車紀錄，別學我`,
+];
+const AGES = [
+  "3 小時前", "7 小時前", "1 天前", "2 天前", "4 天前", "6 天前",
+  "9 天前", "2 週前", "3 週前", "1 個月前", "2 個月前", "5 個月前",
 ];
 
+// 觀看數：對數分佈（多數幾萬、偶爾破百萬），格式跟 C# 的 FormatViews 一致
+const randomViews = () => Math.floor(Math.exp(Math.random() * Math.log(4e6 / 400)) * 400);
+const formatViews = (v) => {
+  const trim = (x) => {
+    if (x >= 10) return String(Math.floor(x));
+    const t = Math.floor(x * 10) / 10;
+    return t === Math.floor(t) ? String(t) : t.toFixed(1);
+  };
+  if (v >= 1e8) return trim(v / 1e8) + "億次觀看";
+  if (v >= 1e4) return trim(v / 1e4) + "萬次觀看";
+  return v.toLocaleString("en-US") + " 次觀看";
+};
+const randomDuration = () => (rand(10) === 0
+  ? `${1 + rand(3)}:${pad2(rand(60))}:${pad2(rand(60))}`   // 偶爾一部直播存檔
+  : `${1 + rand(38)}:${pad2(rand(60))}`);
+
+// 頻道頭像：跟 YouTube 預設頭像一樣是純色底 + 白色首字，顏色由頻道名決定（同名同色）
+const hashOf = (text) => [...text].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);
+const avatarBg = (name) => `hsl(${hashOf(name) % 360} 55% 42%)`;
+
+// 假縮圖：四種常見的 YouTube 縮圖構圖，當場畫成 SVG（零外部資源）
+const PALETTES = [
+  ["#f4511e", "#7b1fa2"], ["#1565c0", "#00acc1"], ["#2e7d32", "#9e9d24"],
+  ["#c62828", "#ad1457"], ["#4527a0", "#1e88e5"], ["#ef6c00", "#c62828"],
+  ["#00695c", "#33691e"], ["#37474f", "#546e7a"], ["#5d4037", "#bf360c"],
+];
+let svgUid = 0;
+const fakeThumb = (word) => {
+  const [c1, c2] = pick(PALETTES);
+  const id = `g${svgUid++}`;
+  const big = (x, y, anchor, size) =>
+    `<text x="${x}" y="${y}" text-anchor="${anchor}" font-size="${size}" font-weight="900"` +
+    ` fill="#fff" stroke="#000" stroke-width="7" paint-order="stroke">${word}</text>`;
+  // 右側的人頭剪影：真實縮圖十張有六張都有一顆頭
+  const face = '<circle cx="250" cy="104" r="58" fill="rgba(0,0,0,.3)" />' +
+    '<circle cx="250" cy="86" r="27" fill="#f0c8a0" />' +
+    '<rect x="214" y="116" width="72" height="52" rx="24" fill="#f0c8a0" />';
+  const arrow = '<path d="M148 120 h46 v-15 l28 23 -28 23 v-15 h-46 z" fill="#ffdd00" stroke="#000" stroke-width="4" />';
+  const grid16 = [...Array(12)].map((_, i) =>
+    `<rect x="${(i % 6) * 54}" y="${i < 6 ? 0 : 126}" width="54" height="54" fill="rgba(255,255,255,.07)" />`).join("");
+  const body = [
+    face + big(22, 112, "start", 46),
+    '<path d="M0 0 H320 L0 180 Z" fill="rgba(0,0,0,.35)" />' + big(160, 106, "middle", 52) +
+      '<rect x="98" y="124" width="124" height="10" fill="#ff2b2b" />',
+    grid16 + big(20, 150, "start", 44) +
+      '<rect x="230" y="16" width="72" height="30" rx="6" fill="#ff2b2b" />' +
+      '<text x="266" y="39" text-anchor="middle" font-size="19" font-weight="900" fill="#fff">NEW</text>',
+    arrow + big(20, 106, "start", 44) + '<rect x="0" y="0" width="320" height="180" fill="none" stroke="#ffdd00" stroke-width="8" />',
+  ][rand(4)];
+  return `<svg viewBox="0 0 320 180" preserveAspectRatio="xMidYMid slice">` +
+    `<defs><linearGradient id="${id}" x1="0" y1="0" x2="1" y2="1">` +
+    `<stop offset="0" stop-color="${c1}" /><stop offset="1" stop-color="${c2}" /></linearGradient></defs>` +
+    `<rect width="320" height="180" fill="url(#${id})" />${body}</svg>`;
+};
+
+const makeFake = () => {
+  const [topic, word] = pick(TOPICS);
+  const channel = pick(CHANNELS);
+  return {
+    title: pick(TITLES)(topic),
+    channel,
+    views: formatViews(randomViews()),
+    age: pick(AGES),
+    duration: randomDuration(),
+    thumb: fakeThumb(word),
+  };
+};
+
 const thumbHtml = (f) => f
-  ? `<div class="thumb"><div class="fake ${f[5]}"></div><span class="dur">${f[4]}</span></div>`
+  ? `<div class="thumb">${f.thumb}<span class="dur">${f.duration}</span></div>`
   : `<div class="thumb"><img src="${MINE.thumb}" alt=""><span class="dur">${MINE.duration}</span></div>`;
 
 const cardHtml = (f) => `
   <article class="card">
     ${thumbHtml(f)}
     <div class="meta">
-      <div class="avatar" data-own-avatar="${f ? 0 : 1}">${f ? f[1].slice(0, 1) : MINE.letter}</div>
+      <div class="avatar" data-own-avatar="${f ? 0 : 1}"
+           style="background:${f ? avatarBg(f.channel) : "#3ea6ff"};color:${f ? "#fff" : "#0f0f0f"}">${
+             f ? f.channel.slice(0, 1) : MINE.letter}</div>
       <div>
-        <div class="title">${f ? f[0] : MINE.title}</div>
-        <div class="sub">${f ? f[1] : MINE.channel}</div>
-        <div class="sub">${f ? `${f[2]}・${f[3]}` : `${MINE.views}・${MINE.uploaded}`}</div>
+        <div class="title">${f ? f.title : MINE.title}</div>
+        <div class="sub">${f ? f.channel : MINE.channel}</div>
+        <div class="sub">${f ? `${f.views}・${f.age}` : `${MINE.views}・${MINE.uploaded}`}</div>
       </div>
     </div>
   </article>`;
@@ -365,10 +446,10 @@ const cardHtml = (f) => `
 // 使用者那部每次落在隨機的一格：縮圖在角落、在中間、被別人夾住看起來差很多
 const grid = document.getElementById("grid");
 const render = () => {
-  const cards = FAKE.slice();
-  cards.splice(Math.floor(Math.random() * (cards.length + 1)), 0, null);
+  const cards = [...Array(17)].map(makeFake);
+  cards.splice(rand(cards.length + 1), 0, null);
   grid.innerHTML = cards.map(cardHtml).join("");
-  // 頻道頭像：選了「用這張圖」只換自己那格，假影片維持字母
+  // 頻道頭像：選了「用這張圖」只換自己那格，假影片維持首字
   if ("__AVATAR_MODE__" === "image") {
     const own = grid.querySelector("[data-own-avatar='1']");
     if (own) own.innerHTML = `<img src="__AVATAR__" alt="">`;
