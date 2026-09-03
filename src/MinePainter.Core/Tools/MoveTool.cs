@@ -103,6 +103,8 @@ public sealed class MoveTool : ITool
             _startRect = transform.FrameRect;
             _startQuad = transform.Quad; // 四角模式：平移的是四角（immutable 實例，直接留著當起點）
             _startWarp = transform.Warp;
+            // 變形中的圖層自己不能當參考（框還在原位，會被原地吸住）
+            session.BeginSnapDrag(transform.Target.Id);
             _layerDetachTried = false; // 單層 session 的平移可走拖曳覆疊快路徑
             _pressedOutsideSelection = !TransformContains(transform, e.DocPosition);
             return;
@@ -115,6 +117,7 @@ public sealed class MoveTool : ITool
             _mode = Mode.FloatingMove;
             _dragStart = e.DocPosition;
             _startRect = floating.TargetRect;
+            session.BeginSnapDrag();
             _pressedOutsideSelection = !floating.TargetRect.Contains(e.DocPosition.X, e.DocPosition.Y);
             return;
         }
@@ -128,6 +131,7 @@ public sealed class MoveTool : ITool
             doc.ActiveLayer is not RasterLayer { IsTextLayer: true })
         {
             _dragStart = e.DocPosition;
+            session.BeginSnapDrag();
             if (selection.CoverageAt((int)e.DocPosition.X, (int)e.DocPosition.Y) > 0)
             {
                 var lifted = session.LiftSelection();
@@ -199,6 +203,8 @@ public sealed class MoveTool : ITool
         // 不能用 LayerNode.ContentBounds —— 那是 tile 對齊（256 倍數）的保守外擴，
         // 吸附會對到看不見的 tile 邊界，整個對不齊。
         _startRect = session.SelectionHandles ?? SKRect.Empty;
+        // 被拖的圖層（群組時是全部子層）不算參考框
+        session.BeginSnapDrag(_moveLayers.Select(l => l.Id).ToArray());
         _dragStart = e.DocPosition;
         _lastMoveDelta = SKPointI.Empty;
         _layerDetachTried = false;
@@ -371,7 +377,7 @@ public sealed class MoveTool : ITool
 
     public void OnPointerUp(ToolPointerEvent e, EditorSession session)
     {
-        session.SnapGuides = null; // 導線只在拖曳中顯示
+        session.EndSnapDrag(); // 導線只在拖曳中顯示；參考框快取跟著這趟拖曳結束
         if (_mode == Mode.Handles)
         {
             _handles.End(session);
@@ -519,6 +525,20 @@ public sealed class MoveTool : ITool
     /// 變形框與浮動內容在 session 裡動、不記步（落地時一起記）；物件與圖層各記一步。
     /// 回傳 false＝沒有可微調的東西。
     /// </summary>
+    /// <summary>
+    /// 這次微調會落在「不壓 undo」的路徑嗎（變形框／浮動內容／還沒提起的選取範圍）。
+    /// UI 用它決定能不能把位移拆成好幾幀平滑挪過去 —— 物件與圖層每一步都會壓一筆歷史，
+    /// 拆幀會灌爆 undo，只能一次到位。
+    /// </summary>
+    public static bool CanNudgeSmoothly(EditorSession session) =>
+        session.Transform != null || session.Floating != null || CanLiftForNudge(session);
+
+    /// <summary>有選取範圍、作用中是一般點陣圖層、也沒有選中的物件 → 方向鍵該提起選取的像素。</summary>
+    private static bool CanLiftForNudge(EditorSession session) =>
+        session.SelectedElement == null &&
+        session.Selection is { IsEmpty: false } &&
+        session.Document.ActiveLayer is RasterLayer { IsTextLayer: false };
+
     public static bool Nudge(EditorSession session, int dx, int dy)
     {
         if (dx == 0 && dy == 0) return false;
@@ -538,7 +558,11 @@ public sealed class MoveTool : ITool
             return true;
         }
 
-        if (session.Floating is { } floating)
+        // 有選取範圍時，方向鍵動的是「選取的像素」（與拖曳同一套語意）：
+        // 第一次按就把它提起來變成浮動內容，之後都在浮動內容上挪。
+        // 文字圖層例外（內容是物件不是像素，提起只會挖到空白），走下面的物件／整層路徑。
+        var target = session.Floating ?? (CanLiftForNudge(session) ? session.LiftSelection() : null);
+        if (target is { } floating)
         {
             var before = floating.TargetBounds;
             var r = floating.TargetRect;

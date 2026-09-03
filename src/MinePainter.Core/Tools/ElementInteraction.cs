@@ -102,6 +102,7 @@ public sealed class ElementDragHelper
         _original = element;
         _dragStart = p;
         _moveDelta = SKPoint.Empty;
+        session.BeginSnapDrag(element.Id); // 對齊參考：畫布與其他物件，但不含自己
         SetSelected(session, layer, element);
         // 拖曳期間用覆疊圖代替原件：不重排版、不逐格重畫（文字帶外框／陰影時每步重畫很貴）
         session.BeginElementOverlayLocked(layer, element);
@@ -267,7 +268,7 @@ public sealed class ElementDragHelper
     /// <summary>結束拖曳；有實際變更時補 undo entry。縮得太小的物件會被刪除。</summary>
     public void End(EditorSession session)
     {
-        session.SnapGuides = null; // 導線只在拖曳中顯示
+        session.EndSnapDrag(); // 導線只在拖曳中顯示；參考框快取跟著這趟拖曳結束
         var layer = _layer;
         var original = _original;
         var mode = _mode;

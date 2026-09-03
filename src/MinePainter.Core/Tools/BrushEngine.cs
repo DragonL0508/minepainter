@@ -10,6 +10,12 @@ public sealed record BrushSettings
     public float Hardness { get; set; } = 0.8f;    // 0..1
     public float Opacity { get; set; } = 1f;       // 0..1（整劃）
     public float Smoothing { get; set; } = 50f;    // 0..100 手抖穩定強度（螢幕空間，見 BrushEngine）
+
+    /// <summary>
+    /// 鉛筆模式：關掉反鋸齒，走整數像素（Bresenham）＋方形筆尖，每格不是全滿就是全空。
+    /// 像素繪圖（Minecraft 材質）要的是這個 —— 一般筆刷的次像素覆蓋會在邊緣留半透明。
+    /// </summary>
+    public bool Aliased { get; set; }
 }
 
 /// <summary>
@@ -246,6 +252,53 @@ public sealed class BrushEngine
         return soft * edge;
     }
 
+    /// <summary>
+    /// 鉛筆模式的蓋章：Bresenham 走整數格（45° 斜線也不會斷），每格蓋一個邊長 = 筆刷直徑的方形，
+    /// 覆蓋度只有 0 或 255。回傳是否有畫到東西。<paramref name="mask"/> 先清成 0。
+    /// </summary>
+    private static bool StampAliased(SKPoint a, SKPoint b, float radius, SKRectI rect, byte[] mask)
+    {
+        var w = rect.Width;
+        var h = rect.Height;
+        Array.Clear(mask, 0, w * h);
+
+        var size = Math.Max(1, (int)MathF.Round(radius * 2f));
+        var half = (size - 1) / 2; // 奇數：以該格為中心；偶數：往左上多一格
+        var any = false;
+
+        var x0 = (int)MathF.Floor(a.X);
+        var y0 = (int)MathF.Floor(a.Y);
+        var x1 = (int)MathF.Floor(b.X);
+        var y1 = (int)MathF.Floor(b.Y);
+        var dx = Math.Abs(x1 - x0);
+        var dy = -Math.Abs(y1 - y0);
+        var sx = x0 < x1 ? 1 : -1;
+        var sy = y0 < y1 ? 1 : -1;
+        var err = dx + dy;
+
+        while (true)
+        {
+            for (var y = y0 - half; y < y0 - half + size; y++)
+            {
+                var my = y - rect.Top;
+                if (my < 0 || my >= h) continue;
+                for (var x = x0 - half; x < x0 - half + size; x++)
+                {
+                    var mx = x - rect.Left;
+                    if (mx < 0 || mx >= w) continue;
+                    mask[my * w + mx] = 255;
+                    any = true;
+                }
+            }
+
+            if (x0 == x1 && y0 == y1) break;
+            var e2 = 2 * err;
+            if (e2 >= dy) { err += dy; x0 += sx; }
+            if (e2 <= dx) { err += dx; y0 += sy; }
+        }
+        return any;
+    }
+
     private static SKRectI StampSegment(SKPoint a, SKPoint b, StrokeBuffer buffer, BrushSettings settings,
         MaskSurface? clip, SKRectI? bounds)
     {
@@ -266,6 +319,14 @@ public sealed class BrushEngine
         var mask = pool.Rent(w * h);
         try
         {
+            if (settings.Aliased)
+            {
+                if (!StampAliased(a, b, radius, rect, mask)) return SKRectI.Empty;
+                buffer.Mask.StampMax(
+                    new ReadOnlySpan<byte>(mask, 0, w * h), w, h, new SKPointI(rect.Left, rect.Top), clip, bounds);
+                return rect;
+            }
+
             var abx = b.X - a.X;
             var aby = b.Y - a.Y;
             var len2 = abx * abx + aby * aby;

@@ -520,8 +520,19 @@ public sealed class CanvasDrawOperation : ICustomDrawOperation
                 Color = new SKColor(0x2A, 0x9D, 0xF4, 0xD0),
                 IsAntialias = true,
             };
-            if (snapGuides.X is { } gx) canvas.DrawLine(gx, 0, gx, doc.Height, guidePaint);
-            if (snapGuides.Y is { } gy) canvas.DrawLine(0, gy, doc.Width, gy, guidePaint);
+            // 線段只畫在「參與對齊的兩個框」之間（各端外伸一小截，看得出是同一條線）；
+            // 長度未知（NaN）時退回整條畫布
+            var overhang = 12f * screenPx;
+            foreach (var g in snapGuides.XLines)
+            {
+                var (a, b) = float.IsNaN(g.Start) ? (0f, (float)doc.Height) : (g.Start - overhang, g.End + overhang);
+                canvas.DrawLine(g.Position, a, g.Position, b, guidePaint);
+            }
+            foreach (var g in snapGuides.YLines)
+            {
+                var (a, b) = float.IsNaN(g.Start) ? (0f, (float)doc.Width) : (g.Start - overhang, g.End + overhang);
+                canvas.DrawLine(a, g.Position, b, g.Position, guidePaint);
+            }
         }
 
         // 工具幾何預覽：形狀工具用元素本身真正渲染（所見即所得），其餘畫折線（選取框/套索軌跡）

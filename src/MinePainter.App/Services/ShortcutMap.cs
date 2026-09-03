@@ -72,6 +72,7 @@ public static class ShortcutMap
         new("view.bestFit", "檢視", "最適大小", new KeyGesture(Key.B, KeyModifiers.Control)),
 
         new("tool.brush", "工具", "筆刷", new KeyGesture(Key.B)),
+        new("tool.pencil", "工具", "鉛筆", new KeyGesture(Key.N)),
         new("tool.eraser", "工具", "橡皮擦", new KeyGesture(Key.E)),
         new("tool.bgeraser", "工具", "去背筆", new KeyGesture(Key.E, KeyModifiers.Shift)),
         new("tool.eyedropper", "工具", "滴管", new KeyGesture(Key.I)),
@@ -82,6 +83,7 @@ public static class ShortcutMap
         new("tool.fill", "工具", "油漆桶", new KeyGesture(Key.F)),
         new("tool.text", "工具", "文字", new KeyGesture(Key.T)),
         new("tool.shape", "工具", "形狀", new KeyGesture(Key.O)),
+        new("tool.line", "工具", "直線", new KeyGesture(Key.U)),
         new("tool.pen", "工具", "鋼筆", new KeyGesture(Key.P)),
 
         // 按住型：壓著進入對齊模式（移動框時吸附畫布四邊與中線），放開即退出

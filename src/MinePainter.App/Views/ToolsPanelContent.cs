@@ -10,20 +10,34 @@ namespace MinePainter.App.Views;
 /// <summary>paint.net 式直條工具面板：雙欄 icon-only 按鈕。</summary>
 public sealed class ToolsPanelContent : UserControl
 {
-    private static readonly (string Key, MaterialIconKind Icon, string Tip)[] Tools =
+    /// <summary>
+    /// 工具依用途分組（組間畫一條分隔線），每組內成對排在同一列（面板是雙欄）：
+    /// 選取與移動 → 手繪 → 填色取色 → 形狀與物件。
+    /// </summary>
+    private static readonly (string Key, MaterialIconKind Icon, string Tip)[][] Groups =
     [
-        ("rectselect", MaterialIconKind.Select, "矩形選取 (S)"),
-        ("lasso", MaterialIconKind.Lasso, "套索選取 (L)"),
-        ("wand", MaterialIconKind.AutoFix, "魔術棒 (W)"),
-        ("move", MaterialIconKind.CursorMove, "移動 (M)"),
-        ("brush", MaterialIconKind.Brush, "筆刷 (B)"),
-        ("eraser", MaterialIconKind.Eraser, "橡皮擦 (E)"),
-        ("bgeraser", MaterialIconKind.EraserVariant, "去背筆 (Shift+E)：擦掉與筆刷中心相近的顏色，物件留下"),
-        ("fill", MaterialIconKind.FormatColorFill, "油漆桶 (F)"),
-        ("eyedropper", MaterialIconKind.Eyedropper, "滴管 (I)"),
-        ("text", MaterialIconKind.FormatText, "文字 (T)"),
-        ("shape", MaterialIconKind.ShapeOutline, "形狀 (O)"),
-        ("pen", MaterialIconKind.VectorBezier, "鋼筆 (P)：點一下加角點、按住拖曳拉出曲線、點回起點封閉；Enter 轉為選取、Backspace 退一點、Esc 清除"),
+        [
+            ("rectselect", MaterialIconKind.Select, "矩形選取 (S)"),
+            ("lasso", MaterialIconKind.Lasso, "套索選取 (L)"),
+            ("wand", MaterialIconKind.AutoFix, "魔術棒 (W)"),
+            ("move", MaterialIconKind.CursorMove, "移動 (M)"),
+        ],
+        [
+            ("brush", MaterialIconKind.Brush, "筆刷 (B)：柔邊、抗鋸齒"),
+            ("pencil", MaterialIconKind.Pencil, "鉛筆 (N)：硬邊、無抗鋸齒的方形筆尖（像素繪圖）"),
+            ("eraser", MaterialIconKind.Eraser, "橡皮擦 (E)"),
+            ("bgeraser", MaterialIconKind.EraserVariant, "去背筆 (Shift+E)：擦掉與筆刷中心相近的顏色，物件留下"),
+        ],
+        [
+            ("fill", MaterialIconKind.FormatColorFill, "油漆桶 (F)"),
+            ("eyedropper", MaterialIconKind.Eyedropper, "滴管 (I)"),
+        ],
+        [
+            ("shape", MaterialIconKind.ShapeOutline, "形狀 (O)：矩形／橢圓"),
+            ("line", MaterialIconKind.VectorLine, "直線 (U)：拖曳畫線，Shift 吸附 15°"),
+            ("text", MaterialIconKind.FormatText, "文字 (T)"),
+            ("pen", MaterialIconKind.VectorBezier, "鋼筆 (P)：點一下加角點、按住拖曳拉出曲線、點回起點封閉；Enter 轉為選取、Backspace 退一點、Esc 清除"),
+        ],
     ];
 
     private readonly Dictionary<string, ToggleButton> _buttons = new();
@@ -37,40 +51,23 @@ public sealed class ToolsPanelContent : UserControl
 
     public ToolsPanelContent()
     {
-        var grid = new UniformGrid { Columns = 2 };
-        foreach (var (key, icon, tip) in Tools)
+        var stack = new StackPanel { Orientation = Orientation.Vertical };
+        for (var g = 0; g < Groups.Length; g++)
         {
-            var button = new ToggleButton
+            if (g > 0)
             {
-                Content = new MaterialIcon { Kind = icon, Width = 18, Height = 18 },
-                Width = 34,
-                Height = 30,
-                Margin = new Thickness(1),
-                Padding = new Thickness(0),
-                HorizontalContentAlignment = HorizontalAlignment.Center,
-                VerticalContentAlignment = VerticalAlignment.Center,
-            };
-            ToolTip.SetTip(button, tip);
-            // 選中底色交給底下的指示器（Animations.axaml 把 .tool 的 checked 底色設成透明）——
-            // 兩者疊在一起時，按鈕自己的不透明底色會把指示器整塊蓋住，只剩邊緣漏出一條藍線
-            button.Classes.Add("tool");
-
-            var captured = key;
-            button.IsCheckedChanged += (_, _) =>
-            {
-                if (_suppress) return;
-                if (button.IsChecked != true)
+                stack.Children.Add(new Border
                 {
-                    // 不允許取消目前工具：點已選中的按鈕維持選中
-                    _suppress = true;
-                    button.IsChecked = true;
-                    _suppress = false;
-                    return;
-                }
-                ToolSelected?.Invoke(captured);
-            };
-            _buttons[key] = button;
-            grid.Children.Add(button);
+                    Height = 1,
+                    Margin = new Thickness(4, 3),
+                    Background = AppTheme.BorderBrush,
+                    Opacity = 0.6,
+                });
+            }
+
+            var grid = new UniformGrid { Columns = 2 };
+            foreach (var (key, icon, tip) in Groups[g]) grid.Children.Add(BuildButton(key, icon, tip));
+            stack.Children.Add(grid);
         }
 
         // 選取指示器：一塊半透明的主題色墊在按鈕底下，切換工具時滑到新按鈕（Motion.Move）。
@@ -90,9 +87,44 @@ public sealed class ToolsPanelContent : UserControl
             IsVisible = false,
         };
         Controls.Motion.TrackTransform(_indicator);
-        _host = new Panel { Children = { _indicator, grid } };
+        _host = new Panel { Children = { _indicator, stack } };
         _host.LayoutUpdated += (_, _) => PlaceIndicator(animate: false);
         Content = _host;
+    }
+
+    /// <summary>一顆工具鈕（icon-only；選中底色交給指示器）。</summary>
+    private ToggleButton BuildButton(string key, MaterialIconKind icon, string tip)
+    {
+        var button = new ToggleButton
+        {
+            Content = new MaterialIcon { Kind = icon, Width = 18, Height = 18 },
+            Width = 34,
+            Height = 30,
+            Margin = new Thickness(1),
+            Padding = new Thickness(0),
+            HorizontalContentAlignment = HorizontalAlignment.Center,
+            VerticalContentAlignment = VerticalAlignment.Center,
+        };
+        ToolTip.SetTip(button, tip);
+        // 選中底色交給底下的指示器（Animations.axaml 把 .tool 的 checked 底色設成透明）——
+        // 兩者疊在一起時，按鈕自己的不透明底色會把指示器整塊蓋住，只剩邊緣漏出一條藍線
+        button.Classes.Add("tool");
+
+        button.IsCheckedChanged += (_, _) =>
+        {
+            if (_suppress) return;
+            if (button.IsChecked != true)
+            {
+                // 不允許取消目前工具：點已選中的按鈕維持選中
+                _suppress = true;
+                button.IsChecked = true;
+                _suppress = false;
+                return;
+            }
+            ToolSelected?.Invoke(key);
+        };
+        _buttons[key] = button;
+        return button;
     }
 
     /// <summary>把指示器放到目前工具的按鈕底下；第一次（還沒顯示）直接就位不播動畫。</summary>

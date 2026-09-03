@@ -41,11 +41,41 @@ public sealed class EditorSession : IDisposable
     /// <summary>工具進行中的幾何預覽（render thread 直接讀，immutable record）。</summary>
     public OverlayPreview? Preview { get; set; }
 
-    /// <summary>對齊模式（按住 Tab）：移動框時吸附畫布四邊與兩條中線。UI 依按鍵狀態設定。</summary>
+    /// <summary>
+    /// 對齊模式（按住 Tab）：移動框時吸附畫布、其他圖層內容、其他文字物件、選取範圍的邊與中線。
+    /// UI 依按鍵狀態設定。
+    /// </summary>
     public bool SnapToCanvas { get; set; }
 
     /// <summary>吸附距離（doc 像素；UI 依縮放換算，約螢幕 8px）。</summary>
     public float SnapTolerance { get; set; } = 8f;
+
+    private List<SnapTarget>? _snapTargets;
+    private readonly HashSet<Guid> _snapExclude = new();
+
+    /// <summary>
+    /// 這次拖曳的吸附參考框（第一次用到才蒐集，整趟拖曳沿用 —— 中途按 Tab 也拿得到）。
+    /// </summary>
+    internal IReadOnlyList<SnapTarget> SnapTargets => _snapTargets ??= CanvasSnap.Collect(this, _snapExclude);
+
+    /// <summary>
+    /// 拖曳開始：重設吸附參考框，並記下「正在被拖的東西」（圖層／物件 Id）——
+    /// 自己不能當自己的參考，否則會被原地吸住。
+    /// </summary>
+    public void BeginSnapDrag(params Guid[] exclude)
+    {
+        _snapTargets = null;
+        _snapExclude.Clear();
+        foreach (var id in exclude) _snapExclude.Add(id);
+    }
+
+    /// <summary>拖曳結束：收掉導線與參考框快取（下一趟重新蒐集，才看得到這趟的新位置）。</summary>
+    public void EndSnapDrag()
+    {
+        SnapGuides = null;
+        _snapTargets = null;
+        _snapExclude.Clear();
+    }
 
     private volatile SnapGuides? _snapGuides;
 
@@ -1239,6 +1269,7 @@ public sealed class EditorSession : IDisposable
     }
 
     public BrushTool Brush { get; }
+    public PencilTool Pencil { get; }
     public EraserTool Eraser { get; }
     public BackgroundEraserTool BackgroundEraser { get; }
     public EyedropperTool Eyedropper { get; }
@@ -1288,6 +1319,7 @@ public sealed class EditorSession : IDisposable
         History.Changed += ReleaseStaleResumes; // 續接點只在「落地那步仍是最後一步」時有效
 
         Brush = new BrushTool();
+        Pencil = new PencilTool();
         Eraser = new EraserTool();
         BackgroundEraser = new BackgroundEraserTool();
         Eyedropper = new EyedropperTool();

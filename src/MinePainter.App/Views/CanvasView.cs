@@ -175,6 +175,46 @@ public sealed class CanvasView : Control
         _animationRunning = false;
     }
 
+    // ---- 方向鍵微調的補間（只用於浮動內容／變形框）----
+
+    /// <summary>還沒套用的微調位移（doc px）；每幀追上一部分。</summary>
+    private double _nudgeRemainX;
+    private double _nudgeRemainY;
+
+    /// <summary>每幀追上剩餘位移的比例（指數趨近；10px 約 6 幀 ≈ 100ms 到位）。</summary>
+    private const double NudgeCatchUp = 0.3;
+
+    /// <summary>剩下的微調位移往目標挪一幀。像素內容只能整數位移，所以每幀取整數步。</summary>
+    private void StepNudgeAnimation()
+    {
+        if (_nudgeRemainX == 0 && _nudgeRemainY == 0) return;
+        var session = _session;
+        // 中途落地／取消（Enter、Esc、切工具）：剩下的位移就此作廢，不要事後補跳一段
+        if (session == null || !Core.Tools.MoveTool.CanNudgeSmoothly(session))
+        {
+            _nudgeRemainX = 0;
+            _nudgeRemainY = 0;
+            return;
+        }
+
+        var dx = NudgeStep(ref _nudgeRemainX);
+        var dy = NudgeStep(ref _nudgeRemainY);
+        if (dx == 0 && dy == 0) return;
+        if (Core.Tools.MoveTool.Nudge(session, dx, dy)) StateChanged?.Invoke();
+    }
+
+    /// <summary>取這一幀要走的整數像素（至少 1px，否則永遠到不了）。</summary>
+    private static int NudgeStep(ref double remain)
+    {
+        if (remain == 0) return 0;
+        var step = remain * NudgeCatchUp;
+        var pixels = Math.Abs(step) < 1 ? Math.Sign(remain) : (int)Math.Round(step);
+        if (Math.Abs(pixels) > Math.Abs(remain)) pixels = (int)remain;
+        remain -= pixels;
+        if (Math.Abs(remain) < 1e-6) remain = 0;
+        return pixels;
+    }
+
     private void StartAnimationLoop()
     {
         if (_animationRunning) return;
@@ -185,6 +225,7 @@ public sealed class CanvasView : Control
             if (!_animationRunning) return;
             _session?.CollectOverlayGhost(); // 落地後的殘影：合成器追上就收掉
             StepViewportAnimation();
+            StepNudgeAnimation();
             UpdateBrushCursor();
             FrameTick?.Invoke();
             InvalidateVisual();
@@ -661,7 +702,18 @@ public sealed class CanvasView : Control
                     Key.Up => (0, -step),
                     _ => (0, step),
                 };
-                if (Core.Tools.MoveTool.Nudge(session, dx, dy)) StateChanged?.Invoke();
+                // 浮動內容與變形框的微調不記 undo，可以拆成好幾幀慢慢挪 —— 這樣
+                // Shift 的 10px（與按住不放的連續觸發）是滑過去的，不是一格一格瞬移。
+                // 物件／圖層每一步都會壓一筆 undo，拆幀會灌爆歷史，維持即時。
+                if (Core.Tools.MoveTool.CanNudgeSmoothly(session))
+                {
+                    _nudgeRemainX += dx;
+                    _nudgeRemainY += dy;
+                }
+                else if (Core.Tools.MoveTool.Nudge(session, dx, dy))
+                {
+                    StateChanged?.Invoke();
+                }
                 e.Handled = true;
                 break;
             }

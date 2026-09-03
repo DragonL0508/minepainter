@@ -107,6 +107,92 @@ public class CanvasSnapTests
     }
 
     [Fact]
+    public void SnapsToCanvasThirds()
+    {
+        // 畫布 1000 寬 → 三分線在 333.33 / 666.67；框左緣拖到 337，容差內 → 吸到 1/3
+        var rect = SKRect.Create(337, 300, 100, 60);
+        var (dx, _, guides) = CanvasSnap.Compute(rect, 0, 0, Doc, 8, wholePixels: false);
+
+        Assert.Equal(1000f / 3f - 337f, dx, 2);
+        Assert.Equal(1000f / 3f, guides!.X!.Value, 2);
+    }
+
+    [Fact]
+    public void EdgeAndCenter_BeatThirds_WhenEquallyClose()
+    {
+        // 左緣距三分線 4px、中心距畫布中線也 4px → 取中線（三分線優先序最低）
+        var left = 1000f / 3f + 4f;   // 左緣在三分線右邊 4px
+        var rect = SKRect.Create(left, 300, 2f * (496f - left), 60); // 中心 496，距中線 4px
+        var (dx, _, guides) = CanvasSnap.Compute(rect, 0, 0, Doc, 8, wholePixels: false);
+
+        Assert.Equal(500f, guides!.X!.Value, 2);
+        Assert.Equal(4f, dx, 2);
+    }
+
+    [Fact]
+    public void SnapsToAnotherObject_CenterAndEdge_WithSegmentGuides()
+    {
+        SnapTarget[] targets = [
+            new(SKRect.Create(0, 0, 1000, 800), Thirds: true),
+            new(SKRect.Create(200, 100, 100, 100)), // 參考物件：中心 x=250、右緣 300
+        ];
+
+        // 被拖的框中心在 x=246 → 吸到參考物件的中心 250（框比較窄，左右緣不會同時貼齊）
+        var rect = SKRect.Create(216, 500, 60, 60);
+        var (dx, _, guides) = CanvasSnap.Compute(rect, 0, 0, targets, 8, wholePixels: false);
+
+        Assert.Equal(4f, dx);
+        Assert.Equal(250f, guides!.X!.Value);
+        // 導線只涵蓋兩個框（100..560），不是整個畫布高度
+        var line = guides.XLines[0];
+        Assert.Equal(100f, line.Start);
+        Assert.Equal(560f, line.End);
+    }
+
+    [Fact]
+    public void ReportsEveryGuide_ThatEndsUpAligned()
+    {
+        SnapTarget[] targets = [
+            new(SKRect.Create(0, 0, 1000, 800), Thirds: true),
+            new(SKRect.Create(400, 100, 100, 50)),  // 左緣 400
+            new(SKRect.Create(400, 300, 200, 50)),  // 左緣也是 400
+        ];
+
+        var rect = SKRect.Create(396, 600, 80, 40);
+        var (dx, _, guides) = CanvasSnap.Compute(rect, 0, 0, targets, 8, wholePixels: false);
+
+        Assert.Equal(4f, dx);
+        Assert.Single(guides!.XLines); // 兩個目標同一條線 → 合併成一條
+        Assert.Equal(400f, guides.XLines[0].Position);
+        Assert.Equal(100f, guides.XLines[0].Start); // 線段涵蓋所有參與者
+        Assert.Equal(640f, guides.XLines[0].End);
+    }
+
+    [Fact]
+    public void CollectTargets_SkipsDraggedLayer_AndHiddenLayers()
+    {
+        using var session = new EditorSession(ImageCodec.CreateBlankDocument(400, 300, SKColors.Transparent));
+        var dragged = (RasterLayer)session.Document.ActiveLayer!;
+        dragged.Surface.Fill(new SKRectI(10, 10, 40, 40), new SKColor(1, 2, 3));
+
+        var other = new RasterLayer();
+        other.Surface.Fill(new SKRectI(100, 100, 150, 150), new SKColor(4, 5, 6));
+        var hidden = new RasterLayer { IsVisible = false };
+        hidden.Surface.Fill(new SKRectI(200, 200, 260, 260), new SKColor(7, 8, 9));
+        lock (session.Document.SyncRoot)
+        {
+            session.Document.Root.Add(other);
+            session.Document.Root.Add(hidden);
+        }
+
+        var targets = CanvasSnap.Collect(session, new HashSet<Guid> { dragged.Id });
+
+        Assert.Equal(2, targets.Count); // 畫布 + other（拖曳中的自己與隱藏圖層都不算）
+        Assert.True(targets[0].Thirds);
+        Assert.Equal(SKRect.Create(100, 100, 50, 50), targets[1].Rect);
+    }
+
+    [Fact]
     public void TextFrameBounds_HugsInk_AndIgnoresEffects()
     {
         var text = new TextElement

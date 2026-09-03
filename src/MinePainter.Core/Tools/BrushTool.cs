@@ -151,3 +151,21 @@ public sealed class EraserTool : BrushTool
     public override string Name => "橡皮擦";
     protected override bool IsEraser => true;
 }
+
+/// <summary>
+/// 鉛筆：硬邊、無反鋸齒的方形筆尖（像素繪圖用；paint.net／Aseprite 的鉛筆對應）。
+/// 與筆刷共用同一套筆劃流程，只是覆蓋度非 0 即 1，而且不做手抖平滑 ——
+/// 像素圖要的是「按下去那一格就是那一格」。
+/// </summary>
+public sealed class PencilTool : BrushTool
+{
+    public override string Name => "鉛筆";
+
+    public PencilTool()
+    {
+        Settings.Radius = 0.5f;   // 1px
+        Settings.Hardness = 1f;
+        Settings.Smoothing = 0f;
+        Settings.Aliased = true;
+    }
+}

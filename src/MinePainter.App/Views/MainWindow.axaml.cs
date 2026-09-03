@@ -699,6 +699,7 @@ public partial class MainWindow : Window
         _currentToolKey = key;
         session.ActiveTool = key switch
         {
+            "pencil" => session.Pencil,
             "eraser" => session.Eraser,
             "bgeraser" => session.BackgroundEraser,
             "eyedropper" => session.Eyedropper,
@@ -708,13 +709,20 @@ public partial class MainWindow : Window
             "wand" => session.Wand,
             "fill" => session.Fill,
             "text" => session.Text,
-            "shape" => session.Shape,
+            "shape" or "line" => session.Shape,
             "pen" => session.Pen,
             _ => session.Brush,
         };
 
+        // 直線是形狀工具的一種：按鈕直接把下拉切過去（下拉仍是唯一真相來源）
+        if (key is "shape" or "line")
+        {
+            var wanted = key == "line" ? 2 : ShapeKindCombo.SelectedIndex == 2 ? 0 : ShapeKindCombo.SelectedIndex;
+            if (ShapeKindCombo.SelectedIndex != wanted) ShapeKindCombo.SelectedIndex = wanted;
+        }
+
         _toolsContent.SetActive(key);
-        ActiveToolLabel.Text = session.ActiveTool.Name;
+        ActiveToolLabel.Text = key == "line" ? "直線" : session.ActiveTool.Name;
         UpdateToolOptions(key);
         if (changed) Toasts.Show($"工具：{session.ActiveTool.Name}");
         if (key != "text") Canvas.Focus();
@@ -724,16 +732,16 @@ public partial class MainWindow : Window
     private void UpdateToolOptions(string key)
     {
         // 新出現的群組從下方 4px 淡入；消失的立刻收掉（淡出中會佔位，單行版面會跳）
-        Motion.Reveal(SizeGroup, key is "brush" or "eraser" or "bgeraser" or "shape" or "pen");
+        Motion.Reveal(SizeGroup, key is "brush" or "pencil" or "eraser" or "bgeraser" or "shape" or "line" or "pen");
         Motion.Reveal(TransformGroup, key == "move");
         Motion.Reveal(PenGroup, key == "pen");
         Motion.Reveal(HardnessGroup, key is "brush" or "eraser" or "bgeraser");
         Motion.Reveal(SmoothingGroup, key is "brush" or "eraser");
-        Motion.Reveal(OpacityGroup, key is "brush" or "eraser" or "fill");
+        Motion.Reveal(OpacityGroup, key is "brush" or "pencil" or "eraser" or "fill");
         Motion.Reveal(ToleranceGroup, key is "fill" or "wand" or "bgeraser");
         Motion.Reveal(BgEraserGroup, key == "bgeraser");
         Motion.Reveal(TextGroup, key == "text");
-        Motion.Reveal(ShapeGroup, key == "shape");
+        Motion.Reveal(ShapeGroup, key is "shape" or "line");
     }
 
     // ---- 文件生命週期（分頁） ----
@@ -2265,7 +2273,7 @@ public partial class MainWindow : Window
             ["view.actualSize"] = () => Canvas.SetZoomPercent(100),
             ["view.bestFit"] = () => Canvas.ZoomToFit(),
         };
-        foreach (var key in new[] { "brush", "eraser", "bgeraser", "eyedropper", "move", "rectselect", "lasso", "wand", "fill", "text", "shape", "pen" })
+        foreach (var key in new[] { "brush", "pencil", "eraser", "bgeraser", "eyedropper", "move", "rectselect", "lasso", "wand", "fill", "text", "shape", "line", "pen" })
         {
             var toolKey = key;
             _shortcutActions[$"tool.{key}"] = () => SelectTool(toolKey);
@@ -2515,6 +2523,11 @@ public partial class MainWindow : Window
             settings.Smoothing = smoothing;
         }
 
+        // 鉛筆：大小與不透明度跟著工具列，硬度／平滑固定（像素繪圖不做羽化與手抖平滑）
+        var pencil = session.Pencil.Settings;
+        pencil.Radius = radius;
+        pencil.Opacity = opacity;
+
         session.Shape.StrokeWidth = Math.Max(1f, (float)SizeBox.Value / 4);
         session.Tolerance = (byte)Math.Round(ToleranceBar.Value * 2.55); // 滑桿 0..100%，工具吃 0..255
 
@@ -2539,6 +2552,14 @@ public partial class MainWindow : Window
             _ => ShapeKind.Rectangle,
         };
         session.Shape.Filled = ShapeFilledCheck.IsChecked == true;
+
+        // 下拉切到／離開「直線」時，工具面板的高亮跟著換（兩顆鈕是同一個工具的兩種形狀）
+        if (_currentToolKey is "shape" or "line")
+        {
+            _currentToolKey = session.Shape.Kind == ShapeKind.Line ? "line" : "shape";
+            _toolsContent.SetActive(_currentToolKey);
+            ActiveToolLabel.Text = _currentToolKey == "line" ? "直線" : session.Shape.Name;
+        }
     }
 
     /// <summary>
