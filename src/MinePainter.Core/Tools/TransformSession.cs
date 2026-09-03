@@ -63,10 +63,10 @@ public sealed class TransformSession : IDisposable
     public SKPoint[]? Quad => _quad;
 
     /// <summary>目前框在畫面上的外接矩形：四角模式取四角外框，矩形模式就是 TargetRect。</summary>
-    public SKRect FrameRect => _quad != null ? QuadGeometry.Bounds(_quad) : TargetRect;
+    public SKRect FrameRect => _warp != null ? _warp.Bounds : _quad != null ? QuadGeometry.Bounds(_quad) : TargetRect;
 
-    /// <summary>把手框該畫的旋轉角：四角模式的框本身就是四邊形，不再另外轉。</summary>
-    public float DisplayRotation => _quad != null ? 0f : RotationDeg;
+    /// <summary>把手框該畫的旋轉角：四角／彎曲模式的框本身就是網格，不再另外轉。</summary>
+    public float DisplayRotation => IsMeshMode ? 0f : RotationDeg;
 
     /// <summary>文字物件沒有透視這回事（PS 也是先柵格化）：有物件的目標不能進四角模式。</summary>
     public bool CanUseQuad => _items.All(i => i.StartElements.Length == 0);
@@ -110,6 +110,55 @@ public sealed class TransformSession : IDisposable
     /// <summary>四角模式且四角已偏離起點。</summary>
     public bool IsQuadChanged => _quad != null && _quadStart != null && !QuadGeometry.NearlyEqual(_quad, _quadStart);
 
+    // ---- 彎曲模式（Photoshop「彎曲」；使用者稱「扭曲」）----
+    // 疊在目前狀態之上：像素先走 PixelMatrix（含矩形／四角模式的累積映射）落在平的框裡，
+    // 再由 4×4 貝茲曲面把框映射到曲面（WarpMesh.Draw 以三角網格貼圖）。彎曲不是矩陣，落地後不留續接點。
+    private WarpMesh? _warp;
+    private WarpMesh? _warpStart;
+    private SKMatrix _warpBase = SKMatrix.Identity;
+    private WarpMesh? _stampedWarp;
+
+    /// <summary>彎曲模式中的網格（null＝不在彎曲模式）。</summary>
+    public WarpMesh? Warp => _warp;
+
+    public bool IsWarpChanged => _warp != null && _warpStart != null &&
+                                 !QuadGeometry.NearlyEqual(_warp.Points, _warpStart.Points, 0.01f);
+
+    /// <summary>進入彎曲模式：以目前框的外接矩形鋪平網格。有文字物件回 false（呼叫端先平面化）。</summary>
+    public bool EnterWarpMode()
+    {
+        if (_disposed) return false;
+        if (_warp != null) return true;
+        if (!CanUseQuad) return false;
+
+        _warpBase = Matrix; // 目前（矩形或四角模式）的累積矩陣
+        var frame = _quad != null
+            ? QuadGeometry.Bounds(_quad)
+            : QuadGeometry.Bounds(QuadGeometry.Rotated(QuadGeometry.Corners(TargetRect),
+                new SKPoint(TargetRect.MidX, TargetRect.MidY), RotationDeg));
+        _warpStart = WarpMesh.Flat(frame);
+        _warp = _warpStart;
+        _stampedWarp = _warpStart.Translated(-OffsetDelta.X, -OffsetDelta.Y);
+        return true;
+    }
+
+    public bool SetWarp(WarpMesh mesh)
+    {
+        if (_disposed || _warp == null) return false;
+        if (QuadGeometry.NearlyEqual(mesh.Points, _warp.Points, 0.001f)) return false;
+        _warp = mesh;
+        return true;
+    }
+
+    public void ResetWarp()
+    {
+        if (_warp == null || _warpStart == null) return;
+        _warp = _warpStart;
+    }
+
+    /// <summary>四角或彎曲模式（把手框不是矩形）。</summary>
+    public bool IsMeshMode => _quad != null || _warp != null;
+
     // 蓋章狀態：目前圖層裡的像素是用哪組參數蓋出來的
     private (float Sx, float Sy, float Rot, float W, float H) _stampedParams;
     private SKPoint _stampedOrigin;  // 蓋章時 TargetRect 的左上（呈現位置 = 這裡 + OffsetDelta）
@@ -142,6 +191,9 @@ public sealed class TransformSession : IDisposable
         public required (SKImage Image, SKRectI SrcBounds)[] Items { get; init; }
         public required SKMatrix Matrix { get; init; }
 
+        /// <summary>彎曲模式：矩陣之後再套這張網格（WarpMesh.Draw）；null＝只有矩陣。</summary>
+        public WarpMesh? Warp { get; init; }
+
         /// <summary>手勢已結束、蓋章已寫入：等合成器把 <see cref="HandoverRegion"/> 畫完才收掉（不閃）。</summary>
         public required bool HandingOver { get; init; }
 
@@ -167,9 +219,7 @@ public sealed class TransformSession : IDisposable
 
     private bool RectIsIdentity => TargetRect == SourceRect && DeltaRotation == 0f;
 
-    public bool IsIdentity => _quad != null
-        ? RectIsIdentity && !IsQuadChanged
-        : RectIsIdentity;
+    public bool IsIdentity => RectIsIdentity && !IsQuadChanged && !IsWarpChanged;
 
     /// <summary>
     /// 「重設角度與比例」該回到的尺寸：第一輪＝SourceRect；續接時＝最初提起時的原始尺寸
@@ -205,6 +255,7 @@ public sealed class TransformSession : IDisposable
         OffsetDelta = SKPointI.Empty;
         // 四角模式：原始像素 = 起始四角（identity 時 _quadBase 也是 identity）
         _stampedQuad = _quadStart == null ? null : (SKPoint[])_quadStart.Clone();
+        _stampedWarp = _warpStart;
     }
 
     /// <summary>SourceRect → 目前狀態 的完整映射（縮放平移在前、旋轉在後）。</summary>
@@ -212,6 +263,9 @@ public sealed class TransformSession : IDisposable
     {
         get
         {
+            // 彎曲模式：矩陣部分凍結（彎曲本身在 Stamp／覆疊時以網格套在矩陣之後）
+            if (_warp != null) return _warpBase;
+
             // 四角模式：單應(起始四角 → 目前四角) 疊在凍結的矩形模式矩陣上
             if (_quad != null && _quadStart != null)
             {
@@ -406,6 +460,7 @@ public sealed class TransformSession : IDisposable
     {
         var target = Target;
         if (_disposed || !_pixelsStamped) return null;
+        if (_warp != null && IsWarpChanged) return null; // 彎曲不是矩陣，下一輪從落地結果重新提起
         var pm = PixelMatrix;
         if (IsIntegerTranslation(pm)) return null; // 像素還是無損的，下一輪從圖層重新提起即可
 
@@ -521,6 +576,7 @@ public sealed class TransformSession : IDisposable
         {
             Items = items,
             Matrix = PixelMatrix,
+            Warp = _warp,
             HandingOver = handingOver,
             HandoverRegion = region,
         };
@@ -564,6 +620,19 @@ public sealed class TransformSession : IDisposable
 
         var (sx, sy) = Scales;
         var rot = Math.Abs(RotationDeg) < 0.01f ? 0f : RotationDeg;
+
+        // 彎曲模式：網格只是整體平移了整數向量 → 純平移；否則全量重蓋章
+        if (_warp != null)
+        {
+            if (_stampedWarp != null && (preview || _stampedHigh) &&
+                QuadGeometry.IsIntegerTranslationOf(_warp.Points, _stampedWarp.Points, out var warpDelta))
+            {
+                TranslateTo(warpDelta, pixelsHandledExternally);
+                return;
+            }
+            StampAll(preview, sx, sy, rot);
+            return;
+        }
 
         // 四角模式：四角只是整體平移了整數向量 → 純平移；否則全量重蓋章
         if (_quad != null)
@@ -637,11 +706,12 @@ public sealed class TransformSession : IDisposable
         _stampedParams = (sx, sy, rot, TargetRect.Width, TargetRect.Height);
         _stampedOrigin = new SKPoint(TargetRect.Left, TargetRect.Top);
         _stampedQuad = _quad == null ? null : (SKPoint[])_quad.Clone();
+        _stampedWarp = _warp;
         var m = Matrix;
         var pm = PixelMatrix;
         // 無損＝像素矩陣（含續接的前段）是整數平移：None 取樣、逐位元不變。
-        // 續接時本輪就算是純平移，前段仍帶縮放/旋轉，得照常重取樣。
-        var lossless = IsIntegerTranslation(pm);
+        // 續接時本輪就算是純平移，前段仍帶縮放/旋轉，得照常重取樣。彎曲一律重取樣。
+        var lossless = _warp == null && IsIntegerTranslation(pm);
         _stampedHigh = lossless || !preview;
         _pixelsStamped = true;
 
@@ -655,9 +725,11 @@ public sealed class TransformSession : IDisposable
 
                 if (item.Pixels != null)
                 {
-                    var mapped = pm.MapRect(new SKRect(
-                        item.SrcBounds.Left, item.SrcBounds.Top,
-                        item.SrcBounds.Right, item.SrcBounds.Bottom));
+                    var mapped = _warp != null
+                        ? _warp.Bounds // 曲面落在控制點凸包內
+                        : pm.MapRect(new SKRect(
+                            item.SrcBounds.Left, item.SrcBounds.Top,
+                            item.SrcBounds.Right, item.SrcBounds.Bottom));
                     newStamp = SKRectI.Ceiling(mapped);
                     newStamp.Inflate(2, 2); // 重取樣的邊緣餘裕
                     Stamp(item, pm, newStamp, lossless, preview);
@@ -721,8 +793,15 @@ public sealed class TransformSession : IDisposable
             var canvas = surface.Canvas;
             var tileRect = idx.ToPixelRect();
             canvas.Translate(-tileRect.Left - item.BaseOffset.X, -tileRect.Top - item.BaseOffset.Y);
-            canvas.Concat(ref m);
-            canvas.DrawImage(item.Pixels, item.SrcBounds.Left, item.SrcBounds.Top, paint);
+            if (_warp != null)
+            {
+                _warp.Draw(canvas, item.Pixels!, item.SrcBounds, m, paint.FilterQuality);
+            }
+            else
+            {
+                canvas.Concat(ref m);
+                canvas.DrawImage(item.Pixels, item.SrcBounds.Left, item.SrcBounds.Top, paint);
+            }
             canvas.Flush();
 
             if (tile.IsBlank()) layer.Surface.RemoveTile(idx);

@@ -93,6 +93,60 @@ public sealed class EditorSession : IDisposable
     /// </summary>
     public SKPoint[]? SelectionHandlesQuad { get; private set; }
 
+    /// <summary>彎曲模式（扭曲）的把手框：4×4 控制點網格（render thread 直接讀）。</summary>
+    public WarpMesh? SelectionHandlesWarp { get; private set; }
+
+    /// <summary>
+    /// 依模式開始（或切換）變形：Free＝一般變形框；Perspective＝四角模式；Warp＝彎曲模式。
+    /// 目標含文字物件時先自動「圖層文字平面化」再框（PS 也是先柵格化；Esc 取消會連平面化一起還原）。
+    /// 已在對應模式就回傳現有 session；做不到回 null。
+    /// </summary>
+    public TransformSession? EnterTransformMode(TransformMode mode)
+    {
+        var t = Transform ?? BeginTransform();
+        if (t == null) return null;
+        if (mode == TransformMode.Free) return t;
+        if (mode == TransformMode.Perspective && t.Quad != null && t.Warp == null) return t;
+        if (mode == TransformMode.Warp && t.Warp != null) return t;
+
+        if (!t.CanUseQuad)
+        {
+            // 文字 → 像素：先把目前的 session 收掉（沒動過就無損還原、動過就落地），平面化，再重新框
+            if (t.IsIdentity) CancelTransform(); else CommitTransform();
+            var target = Document.ActiveLayer;
+            if (target == null) return null;
+            var flattened = 0;
+            foreach (var layer in RasterLayersOf(target))
+            {
+                if (layer.HasElements && LayerCommands.FlattenText(Document, History, layer)) flattened++;
+            }
+            _autoFlattenSteps = flattened;
+            SelectedElement = null;
+            t = BeginTransform();
+            if (t == null) return null;
+        }
+
+        var ok = mode == TransformMode.Warp ? t.EnterWarpMode() : t.EnterQuadMode();
+        if (!ok) Notify("此圖層無法進入這種變形");
+        RefreshSelectionHandles();
+        return t;
+    }
+
+    /// <summary>進入透視／扭曲前自動平面化的步數：Esc 取消變形時一併退回（文字回到可編輯狀態）。</summary>
+    private int _autoFlattenSteps;
+
+    private static IEnumerable<RasterLayer> RasterLayersOf(LayerNode node)
+    {
+        switch (node)
+        {
+            case RasterLayer r: yield return r; break;
+            case GroupLayer g:
+                foreach (var child in g.Children)
+                foreach (var r in RasterLayersOf(child)) yield return r;
+                break;
+        }
+    }
+
     /// <summary>鋼筆工具的工作路徑（render thread 直接讀；immutable，每次改動換新實例）。null＝沒有路徑。</summary>
     public Vectors.PenPath? PenPath
     {
@@ -116,7 +170,8 @@ public sealed class EditorSession : IDisposable
                 frame = SKRect.Create(f.Left + overlay.OffsetX, f.Top + overlay.OffsetY, f.Width, f.Height);
             SelectionHandles = frame;
             SelectionHandlesRotation = Transform?.DisplayRotation ?? 0f;
-            SelectionHandlesQuad = Transform?.Quad;
+            SelectionHandlesWarp = Transform?.Warp;
+            SelectionHandlesQuad = SelectionHandlesWarp == null ? Transform?.Quad : null;
         }
     }
 
@@ -143,6 +198,7 @@ public sealed class EditorSession : IDisposable
         {
             if (Transform is { } t)
             {
+                if (t.Warp != null) return t.IsWarpChanged;
                 if (t.Quad != null) return t.IsQuadChanged;
                 return Math.Abs(t.RotationDeg) > 0.01f ||
                        Math.Abs(t.TargetRect.Width - t.ResetSize.Width) > 0.5f ||
@@ -166,9 +222,9 @@ public sealed class EditorSession : IDisposable
         if (Transform is { } t)
         {
             if (!CanResetTransform) return false;
-            if (t.Quad != null)
+            if (t.IsMeshMode)
             {
-                t.ResetQuad(); // 四角回到進入四角模式時的位置
+                if (t.Warp != null) t.ResetWarp(); else t.ResetQuad(); // 網格回到進入時的位置
                 t.Apply(preview: false);
                 RefreshSelectionHandles();
                 return true;
@@ -339,6 +395,7 @@ public sealed class EditorSession : IDisposable
         var t = Transform;
         if (t == null) return;
         Transform = null;
+        _autoFlattenSteps = 0; // 落地：自動平面化留著（各自一步 undo）
 
         if (t.IsIdentity)
         {
@@ -368,6 +425,10 @@ public sealed class EditorSession : IDisposable
         Transform = null;
         t.RestoreOriginal();
         t.DisposeDeferred(Compositor);
+        // 進透視／扭曲時自動平面化的文字：取消變形＝連平面化一起退回（文字回到可編輯）
+        var steps = _autoFlattenSteps;
+        _autoFlattenSteps = 0;
+        for (var i = 0; i < steps && History.CanUndo; i++) History.Undo();
         RefreshSelectionHandles();
     }
 

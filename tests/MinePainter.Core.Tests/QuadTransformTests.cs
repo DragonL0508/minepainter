@@ -96,7 +96,7 @@ public class QuadTransformTests
             layer.Surface.Fill(new SKRectI(100, 100, 300, 300), new SKColor(255, 0, 0));
         }
         session.ActiveTool = session.Move;
-        session.Move.TransformMode = TransformMode.Distort;
+        session.Move.TransformMode = TransformMode.Perspective;
         session.RefreshSelectionHandles();
 
         var t = session.BeginTransform();

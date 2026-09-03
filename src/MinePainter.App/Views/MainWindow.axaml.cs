@@ -283,15 +283,27 @@ public partial class MainWindow : Window
 
         Avalonia.Threading.DispatcherTimer.RunOnce(() =>
         {
-            // =quad：移動工具、扭曲模式、對整層開變形並把右下角拉開（看四角把手框與工具列「變形」群組）
-            if (name == "quad")
+            // =quad：移動工具、透視模式、對整層開變形並拉動兩個角（看四角把手框與工具列「變形」群組）
+            // =warp：扭曲（彎曲）模式，拉動幾個網格控制點
+            if (name is "quad" or "warp")
             {
                 SelectTool("move");
-                SetTransformMode(TransformMode.Distort);
-                if (session.BeginTransform() is { } t && t.EnterQuadMode())
+                var mode = name == "warp" ? TransformMode.Warp : TransformMode.Perspective;
+                SetTransformMode(mode);
+                if (session.EnterTransformMode(mode) is { } t)
                 {
-                    t.SetQuad(Core.Tools.QuadGeometry.DistortDrag(t.Quad!, 2, new SKPoint(-doc.Width * 0.15f, doc.Height * 0.12f), false));
-                    t.SetQuad(Core.Tools.QuadGeometry.PerspectiveDrag(t.Quad!, 0, new SKPoint(doc.Width * 0.1f, 0)));
+                    if (t.Warp is { } w)
+                    {
+                        var m = Core.Tools.WarpMesh.Drag(w, 5, new SKPoint(0, doc.Height * 0.18f));
+                        m = Core.Tools.WarpMesh.Drag(m, 10, new SKPoint(0, -doc.Height * 0.18f));
+                        m = Core.Tools.WarpMesh.Drag(m, 3, new SKPoint(-doc.Width * 0.08f, doc.Height * 0.1f));
+                        t.SetWarp(m);
+                    }
+                    else if (t.Quad != null)
+                    {
+                        t.SetQuad(Core.Tools.QuadGeometry.DistortDrag(t.Quad!, 2, new SKPoint(-doc.Width * 0.15f, doc.Height * 0.12f), false));
+                        t.SetQuad(Core.Tools.QuadGeometry.PerspectiveDrag(t.Quad!, 0, new SKPoint(doc.Width * 0.1f, 0)));
+                    }
                     t.Apply(preview: false);
                     session.RefreshSelectionHandles();
                 }
@@ -2249,7 +2261,7 @@ public partial class MainWindow : Window
         }
         _shortcutActions["layer.transformFree"] = () => BeginTransformFromMenu(TransformMode.Free);
         _shortcutActions["layer.transformPerspective"] = () => BeginTransformFromMenu(TransformMode.Perspective);
-        _shortcutActions["layer.transformDistort"] = () => BeginTransformFromMenu(TransformMode.Distort);
+        _shortcutActions["layer.transformDistort"] = () => BeginTransformFromMenu(TransformMode.Warp);
 
         _shortcutActions["image.resize"] = () => OnResizeImageClicked(null, new RoutedEventArgs());
         _shortcutActions["image.canvasSize"] = () => OnCanvasSizeClicked(null, new RoutedEventArgs());
@@ -2611,7 +2623,7 @@ public partial class MainWindow : Window
 
         WireTransformToggle(TransformFreeToggle, TransformMode.Free);
         WireTransformToggle(TransformPerspectiveToggle, TransformMode.Perspective);
-        WireTransformToggle(TransformDistortToggle, TransformMode.Distort);
+        WireTransformToggle(TransformWarpToggle, TransformMode.Warp);
 
         PenSelectButton.Click += (_, _) => PenMakeSelection();
         PenStrokeButton.Click += (_, _) => RunPenCommand(s => PenCommands.StrokePath(s, s.Pen.StrokeWidth), "已沿路徑描邊");
@@ -2645,7 +2657,7 @@ public partial class MainWindow : Window
     private TransformMode CurrentTransformMode()
     {
         if (TransformPerspectiveToggle.IsChecked == true) return TransformMode.Perspective;
-        if (TransformDistortToggle.IsChecked == true) return TransformMode.Distort;
+        if (TransformWarpToggle.IsChecked == true) return TransformMode.Warp;
         return TransformMode.Free;
     }
 
@@ -2658,7 +2670,7 @@ public partial class MainWindow : Window
         _suppressTransformToggle = true;
         TransformFreeToggle.IsChecked = mode == TransformMode.Free;
         TransformPerspectiveToggle.IsChecked = mode == TransformMode.Perspective;
-        TransformDistortToggle.IsChecked = mode == TransformMode.Distort;
+        TransformWarpToggle.IsChecked = mode == TransformMode.Warp;
         _suppressTransformToggle = false;
 
         var session = Canvas.Session;
@@ -2667,14 +2679,12 @@ public partial class MainWindow : Window
 
         if (session.Transform is { } t)
         {
-            if (mode == TransformMode.Free && t.Quad != null)
-            {
-                session.CommitTransform();
-            }
-            else if (mode != TransformMode.Free && t.Quad == null && !t.EnterQuadMode())
-            {
-                Toasts.Show("含文字的圖層無法透視／扭曲，請先「圖層文字平面化」");
-            }
+            // 網格模式之間或回到自由變形：網格映射回不到矩形模式，先落地（續接／重新框都不糊）
+            var needsCommit = mode == TransformMode.Free ? t.IsMeshMode
+                : mode == TransformMode.Perspective ? t.Warp != null
+                : t.Quad != null && t.IsQuadChanged;
+            if (needsCommit) session.CommitTransform();
+            if (mode != TransformMode.Free) session.EnterTransformMode(mode);
             session.RefreshSelectionHandles();
         }
         RefreshUiState();
@@ -2696,18 +2706,11 @@ public partial class MainWindow : Window
         session.CommitPendingEdits();
         SelectTool("move");
         SetTransformMode(mode);
-        if (session.Transform == null)
-        {
-            var t = session.BeginTransform();
-            if (t == null) return;
-            if (mode != TransformMode.Free && !t.EnterQuadMode())
-                Toasts.Show("含文字的圖層無法透視／扭曲，請先「圖層文字平面化」");
-            session.RefreshSelectionHandles();
-        }
+        if (session.EnterTransformMode(mode) == null) return;
         Toasts.Show(mode switch
         {
-            TransformMode.Perspective => "透視：拖四角；Enter 套用、Esc 還原",
-            TransformMode.Distort => "扭曲：拖四角或邊；Enter 套用、Esc 還原",
+            TransformMode.Perspective => "透視：拖四角（Ctrl＝只動一角）；Enter 套用、Esc 還原",
+            TransformMode.Warp => "扭曲：拖網格上的 16 個控制點；Enter 套用、Esc 還原",
             _ => "自由變形：拖角縮放、右鍵旋轉；Enter 套用、Esc 還原",
         });
         RefreshUiState();
@@ -2715,7 +2718,7 @@ public partial class MainWindow : Window
 
     private void OnTransformFreeClicked(object? sender, RoutedEventArgs e) => BeginTransformFromMenu(TransformMode.Free);
     private void OnTransformPerspectiveClicked(object? sender, RoutedEventArgs e) => BeginTransformFromMenu(TransformMode.Perspective);
-    private void OnTransformDistortClicked(object? sender, RoutedEventArgs e) => BeginTransformFromMenu(TransformMode.Distort);
+    private void OnTransformDistortClicked(object? sender, RoutedEventArgs e) => BeginTransformFromMenu(TransformMode.Warp);
 
     // ---- 鋼筆 ----
 

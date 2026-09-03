@@ -88,9 +88,9 @@
               <MenuItem Header="自由變形(_F)" Click="OnTransformFreeClicked" Tag="layer.transformFree"
                         ToolTip.Tip="切到移動工具並框住圖層內容：拖角縮放、右鍵旋轉；Enter 套用、Esc 還原" />
               <MenuItem Header="透視(_P)" Click="OnTransformPerspectiveClicked" Tag="layer.transformPerspective"
-                        ToolTip.Tip="拖一角、同一邊的鄰角對稱跟著動（Photoshop 透視）" />
+                        ToolTip.Tip="拖一角、同一邊的鄰角對稱跟著動，做出梯形／遠近感（Ctrl＝只動那一角）" />
               <MenuItem Header="扭曲(_D)" Click="OnTransformDistortClicked" Tag="layer.transformDistort"
-                        ToolTip.Tip="四角各自自由拖曳（Photoshop 扭曲）" />
+                        ToolTip.Tip="3×3 網格、16 個控制點，把內容彎成曲面（Photoshop 彎曲）" />
             </MenuItem>
             <Separator />
             <MenuItem Header="圖層文字平面化(_R)" Click="OnFlattenTextClicked" Tag="layer.flattenText"
@@ -262,13 +262,13 @@
             </ToggleButton>
             <ToggleButton x:Name="TransformPerspectiveToggle" Width="28" Height="24" Padding="0"
                           HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
-                          ToolTip.Tip="透視：拖一角，同一邊的鄰角對稱跟著動（Photoshop 透視）">
+                          ToolTip.Tip="透視：拖一角，同一邊的鄰角對稱跟著動，做出梯形／遠近感；按住 Ctrl 拖＝只動那一角">
               <mi:MaterialIcon Kind="PerspectiveLess" Width="16" Height="16" />
             </ToggleButton>
-            <ToggleButton x:Name="TransformDistortToggle" Width="28" Height="24" Padding="0"
+            <ToggleButton x:Name="TransformWarpToggle" Width="28" Height="24" Padding="0"
                           HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
-                          ToolTip.Tip="扭曲：四角各自自由拖曳、邊把手平移整條邊（Photoshop 扭曲；Shift 只沿一軸）">
-              <mi:MaterialIcon Kind="VectorSquareEdit" Width="16" Height="16" />
+                          ToolTip.Tip="扭曲（彎曲）：3×3 網格，拖 16 個控制點把內容彎成曲面（Shift 只沿一軸）">
+              <mi:MaterialIcon Kind="VectorCurve" Width="16" Height="16" />
             </ToggleButton>
           </StackPanel>
           <TextBlock Text="Enter 套用、Esc 還原" FontSize="11" VerticalAlignment="Center"

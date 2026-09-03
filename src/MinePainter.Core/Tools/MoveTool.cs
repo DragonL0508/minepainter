@@ -20,14 +20,14 @@ namespace MinePainter.Core.Tools;
 /// </summary>
 /// <summary>
 /// 變形框的模式（工具列「變形」群組；Photoshop 編輯 → 變形 的對應）：
-/// Free＝拖角縮放＋右鍵旋轉；Perspective＝透視（拖一角、同邊鄰角對稱跟著動）；
-/// Distort＝扭曲（四角各自自由拖、邊把手平移整條邊）。後兩者走 TransformSession 的四角模式。
+/// Free＝拖角縮放＋右鍵旋轉；Perspective＝透視（拖一角、同邊鄰角對稱跟著動；Ctrl＝該角自由拖）；
+/// Warp＝扭曲／彎曲（4×4 貝茲網格，16 個控制點自由拖）。透視走 TransformSession 的四角模式、扭曲走彎曲模式。
 /// </summary>
 public enum TransformMode
 {
     Free,
     Perspective,
-    Distort,
+    Warp,
 }
 
 public sealed class MoveTool : ITool
@@ -69,6 +69,7 @@ public sealed class MoveTool : ITool
     private SKPoint _dragStart;
     private SKRect _startRect;
     private SKPoint[]? _startQuad; // 變形框四角模式的平移起點
+    private WarpMesh? _startWarp;  // 彎曲模式的平移起點
 
     // 「點空白處取消選取」的判定
     private SKPoint _pressPoint;
@@ -85,7 +86,7 @@ public sealed class MoveTool : ITool
         var doc = session.Document;
 
         // 1) 選取框把手（選取範圍／浮動內容／文字物件共用同一套）
-        if (_handles.TryBegin(session, e.DocPosition, HandleTolerance))
+        if (_handles.TryBegin(session, e.DocPosition, HandleTolerance, e.Modifiers))
         {
             _mode = Mode.Handles;
             return;
@@ -101,6 +102,7 @@ public sealed class MoveTool : ITool
             _dragStart = e.DocPosition;
             _startRect = transform.FrameRect;
             _startQuad = transform.Quad; // 四角模式：平移的是四角（immutable 實例，直接留著當起點）
+            _startWarp = transform.Warp;
             _layerDetachTried = false; // 單層 session 的平移可走拖曳覆疊快路徑
             _pressedOutsideSelection = !TransformContains(transform, e.DocPosition);
             return;
@@ -281,7 +283,9 @@ public sealed class MoveTool : ITool
                     session.BeginLayerDrag(sole);
                 }
 
-                if (transform.Quad != null && _startQuad != null)
+                if (transform.Warp != null && _startWarp != null)
+                    transform.SetWarp(_startWarp.Translated(dx, dy)); // 彎曲模式：整張網格平移
+                else if (transform.Quad != null && _startQuad != null)
                     transform.SetQuad(QuadGeometry.Translated(_startQuad, dx, dy)); // 四角模式：整體平移四角
                 else
                     transform.TargetRect = moved;
@@ -514,6 +518,7 @@ public sealed class MoveTool : ITool
     private float _rotateStartDeg;
     private float _rotateAnchorDeg;
     private SKPoint[]? _rotateStartQuad; // 四角模式：旋轉的是四角本身
+    private WarpMesh? _rotateStartWarp;  // 彎曲模式：旋轉整張網格
     private SKPoint _rotateCenter;
     private float _rotateLastDeg;
 
@@ -528,6 +533,7 @@ public sealed class MoveTool : ITool
         _rotateActive = true;
         _rotateStartDeg = transform.RotationDeg;
         _rotateStartQuad = transform.Quad;
+        _rotateStartWarp = transform.Warp;
         _rotateLastDeg = 0f;
         var frame = transform.FrameRect;
         _rotateCenter = new SKPoint(frame.MidX, frame.MidY);
@@ -540,8 +546,8 @@ public sealed class MoveTool : ITool
     {
         if (!_rotateActive || session.Transform is not { } transform) return;
 
-        // 四角模式：TargetRect／RotationDeg 已凍結，改把四角繞框中心轉
-        if (transform.Quad != null && _rotateStartQuad != null)
+        // 四角／彎曲模式：TargetRect／RotationDeg 已凍結，改把網格繞框中心轉
+        if (transform.IsMeshMode)
         {
             var delta = AngleDeg(p, _rotateCenter) - _rotateAnchorDeg;
             if (modifiers.HasFlag(ToolModifiers.Shift))
@@ -549,7 +555,10 @@ public sealed class MoveTool : ITool
             delta = NormalizeDeg(delta);
             if (Math.Abs(delta - _rotateLastDeg) < 0.05f) return;
             _rotateLastDeg = delta;
-            if (!transform.SetQuad(QuadGeometry.Rotated(_rotateStartQuad, _rotateCenter, delta))) return;
+            var changed = transform.Warp != null && _rotateStartWarp != null
+                ? transform.SetWarp(_rotateStartWarp.Rotated(_rotateCenter, delta))
+                : _rotateStartQuad != null && transform.SetQuad(QuadGeometry.Rotated(_rotateStartQuad, _rotateCenter, delta));
+            if (!changed) return;
             transform.Apply(preview: true);
             session.RefreshSelectionHandles();
             return;
@@ -596,6 +605,7 @@ public sealed class MoveTool : ITool
     /// <summary>點是否落在（可能已旋轉的）變形框內。</summary>
     private static bool TransformContains(TransformSession transform, SKPoint p)
     {
+        if (transform.Warp is { } warp) return warp.Bounds.Contains(p.X, p.Y);
         if (transform.Quad is { } quad) return QuadGeometry.Contains(quad, p);
         var local = RotatePoint(p,
             new SKPoint(transform.TargetRect.MidX, transform.TargetRect.MidY),

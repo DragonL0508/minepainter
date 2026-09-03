@@ -43,11 +43,9 @@ public sealed class CanvasDrawOperation : ICustomDrawOperation
                               session.ActiveTool == session.Lasso ||
                               session.ActiveTool == session.Wand;
         _showPenPath = session.ActiveTool == session.Pen;
-        _quadEdgeHandles = session.Move.TransformMode == TransformMode.Distort;
     }
 
     private readonly bool _showPenPath;
-    private readonly bool _quadEdgeHandles;
 
     public Rect Bounds { get; }
 
@@ -218,8 +216,16 @@ public sealed class CanvasDrawOperation : ICustomDrawOperation
         var overlay = _session.Transform?.Overlay;
         if (overlay == null) return;
 
-        using var paint = new SKPaint { FilterQuality = SKFilterQuality.Low, IsAntialias = true };
         var m = overlay.Matrix;
+        if (overlay.Warp is { } warp)
+        {
+            // 彎曲：矩陣之後再套貝茲網格（三角網格貼圖，拖曳中同樣只換網格不重合成）
+            foreach (var (image, src) in overlay.Items)
+                warp.Draw(canvas, image, src, m, SKFilterQuality.Low);
+            return;
+        }
+
+        using var paint = new SKPaint { FilterQuality = SKFilterQuality.Low, IsAntialias = true };
         canvas.Save();
         canvas.Concat(ref m);
         foreach (var (image, src) in overlay.Items)
@@ -382,8 +388,58 @@ public sealed class CanvasDrawOperation : ICustomDrawOperation
             canvas.DrawPath(outline, black);
         }
 
-        // 四角模式（透視／扭曲）的把手框：畫四邊形本身，角把手（扭曲另有邊把手）
-        if (_session.SelectionHandlesQuad is { Length: 4 } quad)
+        // 彎曲模式（扭曲）的把手框：3×3 貝茲網格線＋16 個控制點（角＝方塊、切線把手＝圓、內點＝小方塊）
+        if (_session.SelectionHandlesWarp is { } warp)
+        {
+            var accent = new SKColor(0x2A, 0x9D, 0xF4);
+            using var gridPaint = new SKPaint
+            {
+                Style = SKPaintStyle.Stroke, StrokeWidth = screenPx,
+                Color = accent.WithAlpha(0xB0), IsAntialias = true,
+            };
+            using var grid = warp.GridPath();
+            canvas.DrawPath(grid, gridPaint);
+
+            using var wfill = new SKPaint { Color = SKColors.White, IsAntialias = true };
+            using var wstroke = new SKPaint { Style = SKPaintStyle.Stroke, StrokeWidth = screenPx, Color = accent, IsAntialias = true };
+            using var tangent = new SKPaint { Style = SKPaintStyle.Stroke, StrokeWidth = screenPx, Color = accent.WithAlpha(0x90), IsAntialias = true };
+            var pts = warp.Points;
+            // 角點到切線把手的連線
+            foreach (var corner in new[] { 0, 3, 12, 15 })
+            {
+                var (a, b) = Core.Tools.WarpMesh.CornerHandles(corner);
+                canvas.DrawLine(pts[corner], pts[a], tangent);
+                canvas.DrawLine(pts[corner], pts[b], tangent);
+            }
+            var ws = 4f * screenPx;
+            for (var i = 0; i < 16; i++)
+            {
+                var p = pts[i];
+                var r = i / 4; var c = i % 4;
+                var isCorner = Core.Tools.WarpMesh.IsCorner(i);
+                var isInner = r is 1 or 2 && c is 1 or 2;
+                if (isCorner)
+                {
+                    var box = SKRect.Create(p.X - ws, p.Y - ws, ws * 2, ws * 2);
+                    canvas.DrawRect(box, wfill);
+                    canvas.DrawRect(box, wstroke);
+                }
+                else if (isInner)
+                {
+                    var s = ws * 0.7f;
+                    var box = SKRect.Create(p.X - s, p.Y - s, s * 2, s * 2);
+                    canvas.DrawRect(box, wfill);
+                    canvas.DrawRect(box, wstroke);
+                }
+                else
+                {
+                    canvas.DrawCircle(p, ws * 0.8f, wfill);
+                    canvas.DrawCircle(p, ws * 0.8f, wstroke);
+                }
+            }
+        }
+        // 四角模式（透視）的把手框：畫四邊形本身＋四個角把手
+        else if (_session.SelectionHandlesQuad is { Length: 4 } quad)
         {
             using var qframe = new SKPaint
             {
@@ -401,8 +457,7 @@ public sealed class CanvasDrawOperation : ICustomDrawOperation
             using var qfill = new SKPaint { Color = SKColors.White, IsAntialias = true };
             var qs = 4f * screenPx;
             var handles = Core.Tools.QuadGeometry.HandlePoints(quad);
-            var count = _quadEdgeHandles ? 8 : 4;
-            for (var i = 0; i < count; i++)
+            for (var i = 0; i < 4; i++)
             {
                 var box = SKRect.Create(handles[i].X - qs, handles[i].Y - qs, qs * 2, qs * 2);
                 canvas.DrawRect(box, qfill);
