@@ -79,6 +79,13 @@
   .btn svg { transition: transform .35s var(--ease); }
   .btn:hover svg { transform: translateY(3px); }
   .meta { margin-top: 22px; font-size: 13px; color: var(--faint); letter-spacing: .2px; min-height: 1.6em; }
+  /* 累計下載次數：跟 meta 同一級的小字，查不到就整行不出現 */
+  .tally {
+    margin-top: 10px; font-size: 13px; color: var(--faint); letter-spacing: .2px;
+    opacity: 0; transition: opacity .6s var(--ease);
+  }
+  .tally.in { opacity: 1; }
+  .tally b { color: var(--muted); font-weight: 700; font-variant-numeric: tabular-nums; }
   .links { margin-top: 56px; font-size: 13px; color: var(--faint); }
   .links a { color: var(--faint); text-decoration: none; transition: color .3s ease; }
   .links a:hover { color: var(--text); }
@@ -165,6 +172,7 @@
     .rise, .icon-wrap, .halo, .cue svg { animation: none; }
     .btn, .btn svg { transition: none; }
     .reveal { opacity: 1; transform: none; transition: none; }
+    .tally { transition: none; }
   }
 </style>
 </head>
@@ -183,6 +191,7 @@
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v13"/><path d="m6 11 6 6 6-6"/><path d="M5 20h14"/></svg>
       </a>
       <div class="meta rise d4" id="meta"></div>
+      <div class="tally" id="tally" hidden>累計下載 <b id="tally-num">0</b> 次</div>
 
       <div class="links rise d5">
         <a href="https://github.com/DragonL0508/minepainter">GitHub</a> ·
@@ -215,21 +224,57 @@
 
 <script>
 // 下載連結直接指向「最新的 Release」附件：發一版 Release 這頁就跟著更新，不必改網頁。
+// 累計下載次數也是同一份資料算出來的：GitHub 每個 Release 附件都有 download_count，全部加總。
 (async () => {
   const repo = 'DragonL0508/minepainter';
   const size = b => (b / 1048576).toFixed(0) + ' MB';
   try {
-    const res = await fetch(`https://api.github.com/repos/${repo}/releases/latest`);
-    if (!res.ok) throw new Error(res.status);
-    const rel = await res.json();
-    const sc = (rel.assets || []).find(a => /win-x64\.zip$/i.test(a.name));
-    if (sc) document.getElementById('download').href = sc.browser_download_url;
-    const date = new Date(rel.published_at).toLocaleDateString('zh-TW');
-    document.getElementById('meta').textContent = [rel.tag_name, sc && size(sc.size), `${date} 更新`].filter(Boolean).join(' · ');
+    // 一次把所有 Release 抓回來（每頁 100 筆，抓到不滿一頁就停）
+    const rels = [];
+    for (let page = 1; page <= 5; page++) {
+      const res = await fetch(`https://api.github.com/repos/${repo}/releases?per_page=100&page=${page}`);
+      if (!res.ok) throw new Error(res.status);
+      const batch = await res.json();
+      rels.push(...batch);
+      if (batch.length < 100) break;
+    }
+
+    const downloads = r => (r.assets || []).reduce((n, a) => n + (a.download_count || 0), 0);
+
+    // 最新的正式版（跳過草稿與預覽版），跟 releases/latest 是同一個
+    const rel = rels.find(r => !r.draft && !r.prerelease);
+    if (rel) {
+      const sc = (rel.assets || []).find(a => /win-x64\.zip$/i.test(a.name));
+      if (sc) document.getElementById('download').href = sc.browser_download_url;
+      const date = new Date(rel.published_at).toLocaleDateString('zh-TW');
+      document.getElementById('meta').textContent = [rel.tag_name, sc && size(sc.size), `${date} 更新`].filter(Boolean).join(' · ');
+    }
+
+    const total = rels.filter(r => !r.draft).reduce((n, r) => n + downloads(r), 0);
+    if (total > 0) countUp(document.getElementById('tally'), document.getElementById('tally-num'), total);
   } catch {
-    // 查不到（沒發過 Release、API 額度用完、離線…）就維持指向 releases/latest 的保底連結
+    // 查不到（沒發過 Release、API 額度用完、離線…）就維持指向 releases/latest 的保底連結，
+    // 累計次數那行也保持隱藏，寧可不顯示也不要顯示錯的數字
   }
 })();
+
+// 數字從 0 跑到 total；關掉動畫的人直接看到結果。
+function countUp(row, out, total) {
+  const fmt = n => n.toLocaleString('zh-TW');
+  row.hidden = false;
+  requestAnimationFrame(() => row.classList.add('in'));
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    out.textContent = fmt(total);
+    return;
+  }
+  const ms = 900, t0 = performance.now();
+  const tick = now => {
+    const k = Math.min((now - t0) / ms, 1);
+    out.textContent = fmt(Math.round(total * (1 - Math.pow(1 - k, 3))));
+    if (k < 1) requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+}
 
 // 第二頁的內容捲到才浮現；不支援 IntersectionObserver（或使用者關掉動畫）就直接顯示。
 (() => {
