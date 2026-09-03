@@ -48,9 +48,22 @@ internal static class DistanceTransform
         for (var i = 0; i < n; i++)
             toOutside[i] = SeedFromCoverage((int)MathF.Round(Math.Clamp(dist[i] - r + 0.5f, 0f, 1f) * 255));
         Propagate(toOutside, w, h);
-        // 侵蝕：離外側 > r 的才留下 = 閉運算結果；最後回到「到閉運算形狀」的距離
+        // 侵蝕：離外側 > r 的才留下 = 閉運算結果（一格內線性覆蓋率）
+        var coverage = new float[n];
         for (var i = 0; i < n; i++)
-            dist[i] = SeedFromCoverage((int)MathF.Round(Math.Clamp(toOutside[i] - r + 0.5f, 0f, 1f) * 255));
+            coverage[i] = Math.Clamp(toOutside[i] - r + 0.5f, 0f, 1f);
+
+        // 閉運算只補凹縫，補不掉 1–2px 的「凸起」——外框外緣還是跟著顆粒抖。
+        // 再做一次尺度 r 的低通：覆蓋率用半徑 r 的方框模糊，再以 (2r+1) 倍增益拉回一格寬的過渡
+        //（直邊經方框模糊是寬 2r+1 的線性斜坡，乘回去就是原邊；單一像素的凸起則被平均掉、只剩 1/(2r+1) 格）。
+        // 代價：比 r 還細的筆畫會被平均到消失 —— 平滑是使用者自己開的，半徑由他決定。
+        var blurred = BoxBlur(BoxBlur(coverage, w, h, r), w, h, r); // 兩趟方框 ≈ 三角核，高頻壓得更乾淨；中心斜率仍是 1/(2r+1)
+        var gain = 2f * r + 1f;
+        for (var i = 0; i < n; i++)
+        {
+            var c = Math.Clamp((blurred[i] - 0.5f) * gain + 0.5f, 0f, 1f);
+            dist[i] = SeedFromCoverage((int)MathF.Round(c * 255));
+        }
         Propagate(dist, w, h);
         return dist;
     }
@@ -79,6 +92,36 @@ internal static class DistanceTransform
         }
         Propagate(d, w, h);
         return d;
+    }
+
+    /// <summary>可分離的方框模糊（半徑 r，邊界取最近值），O(w·h)。</summary>
+    private static float[] BoxBlur(float[] src, int w, int h, int r)
+    {
+        var tmp = new float[w * h];
+        var dst = new float[w * h];
+        var inv = 1f / (2 * r + 1);
+        for (var y = 0; y < h; y++)
+        {
+            var row = y * w;
+            float sum = 0;
+            for (var k = -r; k <= r; k++) sum += src[row + Math.Clamp(k, 0, w - 1)];
+            for (var x = 0; x < w; x++)
+            {
+                tmp[row + x] = sum * inv;
+                sum += src[row + Math.Clamp(x + r + 1, 0, w - 1)] - src[row + Math.Clamp(x - r, 0, w - 1)];
+            }
+        }
+        for (var x = 0; x < w; x++)
+        {
+            float sum = 0;
+            for (var k = -r; k <= r; k++) sum += tmp[Math.Clamp(k, 0, h - 1) * w + x];
+            for (var y = 0; y < h; y++)
+            {
+                dst[y * w + x] = sum * inv;
+                sum += tmp[Math.Clamp(y + r + 1, 0, h - 1) * w + x] - tmp[Math.Clamp(y - r, 0, h - 1) * w + x];
+            }
+        }
+        return dst;
     }
 
     /// <summary>

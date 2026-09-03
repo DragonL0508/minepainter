@@ -130,3 +130,45 @@ public class OutlineAntiAliasTests
         Assert.True(mae < 9, $"AA outline MAE {mae:0.0}/255（二值化舊版約 17）");
     }
 }
+
+public class OutlineSmoothBumpTests
+{
+    [Fact]
+    public void Smooth_FlattensOnePixelBumps_OnOutlineOuterEdge()
+    {
+        // 直邊（y ≥ 40 是內容）上每 4px 有一個 1px 凸起：平滑 0 時外框外緣跟著凸起抖；平滑 3 要壓平
+        const int w = 80, h = 80;
+        var src = new uint[w * h];
+        for (var y = 40; y < h; y++)
+        for (var x = 0; x < w; x++)
+            src[y * w + x] = FromColor(SKColors.Black, 255);
+        for (var x = 0; x < w; x += 4) src[39 * w + x] = FromColor(SKColors.Black, 255); // 凸起
+
+        static double Jitter(uint[] dst, int w)
+        {
+            // 外框外緣（y=29..31 附近，寬 8 → 外緣約 y=31）：沿 x 取 alpha 的最大差
+            var min = 255; var max = 0;
+            for (var x = 8; x < w - 8; x++)
+            {
+                var a = (int)(dst[31 * w + x] >> 24);
+                min = Math.Min(min, a); max = Math.Max(max, a);
+            }
+            return max - min;
+        }
+
+        var plain = new ObjectOutlineEffect { Width = 8, Color = SKColors.Red };
+        var ctxPlain = EffectContext.FromPixels(src, w, h, plain.SourceMargin);
+        plain.Render(ctxPlain);
+        var smooth = plain with { Smooth = 3 };
+        var ctxSmooth = EffectContext.FromPixels(src, w, h, smooth.SourceMargin);
+        smooth.Render(ctxSmooth);
+
+        var jPlain = Jitter(ctxPlain.Dst, w);
+        var jSmooth = Jitter(ctxSmooth.Dst, w);
+        Assert.True(jPlain > 60, $"plain jitter {jPlain}");
+        Assert.True(jSmooth < jPlain * 0.35, $"smooth jitter {jSmooth} vs plain {jPlain}");
+        // 內容本體與遠處不受影響
+        Assert.Equal(255, A(ctxSmooth.Dst[60 * w + 40]));
+        Assert.Equal(0, A(ctxSmooth.Dst[5 * w + 40]));
+    }
+}
