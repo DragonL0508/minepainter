@@ -168,7 +168,67 @@ public sealed class TransformSession : IDisposable
     public bool IsGroup { get; }
 
     /// <summary>開始時的內容外框（像素 ∪ 文字物件；doc 座標，可超出畫布）。</summary>
-    public SKRect SourceRect { get; }
+    public SKRect SourceRect { get; private set; }
+
+    /// <summary>「重設」把續接的前段也丟掉（回到最初的原始像素）後，identity 不再等於開始時的快照。</summary>
+    private bool _resetFromResume;
+
+    /// <summary>
+    /// 有沒有東西可以重設：任何角度／尺寸／四角／網格偏離原始，或這是續接的 session
+    /// （上一輪的變形也算，重設要回到「最原始」的狀態）。
+    /// </summary>
+    public bool CanReset =>
+        IsResumed && !_resetFromResume ||
+        IsQuadChanged || IsWarpChanged ||
+        Math.Abs(RotationDeg) > 0.01f ||
+        Math.Abs(TargetRect.Width - ResetSize.Width) > 0.5f ||
+        Math.Abs(TargetRect.Height - ResetSize.Height) > 0.5f;
+
+    /// <summary>
+    /// 重設回最原始的狀態與比例：退出四角／彎曲模式、角度 0、尺寸回 ResetSize（維持目前中心）；
+    /// 續接的 session 連上一輪落地的縮放／旋轉／透視一起丟掉 —— 像素本來就是最初提起的那份，
+    /// 改成只做平移重蓋一次即可（無損）。使用者只要求「回到最原始」，位置留在原地。
+    /// </summary>
+    public void ResetAll()
+    {
+        if (_disposed) return;
+        var frame = FrameRect;
+        var center = new SKPoint(frame.MidX, frame.MidY);
+
+        _quad = null; _quadStart = null; _stampedQuad = null;
+        _warp = null; _warpStart = null; _stampedWarp = null;
+        RotationDeg = 0f;
+
+        if (IsResumed)
+        {
+            // 丟掉前段：原始像素 × 純平移 就是「最原始」。SourceRect 改成原始像素的外框，
+            // 蓋章狀態標成未知（強制重蓋），identity 也不再成立（開始時的快照是上一輪的結果）。
+            SKRect? src = null;
+            foreach (var item in _items)
+            {
+                if (item.Pixels == null) continue;
+                var r = new SKRect(item.SrcBounds.Left, item.SrcBounds.Top, item.SrcBounds.Right, item.SrcBounds.Bottom);
+                src = src is { } a
+                    ? new SKRect(Math.Min(a.Left, r.Left), Math.Min(a.Top, r.Top), Math.Max(a.Right, r.Right), Math.Max(a.Bottom, r.Bottom))
+                    : r;
+            }
+            if (src is { } original)
+            {
+                _preMatrix = SKMatrix.Identity;
+                _preIsIdentity = true;
+                _baseRotation = 0f;
+                SourceRect = original;
+                ResetSize = original.Size;
+                _resetFromResume = true;
+                _stampedParams = (float.NaN, float.NaN, float.NaN, float.NaN, float.NaN); // 強制重蓋章
+            }
+        }
+
+        // 位移取整：純平移的蓋章才是無損（None 取樣）
+        var left = MathF.Round(center.X - ResetSize.Width / 2f);
+        var top = MathF.Round(center.Y - ResetSize.Height / 2f);
+        TargetRect = SKRect.Create(left, top, ResetSize.Width, ResetSize.Height);
+    }
 
     /// <summary>目前的目標矩形（軸對齊；移動/縮放都改這個）。</summary>
     public SKRect TargetRect { get; set; }
@@ -219,7 +279,7 @@ public sealed class TransformSession : IDisposable
 
     private bool RectIsIdentity => TargetRect == SourceRect && DeltaRotation == 0f;
 
-    public bool IsIdentity => RectIsIdentity && !IsQuadChanged && !IsWarpChanged;
+    public bool IsIdentity => !_resetFromResume && RectIsIdentity && !IsQuadChanged && !IsWarpChanged;
 
     /// <summary>
     /// 「重設角度與比例」該回到的尺寸：第一輪＝SourceRect；續接時＝最初提起時的原始尺寸

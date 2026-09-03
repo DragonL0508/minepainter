@@ -208,14 +208,7 @@ public sealed class EditorSession : IDisposable
     {
         get
         {
-            if (Transform is { } t)
-            {
-                if (t.Warp != null) return t.IsWarpChanged;
-                if (t.Quad != null) return t.IsQuadChanged;
-                return Math.Abs(t.RotationDeg) > 0.01f ||
-                       Math.Abs(t.TargetRect.Width - t.ResetSize.Width) > 0.5f ||
-                       Math.Abs(t.TargetRect.Height - t.ResetSize.Height) > 0.5f;
-            }
+            if (Transform is { } t) return t.CanReset;
             lock (Document.SyncRoot)
             {
                 return SelectedTextLocked() is { } sel && sel.Element.IsTransformed;
@@ -234,19 +227,8 @@ public sealed class EditorSession : IDisposable
         if (Transform is { } t)
         {
             if (!CanResetTransform) return false;
-            if (t.IsMeshMode)
-            {
-                if (t.Warp != null) t.ResetWarp(); else t.ResetQuad(); // 網格回到進入時的位置
-                t.Apply(preview: false);
-                RefreshSelectionHandles();
-                return true;
-            }
-            var cx = t.TargetRect.MidX;
-            var cy = t.TargetRect.MidY;
-            t.RotationDeg = 0f;
-            t.TargetRect = SKRect.Create(
-                cx - t.ResetSize.Width / 2f, cy - t.ResetSize.Height / 2f,
-                t.ResetSize.Width, t.ResetSize.Height);
+            // 回到「最原始」：退出四角／彎曲、角度 0、尺寸回原始（含續接的上一輪也一起丟掉），位置留在原地
+            t.ResetAll();
             t.Apply(preview: false);
             RefreshSelectionHandles();
             return true;

@@ -215,3 +215,62 @@ public class TransformModeHandlePreviewTests
         Assert.Null(session.SelectionHandlesWarp);
     }
 }
+
+public class TransformResetTests
+{
+    private static SKColor LayerPx(RasterLayer layer, int docX, int docY)
+    {
+        var lx = docX - layer.Offset.X;
+        var ly = docY - layer.Offset.Y;
+        var idx = TileIndex.FromPixel(lx, ly);
+        var tile = layer.Surface.GetTileForRead(idx);
+        if (tile == null) return SKColors.Transparent;
+        var rect = idx.ToPixelRect();
+        using var pixmap = tile.AsPixmap();
+        return pixmap.GetPixelColor(lx - rect.Left, ly - rect.Top);
+    }
+
+    [Fact]
+    public void Reset_AfterCommittedScaleAndPerspective_ReturnsToOriginalSize()
+    {
+        using var session = new EditorSession(ImageCodec.CreateBlankDocument(512, 512, SKColors.Transparent));
+        var doc = session.Document;
+        var layer = (RasterLayer)doc.ActiveLayer!;
+        lock (doc.SyncRoot) layer.Surface.Fill(new SKRectI(100, 100, 200, 200), new SKColor(255, 0, 0));
+        session.ActiveTool = session.Move;
+        session.RefreshSelectionHandles();
+
+        // 第一輪：放大兩倍落地
+        var t1 = session.BeginTransform()!;
+        t1.TargetRect = new SKRect(100, 100, 300, 300);
+        t1.Apply(preview: false);
+        session.CommitTransform();
+
+        // 第二輪：透視拉一角落地
+        var t2 = session.EnterTransformMode(TransformMode.Perspective)!;
+        Assert.True(t2.IsResumed);
+        Assert.True(t2.SetQuad(QuadGeometry.PerspectiveDrag(t2.Quad!, 0, new SKPoint(30, 0))));
+        t2.Apply(preview: false);
+        session.CommitTransform();
+
+        // 第三輪：什麼都沒動，但重置鈕要亮（上一輪的變形也算）→ 重設回 100×100、無透視
+        var t3 = session.BeginTransform()!;
+        Assert.True(t3.IsResumed);
+        Assert.True(session.CanResetTransform);
+        Assert.True(session.ResetTransform());
+        Assert.Null(t3.Quad);
+        Assert.Equal(100, t3.TargetRect.Width, 1);
+        Assert.Equal(100, t3.TargetRect.Height, 1);
+        Assert.Equal(0f, t3.RotationDeg);
+        Assert.False(session.CanResetTransform);
+
+        var before = session.History.UndoStack.Count;
+        session.CommitTransform();
+        Assert.Equal(before + 1, session.History.UndoStack.Count);
+        // 原始 100×100 的方塊回來了（中心維持在 200,200 附近）
+        var rect = t3.TargetRect;
+        Assert.True(LayerPx(layer, (int)rect.MidX, (int)rect.MidY).Alpha > 200);
+        Assert.Equal(0, LayerPx(layer, (int)rect.Right + 5, (int)rect.MidY).Alpha);
+        Assert.Equal(0, LayerPx(layer, (int)rect.Left - 5, (int)rect.MidY).Alpha);
+    }
+}

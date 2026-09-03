@@ -2709,7 +2709,7 @@ public partial class MainWindow : Window
         if (session.EnterTransformMode(mode) == null) return;
         Toasts.Show(mode switch
         {
-            TransformMode.Perspective => "透視：拖四角（Ctrl＝只動一角）；Enter 套用、Esc 還原",
+            TransformMode.Perspective => "透視：拖四角（Shift＝只動一角）；Enter 套用、Esc 還原",
             TransformMode.Warp => "扭曲：拖網格上的 16 個控制點；Enter 套用、Esc 還原",
             _ => "自由變形：拖角縮放、右鍵旋轉；Enter 套用、Esc 還原",
         });

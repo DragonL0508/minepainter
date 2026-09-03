@@ -36,7 +36,7 @@ public sealed class HandleDragController
     private SKPoint[]? _startQuad;
     private WarpMesh? _startWarp;
     private SKPoint _meshPress;
-    private bool _freeCorner; // 透視模式按住 Ctrl：該角自由拖（PS 的「扭曲」）
+    private bool _freeCorner; // 透視模式按住 Shift：該角自由拖（PS 的「扭曲」）
 
     /// <summary>四角／彎曲模式下的把手命中與拖曳開始；沒命中回 false。</summary>
     private bool BeginMeshDrag(TransformSession transform, SKPoint p, float tolerance, ToolModifiers modifiers,
@@ -57,7 +57,7 @@ public sealed class HandleDragController
             if (handle < 0) return false;
             _startQuad = quad;
             _corner = handle;
-            _freeCorner = modifiers.HasFlag(ToolModifiers.Ctrl);
+            _freeCorner = modifiers.HasFlag(ToolModifiers.Shift);
         }
         else
         {
@@ -380,10 +380,10 @@ public sealed class HandleDragController
 
             case TargetKind.Transform when session.Transform is { } transform && _startQuad != null:
             {
-                // 透視：從起始四角＋位移換算，鄰角對稱跟著動；Ctrl＝該角自由拖（PS 的扭曲）
+                // 透視：從起始四角＋位移換算，鄰角對稱跟著動；Shift＝該角自由拖（PS 的扭曲）
                 var delta = new SKPoint(p.X - _meshPress.X, p.Y - _meshPress.Y);
-                var quad = _freeCorner || modifiers.HasFlag(ToolModifiers.Ctrl)
-                    ? QuadGeometry.DistortDrag(_startQuad, _corner, delta, keepAspect)
+                var quad = _freeCorner || modifiers.HasFlag(ToolModifiers.Shift)
+                    ? QuadGeometry.DistortDrag(_startQuad, _corner, delta, constrain: false)
                     : QuadGeometry.PerspectiveDrag(_startQuad, _corner, delta);
                 if (!transform.SetQuad(quad)) break; // 凹／翻面的四邊形不接受，停在上一個合法狀態
                 transform.Apply(preview: true);
