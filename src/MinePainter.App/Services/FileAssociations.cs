@@ -134,6 +134,9 @@ public static class FileAssociations
             key.SetValue("ApplicationName", AppName);
             key.SetValue("ApplicationDescription", "MinePainter 影像編輯器");
             key.SetValue("ApplicationIcon", $"\"{exe}\",0");
+            // 下次啟動靠這兩筆判斷「登記的是不是還是我、是不是比我新」
+            key.SetValue("InstalledPath", exe);
+            key.SetValue("InstalledVersion", UpdateService.CurrentVersion.ToString());
             using var assoc = key.CreateSubKey("FileAssociations");
             foreach (var name in assoc.GetValueNames()) assoc.DeleteValue(name, false);
             foreach (var ext in extensions) assoc.SetValue(ext, ProgId(ext));
@@ -152,6 +155,57 @@ public static class FileAssociations
         }
         Registry.CurrentUser.DeleteSubKeyTree(@"Software\MinePainter", throwOnMissingSubKey: false);
         Registry.CurrentUser.DeleteSubKeyTree(AppExeKey, throwOnMissingSubKey: false);
+    }
+
+    /// <summary>目前登記給 MinePainter 的副檔名（沒登記就是空的）。</summary>
+    public static List<string> RegisteredExtensions() =>
+        All.Where(k => IsRegistered(k.Extension)).Select(k => k.Extension).ToList();
+
+    private static T? Capability<T>(string name) where T : class
+    {
+        using var key = Registry.CurrentUser.OpenSubKey(CapabilitiesPath);
+        return key?.GetValue(name) as T;
+    }
+
+    /// <summary>
+    /// 啟動時跑一次（背景執行緒）：第一次執行自動登記全部格式；之後只在
+    /// 登記的路徑不是現在這個執行檔時把它改過來（例如使用者把 MinePainter 換了資料夾，
+    /// 或裝了新版）。回傳 true＝這次有寫登錄檔（呼叫端要存 settings）。
+    ///
+    /// 「自動登記」只是讓 MinePainter 出現在「開啟方式」與預設應用程式清單，
+    /// 不會動到使用者現有的預設程式 —— 搶預設 Windows 本來就不允許。
+    /// </summary>
+    public static bool EnsureUpToDate(bool optedOut, bool autoRegisteredBefore)
+    {
+        // 開發建置會指到 bin\Debug 底下的 exe，別讓它污染使用者的關聯
+        if (optedOut || UpdateService.IsDevBuild) return false;
+
+        var exe = ExePath;
+        if (string.IsNullOrEmpty(exe)) return false;
+
+        var registered = RegisteredExtensions();
+        if (registered.Count == 0)
+        {
+            // 曾經自動登記過又變成沒有＝使用者自己清掉了，別再塞回去
+            if (autoRegisteredBefore) return false;
+            Apply(All.Select(k => k.Extension).ToList());
+            return true;
+        }
+
+        var path = Capability<string>("InstalledPath");
+        if (string.Equals(path, exe, StringComparison.OrdinalIgnoreCase)) return false;
+
+        // 同一台電腦上還留著更新的版本，而且它還在原地：這次跑的是舊版，不要把關聯搶過來
+        if (Version.TryParse(Capability<string>("InstalledVersion"), out var registeredVersion) &&
+            registeredVersion > UpdateService.CurrentVersion &&
+            path is not null && File.Exists(path))
+        {
+            return false;
+        }
+
+        // 格式維持使用者原本勾的那組，只把路徑換成現在這個執行檔
+        Apply(registered);
+        return true;
     }
 
     /// <summary>跳到「設定 → 預設應用程式 → MinePainter」，使用者在那裡指定預設。</summary>

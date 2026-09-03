@@ -43,6 +43,12 @@ public sealed class AppSettings
     /// <summary>啟動音效（啟動畫面出現／載入完成／主視窗現身）。</summary>
     public bool StartupSounds { get; set; } = true;
 
+    /// <summary>已經自動登記過檔案關聯（只做一次；之後使用者自己清掉就不再自動塞回去）。</summary>
+    public bool FileAssociationsRegistered { get; set; }
+
+    /// <summary>使用者在「檔案關聯」按過「全部移除」；啟動時不再自動登記。</summary>
+    public bool FileAssociationsOptOut { get; set; }
+
     /// <summary>主視窗啟動時最大化（預設是）。</summary>
     public bool WindowMaximized { get; set; } = true;
 

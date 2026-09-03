@@ -7,6 +7,7 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Media;
 using Avalonia.Platform.Storage;
+using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Material.Icons;
 using Material.Icons.Avalonia;
@@ -147,6 +148,7 @@ public partial class MainWindow : Window
         {
             Services.StartupSounds.MainWindowShown();
             _ = CheckUpdatesAsync(silent: true);
+            EnsureFileAssociations();
             PrepareBeforeShow(); // 正常流程 App 已先呼叫過（啟動畫面期間）；這裡是保險
             ShowPanels();
             StartPerfLabelTimer();
@@ -2482,7 +2484,34 @@ public partial class MainWindow : Window
     private async void OnFileAssociationsClicked(object? sender, RoutedEventArgs e)
     {
         await new FileAssociationsWindow().ShowDialog(this);
+        Services.AppSettings.Instance.Save();
     }
+
+    /// <summary>
+    /// 啟動時在背景把檔案關聯對齊現況：第一次執行自動登記，之後只有在 exe 換過位置
+    /// （或裝了新版）時把登錄檔裡的路徑改過來。寫登錄檔要幾十毫秒，不放在啟動路徑上。
+    /// </summary>
+    private static void EnsureFileAssociations() => Task.Run(() =>
+    {
+        var settings = Services.AppSettings.Instance;
+        bool changed;
+        try
+        {
+            changed = Services.FileAssociations.EnsureUpToDate(
+                settings.FileAssociationsOptOut, settings.FileAssociationsRegistered);
+        }
+        catch
+        {
+            return; // 登錄檔被政策鎖住之類：關聯沒了不影響其他功能
+        }
+
+        if (!changed) return;
+        Dispatcher.UIThread.Post(() =>
+        {
+            settings.FileAssociationsRegistered = true;
+            settings.Save();
+        });
+    });
 
     // ---- 工具選項 ----
 

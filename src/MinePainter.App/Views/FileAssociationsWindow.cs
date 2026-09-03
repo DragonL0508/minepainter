@@ -97,6 +97,8 @@ public sealed class FileAssociationsWindow : ModalDialog
         remove.Click += (_, _) =>
         {
             FileAssociations.RemoveAll();
+            AppSettings.Instance.FileAssociationsOptOut = true;
+            AppSettings.Instance.FileAssociationsRegistered = true;
             Confirmed = true;
             Close();
         };
@@ -104,9 +106,15 @@ public sealed class FileAssociationsWindow : ModalDialog
         SetBody(body, ButtonRow(apply, applyOnly, remove, MakeButton("取消")));
     }
 
-    private void ApplySelection() =>
-        FileAssociations.Apply(
-            _rows.Where(r => r.Box.IsChecked == true).Select(r => r.Kind.Extension).ToList());
+    private void ApplySelection()
+    {
+        var chosen = _rows.Where(r => r.Box.IsChecked == true).Select(r => r.Kind.Extension).ToList();
+        FileAssociations.Apply(chosen);
+        // 手動勾成空的＝跟按「全部移除」同一件事，啟動時不要再自動塞回去
+        var settings = AppSettings.Instance;
+        settings.FileAssociationsOptOut = chosen.Count == 0;
+        settings.FileAssociationsRegistered = true;
+    }
 
     /// <summary>Enter＝主按鈕（登記並前往設定）。</summary>
     protected override void OnConfirmKey()
