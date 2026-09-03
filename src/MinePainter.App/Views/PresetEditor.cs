@@ -55,17 +55,23 @@ public static class PresetEditor
                 .Select(e => LayerEffect.Create(e.Effect, null, SKColors.Black) with { Enabled = e.Enabled })
                 .ToList());
         }
-        doc.NotifyChanged(doc.Bounds);
-
         var win = new LayerPropertiesWindow(session, layer, presetMode: true);
         Open[preset.Path] = win;
 
-        // 效果快取算完（worker 執行緒）→ 預覽圖跟著換
+        // 效果快取算完（worker 執行緒）→ 預覽圖跟著換。要先訂閱再觸發合成，
+        // 不然 worker 可能在訂閱前就算完、之後沒事件，預覽就停在沒效果的「Aa」
         Action<RasterLayer> rendered = l =>
         {
             if (ReferenceEquals(l, layer)) Dispatcher.UIThread.Post(win.RefreshPreview);
         };
         LayerEffectRenderer.LayerRendered += rendered;
+        doc.NotifyChanged(doc.Bounds);
+        // 保險：開窗後再刷兩次（合成很快就結束的情況）
+        win.Opened += (_, _) =>
+        {
+            DispatcherTimer.RunOnce(win.RefreshPreview, TimeSpan.FromMilliseconds(150));
+            DispatcherTimer.RunOnce(win.RefreshPreview, TimeSpan.FromMilliseconds(600));
+        };
 
         win.Closed += (_, _) =>
         {
