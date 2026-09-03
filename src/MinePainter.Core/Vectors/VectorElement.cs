@@ -370,6 +370,57 @@ public sealed record TextElement : VectorElement
 
         if (HasDeform)
         {
+            // 合成器是逐 tile 呼叫 Render 的：透視／彎曲的文字每格都重算一次離線影像＋網格貼圖，
+            // 拉大時一步就是幾十次完整算繪 —— 同一個（immutable）實例只算一次，之後每格只是貼圖。
+            var cache = DeformCache.GetValue(this, _ => new DeformRenderCache());
+            lock (cache)
+            {
+                if (!cache.Tried)
+                {
+                    cache.Tried = true;
+                    var b = Bounds;
+                    if (b.Width > 0 && b.Height > 0 && b.Width <= 8192 && b.Height <= 8192)
+                    {
+                        using var surface = SKSurface.Create(new SKImageInfo(b.Width, b.Height, SKColorType.Bgra8888, SKAlphaType.Premul));
+                        if (surface != null)
+                        {
+                            var c = surface.Canvas;
+                            c.Clear(SKColors.Transparent);
+                            c.Translate(-b.Left, -b.Top);
+                            RenderDeformedDirect(c);
+                            c.Flush();
+                            cache.Image = surface.Snapshot();
+                            cache.Origin = new SKPoint(b.Left, b.Top);
+                        }
+                    }
+                }
+                if (cache.Image != null)
+                {
+                    canvas.DrawImage(cache.Image, cache.Origin.X, cache.Origin.Y);
+                    return;
+                }
+            }
+            RenderDeformedDirect(canvas);
+            return;
+        }
+
+        RenderCore(canvas);
+    }
+
+    private sealed class DeformRenderCache
+    {
+        public bool Tried;
+        public SKImage? Image;
+        public SKPoint Origin;
+        ~DeformRenderCache() => Image?.Dispose();
+    }
+
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<TextElement, DeformRenderCache> DeformCache = new();
+
+    /// <summary>不經快取，直接把透視／彎曲後的文字畫到 canvas（doc 座標）。</summary>
+    private void RenderDeformedDirect(SKCanvas canvas)
+    {
+        {
             var deform = Deform!;
             if (deform.Warp is { } warp)
             {
@@ -399,10 +450,7 @@ public sealed record TextElement : VectorElement
             canvas.Concat(ref m);
             RenderCore(canvas);
             canvas.Restore();
-            return;
         }
-
-        RenderCore(canvas);
     }
 
     private void RenderCore(SKCanvas canvas)
