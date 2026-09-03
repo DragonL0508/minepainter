@@ -147,7 +147,7 @@ public static class YouTubeMockup
         .Replace("\"", "&quot;");
 
     /// <summary>
-    /// 仿 YouTube 首頁：頂列、側欄導覽、分類 chips、影片網格（中間夾一排 Shorts 架）。
+    /// 仿 YouTube 首頁：頂列、側欄導覽、分類 chips、影片網格。
     /// 週邊影片全是假資料（CSS 漸層縮圖），只有第一格用使用者的圖。
     /// 標「實測」的數字來自 1920 寬深色實機量測，要改先確認有新的量測資料。
     /// </summary>
@@ -252,19 +252,6 @@ body {
 }
 .card .sub { color: var(--muted); font: 400 12px/18px inherit; }
 
-/* Shorts 架：實測卡片 314×549、margin 0 8px、架身 padding 12px 0 */
-.shelf { padding: 12px 0 32px; }
-.shelf .head { display: flex; align-items: center; gap: 8px; font: 500 16px/22px inherit; padding-bottom: 12px; }
-.shelf .head .mark { color: #f00; font-size: 18px; }
-.shelf .row { display: flex; gap: 16px; overflow: hidden; }
-.shelf .s { width: 314px; flex: none; }
-.shelf .s .cover { aspect-ratio: 9/16; max-height: 480px; border-radius: 12px; overflow: hidden; }
-.shelf .s .title {
-  font: 500 14px/20px inherit; padding-top: 8px; max-height: 40px; overflow: hidden;
-  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
-}
-.shelf .s .sub { color: var(--muted); font: 400 12px/18px inherit; }
-
 /* MinePainter 自己的控制列（不是 YouTube 的一部分） */
 .mp-bar {
   position: fixed; right: 16px; bottom: 16px; z-index: 20; display: flex; align-items: center; gap: 6px;
@@ -311,12 +298,7 @@ body {
       <span class="chip">音樂</span><span class="chip">直播</span><span class="chip">實況</span>
       <span class="chip">最新上傳</span><span class="chip">已觀看</span>
     </div>
-    <div class="grid" id="gridTop"></div>
-    <section class="shelf">
-      <div class="head"><span class="mark">▶</span>Shorts</div>
-      <div class="row" id="shortsRow"></div>
-    </section>
-    <div class="grid" id="gridRest"></div>
+    <div class="grid" id="grid"></div>
   </main>
 </div>
 
@@ -343,13 +325,6 @@ const FAKE = [
   ["用命令方塊做出會追人的雕像", "指令實驗室", "3.9萬次觀看", "9 天前", "7:44", "c"],
   ["整理了一份 1.21 全自動農場清單", "礦坑筆記", "89萬次觀看", "2 個月前", "31:16", "d"],
 ];
-const SHORTS = [
-  ["一格紅石省下半座機器", "12 萬次觀看", "b"],
-  ["這樣挖礦快三倍", "48 萬次觀看", "c"],
-  ["最短的自動門", "9.7 萬次觀看", "d"],
-  ["村民抓不到的原因", "23 萬次觀看", "e"],
-  ["三秒判斷礦脈方向", "6.1 萬次觀看", ""],
-];
 
 const thumbHtml = (f) => f
   ? `<div class="thumb"><div class="fake ${f[5]}"></div><span class="dur">${f[4]}</span></div>`
@@ -368,15 +343,8 @@ const cardHtml = (f) => `
     </div>
   </article>`;
 
-// 使用者的影片排第一格，Shorts 架前後各放幾部假的（跟真的首頁一樣）
-document.getElementById("gridTop").innerHTML = [null, ...FAKE.slice(0, 5)].map(cardHtml).join("");
-document.getElementById("gridRest").innerHTML = FAKE.slice(5).map(cardHtml).join("");
-document.getElementById("shortsRow").innerHTML = SHORTS.map((s) => `
-  <article class="s">
-    <div class="cover"><div class="fake ${s[2]}"></div></div>
-    <div class="title">${s[0]}</div>
-    <div class="sub">${s[1]}</div>
-  </article>`).join("");
+// 使用者的影片排第一格，後面接假的
+document.getElementById("grid").innerHTML = [null, ...FAKE].map(cardHtml).join("");
 
 // 頻道頭像：選了「用這張圖」只換自己的（頂列與第一格），假影片維持字母
 if ("__AVATAR_MODE__" === "image") {
