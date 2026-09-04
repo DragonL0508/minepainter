@@ -1,4 +1,4 @@
-using MinePainter.Core.Documents;
+﻿using MinePainter.Core.Documents;
 using MinePainter.Core.IO;
 using MinePainter.Core.Layers;
 using MinePainter.Core.Selections;
@@ -62,7 +62,7 @@ public class FloatingOverlayTests
         using var session = NewSession(out var bottom);
         AddLayer(session.Document, "above");
         session.Document.ActiveLayer = bottom;
-        bottom.Surface.Fill(new SKRectI(50, 50, 150, 150), SKColors.Red);
+        lock (session.Document.SyncRoot) bottom.Surface.Fill(new SKRectI(50, 50, 150, 150), SKColors.Red);
         session.Selection = RectMask(session.Document, new SKRectI(50, 50, 150, 150));
 
         Assert.NotNull(session.LiftSelection());
@@ -75,7 +75,7 @@ public class FloatingOverlayTests
         using var session = NewSession(out var bottom);
         AddLayer(session.Document, "above").IsVisible = false;
         session.Document.ActiveLayer = bottom;
-        bottom.Surface.Fill(new SKRectI(50, 50, 150, 150), SKColors.Red);
+        lock (session.Document.SyncRoot) bottom.Surface.Fill(new SKRectI(50, 50, 150, 150), SKColors.Red);
         session.Selection = RectMask(session.Document, new SKRectI(50, 50, 150, 150));
 
         Assert.NotNull(session.LiftSelection());
@@ -151,7 +151,7 @@ public class FloatingOverlayTests
         using var session = NewSession(out var bottom);
         AddLayer(session.Document, "above");
         session.Document.ActiveLayer = bottom;
-        bottom.Surface.Fill(new SKRectI(50, 50, 350, 350), SKColors.Red);
+        lock (session.Document.SyncRoot) bottom.Surface.Fill(new SKRectI(50, 50, 350, 350), SKColors.Red);
         session.Selection = RectMask(session.Document, new SKRectI(50, 50, 350, 350));
         session.ActiveTool = session.Move;
 

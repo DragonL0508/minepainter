@@ -1779,6 +1779,8 @@ public sealed class EditorSession : IDisposable
     public void Dispose()
     {
         Document.ActiveLayerChanged -= OnActiveLayerChanged;
+        // 先讓合成器停下來：下面要釋放的浮動影像／殘影／覆疊快照，worker 正在畫的就是它們
+        Compositor.StopRendering();
         Transform?.DisposeDeferred(Compositor); // 退役佇列由 Compositor.Dispose 清掉
         Transform = null;
         Floating?.Dispose();

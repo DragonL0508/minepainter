@@ -1,15 +1,20 @@
-﻿using SkiaSharp;
+﻿using System.Collections.Concurrent;
+using SkiaSharp;
 
 namespace MinePainter.Core.Tiles;
 
 /// <summary>
 /// 稀疏 tile 圖：只有非透明區域佔記憶體。
-/// 非執行緒安全 —— 呼叫者以 Document.SyncRoot 保護（Snapshot 也須在鎖內取）。
+///
+/// 內容的讀寫由 Document.SyncRoot 保護（Snapshot 也須在鎖內取）；容器本身是
+/// ConcurrentDictionary，因為合成器持著 SyncRoot 時會分派多個執行緒同時合成不同的格
+/// （見 Compositor.RenderBatch）——「不同的格」彼此不重疊，容器不炸就夠了。
 /// </summary>
 public sealed class TileSurface : IDisposable
 {
     private readonly TilePool _pool;
-    private readonly Dictionary<TileIndex, Tile> _tiles = new();
+    private readonly ConcurrentDictionary<TileIndex, Tile> _tiles = new();
+    private readonly object _exactGate = new();
 
     // ExactContentBounds 的快取鍵：任何取得寫入權的操作都會 +1。
     // 注意這追蹤的是「取得寫入權」而非實際寫入 —— 持有 GetTileForWrite 回傳的 tile
@@ -26,7 +31,7 @@ public sealed class TileSurface : IDisposable
     /// 寫入版本號。<see cref="Layers.LayerPixelSource"/> 靠它判斷「這層像素從那次變形之後
     /// 有沒有被別的編輯改過」—— 變了就代表原始高清那份對不上目前的圖層，該作廢。
     /// </summary>
-    public int Revision => _revision;
+    public int Revision => Volatile.Read(ref _revision);
 
     /// <summary>tile 粒度的內容邊界（文件像素座標）；無內容回傳 Empty。</summary>
     public SKRectI ContentBounds
@@ -54,7 +59,11 @@ public sealed class TileSurface : IDisposable
     /// </summary>
     public unsafe SKRectI ExactContentBounds()
     {
-        if (_exactCache.Revision == _revision) return _exactCache.Bounds;
+        var revision = Volatile.Read(ref _revision);
+        lock (_exactGate)
+        {
+            if (_exactCache.Revision == revision) return _exactCache.Bounds;
+        }
 
         int l = int.MaxValue, t = int.MaxValue, r = int.MinValue, b = int.MinValue;
 
@@ -83,7 +92,7 @@ public sealed class TileSurface : IDisposable
         }
 
         var result = l == int.MaxValue ? SKRectI.Empty : new SKRectI(l, t, r, b);
-        _exactCache = (_revision, result);
+        lock (_exactGate) _exactCache = (revision, result);
         return result;
     }
 
@@ -93,7 +102,7 @@ public sealed class TileSurface : IDisposable
     /// <summary>寫入用：缺格就建零 tile；共享中（快照持有）就先 Clone —— COW 核心。</summary>
     public Tile GetTileForWrite(TileIndex idx)
     {
-        _revision++;
+        Interlocked.Increment(ref _revision);
         if (!_tiles.TryGetValue(idx, out var tile))
         {
             tile = Tile.Rent(_pool);
@@ -113,9 +122,9 @@ public sealed class TileSurface : IDisposable
     /// <summary>移除並釋放一格（例如 commit 後發現全透明）。</summary>
     public void RemoveTile(TileIndex idx)
     {
-        if (_tiles.Remove(idx, out var tile))
+        if (_tiles.TryRemove(idx, out var tile))
         {
-            _revision++;
+            Interlocked.Increment(ref _revision);
             tile.Release();
         }
     }
@@ -150,8 +159,8 @@ public sealed class TileSurface : IDisposable
     /// <summary>把快照的 tile 裝回（undo/redo 用）：整格替換，接手快照的引用。</summary>
     public void RestoreTile(TileIndex idx, Tile? tile)
     {
-        _revision++;
-        if (_tiles.Remove(idx, out var old)) old.Release();
+        Interlocked.Increment(ref _revision);
+        if (_tiles.TryRemove(idx, out var old)) old.Release();
         if (tile != null)
         {
             tile.AddRef();

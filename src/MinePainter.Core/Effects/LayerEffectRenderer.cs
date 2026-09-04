@@ -100,9 +100,12 @@ public static class LayerEffectRenderer
         public float ContentRotation;        // 這層唯一的文字物件的角度（見 EffectContext.ContentRotation）
     }
 
-    /// <summary>算完所有待處理的圖層；回傳是否有任何圖層被更新（呼叫端據此決定要不要再跑一輪）。</summary>
+    /// <summary>
+    /// 算完所有待處理的圖層；回傳是否有任何圖層被更新（呼叫端據此決定要不要再跑一輪）。
+    /// <paramref name="priority"/>＝畫面上看得到的範圍（doc 座標）：碰得到它的圖層先算。
+    /// </summary>
     public static bool RenderPending(Document doc, CancellationToken ct = default,
-        GroupPixelReader? groupReader = null)
+        GroupPixelReader? groupReader = null, SKRectI priority = default)
     {
         var any = false;
         while (true)
@@ -111,7 +114,7 @@ public static class LayerEffectRenderer
             Job? job;
             lock (doc.SyncRoot)
             {
-                job = TakeJobLocked(doc, groupReader: groupReader);
+                job = TakeJobLocked(doc, groupReader: groupReader, priority: priority);
             }
             if (job == null) return any;
 
@@ -254,8 +257,17 @@ public static class LayerEffectRenderer
         return bounds;
     }
 
-    private static Job? TakeJobLocked(Document doc, LayerNode? only = null, GroupPixelReader? groupReader = null)
+    /// <summary>
+    /// 取一份待算的工作。<paramref name="priority"/>（doc 座標，通常是畫面上看得到的範圍）
+    /// 不影響「算什麼」，只影響「先算誰」—— GIMP 的 projection 也是這個形狀：
+    /// 失效範圍照算，但看得到的那塊先排。
+    /// </summary>
+    private static Job? TakeJobLocked(Document doc, LayerNode? only = null, GroupPixelReader? groupReader = null,
+        SKRectI priority = default)
     {
+        // 第一輪：每層的簿記（沒有效果就丟快取、Offset 變了標髒物件範圍、畫布相關的重算判斷）
+        // 一律照做，然後把「有待處理」的層依後序收起來。
+        List<LayerNode>? pending = null;
         foreach (var layer in EffectOrder(doc))
         {
             if (!layer.CanHaveEffects) continue;
@@ -271,15 +283,10 @@ public static class LayerEffectRenderer
                 continue;
             }
 
-            var effects = layer.Effects.Where(e => e.Enabled).ToList();
-            var margin = 0;
-            var wholeLayer = false;
             var canvasDependent = false;
-            foreach (var e in effects)
+            foreach (var e in layer.Effects)
             {
-                if (e.Effect.SourceMargin == EffectContext.WholeLayer) wholeLayer = true;
-                margin += EffectMargin(e.Effect);
-                if (!e.Effect.IsPositionIndependent) canvasDependent = true;
+                if (e.Enabled && !e.Effect.IsPositionIndependent) canvasDependent = true;
             }
 
             // 物件是 doc 座標：Offset 變了而物件沒跟著動，物件在圖層座標裡就搬家了
@@ -309,6 +316,74 @@ public static class LayerEffectRenderer
             cache.LastCanvas = canvasInLayer;
 
             if (!cache.HasPending) continue;
+
+            (pending ??= []).Add(layer);
+        }
+
+        if (pending == null) return null;
+
+        // 看得到的先算。後序（子層先於群組）不能破壞 —— 群組效果吃的是子層算完的樣子，
+        // 所以只有「底下沒有還在等的子層」的層才准插隊。
+        if (!priority.IsEmpty && pending.Count > 1)
+        {
+            for (var i = 1; i < pending.Count; i++)
+            {
+                var candidate = pending[i];
+                if (!IntersectsPriority(candidate, priority)) continue;
+                if (candidate is GroupLayer g && pending.Take(i).Any(p => IsDescendantOf(p, g))) continue;
+                pending.RemoveAt(i);
+                pending.Insert(0, candidate);
+                break;
+            }
+        }
+
+        foreach (var layer in pending)
+        {
+            var job = BuildJobLocked(doc, layer, groupReader);
+            if (job != null) return job;
+        }
+        return null;
+    }
+
+    /// <summary>這層（含效果外擴）在 doc 座標上碰不碰得到優先範圍。</summary>
+    private static bool IntersectsPriority(LayerNode layer, SKRectI priority)
+    {
+        var region = ContentRegion(layer);
+        if (region.IsEmpty) return true; // 算不出範圍就別排到後面去
+        var margin = TotalMargin(layer);
+        if (margin > 0) region.Inflate(margin, margin);
+        var off = layer.EffectOffset;
+        var docRegion = new SKRectI(region.Left + off.X, region.Top + off.Y,
+            region.Right + off.X, region.Bottom + off.Y);
+        return docRegion.IntersectsWith(priority);
+    }
+
+    private static bool IsDescendantOf(LayerNode node, GroupLayer group)
+    {
+        for (var g = node.Parent; g != null; g = g.Parent)
+        {
+            if (ReferenceEquals(g, group)) return true;
+        }
+        return false;
+    }
+
+    /// <summary>把這一層的待處理範圍打包成一份工作（範圍算完就從快取的髒區扣掉）。null＝這層沒事可做。</summary>
+    private static Job? BuildJobLocked(Document doc, LayerNode layer, GroupPixelReader? groupReader)
+    {
+        var cache = layer.FxCache;
+        var effects = layer.Effects.Where(e => e.Enabled).ToList();
+        var margin = 0;
+        var wholeLayer = false;
+        var canvasDependent = false;
+        foreach (var e in effects)
+        {
+            if (e.Effect.SourceMargin == EffectContext.WholeLayer) wholeLayer = true;
+            margin += EffectMargin(e.Effect);
+            if (!e.Effect.IsPositionIndependent) canvasDependent = true;
+        }
+
+        var canvasInLayer = new SKRectI(-layer.EffectOffset.X, -layer.EffectOffset.Y,
+            doc.Width - layer.EffectOffset.X, doc.Height - layer.EffectOffset.Y);
 
             // 只算「看得到的那塊」：畫布外的部分算了也永遠不會被合成到（合成器只走畫布內的
             // tile），可是成本照付（實測：完全在畫布外的 3200×370 文字，外框＋陰影仍要 113 ms）。
@@ -346,7 +421,7 @@ public static class LayerEffectRenderer
                 cache.Dirty = SKRectI.Empty;
                 cache.LastRegion = region;
                 cache.Rendered = true;
-                continue;
+                return null;
             }
 
             var full = cache.DirtyAll || wholeLayer;
@@ -392,10 +467,8 @@ public static class LayerEffectRenderer
                 Effects = effects,
                 Masks = masks,
                 DocSize = new SKSizeI(doc.Width, doc.Height),
-                ContentRotation = ContentRotationOf(layer),
-            };
-        }
-        return null;
+            ContentRotation = ContentRotationOf(layer),
+        };
     }
 
     /// <summary>

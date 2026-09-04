@@ -42,7 +42,9 @@ public sealed class Compositor : IDisposable
     private readonly ConcurrentQueue<(long Gen, SKImage Image)> _retired = new();
     private long _collectGen;
 
-    private SKRectI _visibleTiles; // tile 格座標範圍；worker 優先處理
+    // tile 格座標範圍（含端點）；worker 優先處理。畫面還沒報過範圍前是空的
+    // —— 預設值 (0,0,0,0) 會被當成「左上那一格看得到」，效果與 tile 都會被排錯優先序。
+    private SKRectI _visibleTiles = new(0, 0, -1, -1);
 
     private long _tilesRendered;
     private long _renderTicks;
@@ -155,6 +157,18 @@ public sealed class Compositor : IDisposable
 
     /// <summary>render thread：目前可見的 tile 格範圍（含端點），供排程優先。</summary>
     public void SetVisibleTiles(SKRectI tileRange) => _visibleTiles = tileRange;
+
+    /// <summary>目前可見範圍的 doc 座標（tile 對齊）。空的＝還沒有人report過畫面範圍。</summary>
+    public SKRectI VisibleDocRect
+    {
+        get
+        {
+            var t = _visibleTiles;
+            if (t.Right < t.Left || t.Bottom < t.Top) return SKRectI.Empty;
+            return new SKRectI(t.Left * Tile.Size, t.Top * Tile.Size,
+                (t.Right + 1) * Tile.Size, (t.Bottom + 1) * Tile.Size);
+        }
+    }
 
     /// <summary>
     /// render thread：取合成結果。回傳 (found, image)：
@@ -308,12 +322,14 @@ public sealed class Compositor : IDisposable
                 _signal.Wait(token);
 
                 var rendered = 0;
+                var batch = new List<TileIndex>(BatchSize);
                 while (!token.IsCancellationRequested)
                 {
                     // 效果堆疊先於 tile：有圖層的效果快取髒了就先算（鎖外計算，不擋 UI）
                     try
                     {
-                        Effects.LayerEffectRenderer.RenderPending(_document, token, ReadGroupSourceLocked);
+                        Effects.LayerEffectRenderer.RenderPending(_document, token, ReadGroupSourceLocked,
+                            VisibleDocRect);
                     }
                     catch (OperationCanceledException)
                     {
@@ -323,12 +339,13 @@ public sealed class Compositor : IDisposable
                     {
                         // 效果算壞了不該讓合成器死掉；下一輪會再試
                     }
-                    if (!TryTakeDirty(out var idx)) break;
-                    RenderTile(idx);
-                    rendered++;
+                    TakeDirtyBatch(batch, BatchSize);
+                    if (batch.Count == 0) break;
+                    RenderBatch(batch);
+                    rendered += batch.Count;
 
                     // 每完成一小批就通知一次，讓 viewport 邊合成邊顯示
-                    if (rendered % 16 == 0)
+                    if (rendered % 16 < batch.Count)
                     {
                         TrimCache();
                         TilesReady?.Invoke();
@@ -346,43 +363,79 @@ public sealed class Compositor : IDisposable
         }
     }
 
-    private bool TryTakeDirty(out TileIndex result)
+    /// <summary>
+    /// 一次取一批髒格（可見的優先）。批次是為了讓一次取鎖攤在多核上（見 <see cref="RenderBatch"/>）：
+    /// 逐格取鎖的話 UI thread 每格都要跟 worker 搶一次，反而更卡。
+    /// </summary>
+    private void TakeDirtyBatch(List<TileIndex> into, int max)
     {
+        into.Clear();
         lock (_dirtyGate)
         {
-            if (_dirty.Count == 0)
-            {
-                result = default;
-                return false;
-            }
+            if (_dirty.Count == 0) return;
 
             var visible = _visibleTiles;
-            TileIndex? fallback = null;
             foreach (var idx in _dirty)
             {
-                if (idx.X >= visible.Left && idx.X <= visible.Right &&
-                    idx.Y >= visible.Top && idx.Y <= visible.Bottom)
-                {
-                    _dirty.Remove(idx);
-                    result = idx;
-                    return true;
-                }
-                fallback ??= idx;
+                if (idx.X < visible.Left || idx.X > visible.Right ||
+                    idx.Y < visible.Top || idx.Y > visible.Bottom) continue;
+                into.Add(idx);
+                if (into.Count >= max) break;
             }
 
-            result = fallback!.Value;
-            _dirty.Remove(result);
-            return true;
+            // 可見範圍不夠湊滿一批就補畫布其他地方的（之後拉動畫面才不用等）
+            if (into.Count < max)
+            {
+                foreach (var idx in _dirty)
+                {
+                    if (idx.X >= visible.Left && idx.X <= visible.Right &&
+                        idx.Y >= visible.Top && idx.Y <= visible.Bottom) continue;
+                    into.Add(idx);
+                    if (into.Count >= max) break;
+                }
+            }
+
+            foreach (var idx in into) _dirty.Remove(idx);
         }
     }
 
-    private void RenderTile(TileIndex idx)
+    /// <summary>
+    /// 一批格子的合成：取一次 Document.SyncRoot，批次內分派到多個執行緒同時算。
+    ///
+    /// 合成本身是逐格獨立的（每格自己一張 SKSurface，寫進去的快取也是各自的格），
+    /// 唯一的共用資源是「不能同時有人改文件」——所以鎖照舊由這裡整批持有，
+    /// 批次內的執行緒一律不再取鎖（取了會等在自己這條 worker 手上的鎖，直接卡死）。
+    /// GEGL 的做法也是同一個形狀：圖不變的期間逐 tile 分派執行緒。
+    /// </summary>
+    private void RenderBatch(List<TileIndex> batch)
     {
         var start = System.Diagnostics.Stopwatch.GetTimestamp();
-        RenderTileCore(idx);
+        lock (_document.SyncRoot)
+        {
+            if (ParallelComposite && batch.Count > 1)
+            {
+                Parallel.ForEach(batch, ParallelOptions, RenderTileLocked);
+            }
+            else
+            {
+                foreach (var idx in batch) RenderTileLocked(idx);
+            }
+        }
         Interlocked.Add(ref _renderTicks, System.Diagnostics.Stopwatch.GetTimestamp() - start);
-        Interlocked.Increment(ref _tilesRendered);
+        Interlocked.Add(ref _tilesRendered, batch.Count);
     }
+
+    /// <summary>
+    /// 批次內要不要分派到多執行緒同時合成。預設關閉：多執行緒同時走合成路徑時
+    /// 原生層會當掉（根因調查中），確定前不開。批次本身（一次取一次鎖）與它無關，一直是開的。
+    /// </summary>
+    public static bool ParallelComposite { get; set; }
+
+    /// <summary>一批最多幾格 —— 開了平行合成時也就是最多幾條執行緒同時合成。</summary>
+    private static readonly int BatchSize = Math.Clamp(Environment.ProcessorCount, 1, 8);
+
+    private static readonly ParallelOptions ParallelOptions = new() { MaxDegreeOfParallelism = BatchSize };
+
 
     /// <summary>
     /// 超出預算就淘汰：從「這一刻看不到的格」裡挑最久沒被用到的丟掉，直到回到預算內。
@@ -428,7 +481,8 @@ public sealed class Compositor : IDisposable
     private static readonly SKImageRasterReleaseDelegate ReleaseTileBuffer =
         static (_, context) => ((Tile)context).Release();
 
-    private void RenderTileCore(TileIndex idx)
+    /// <summary>合成一格。呼叫端須持有 Document.SyncRoot（見 <see cref="RenderBatch"/>）。</summary>
+    private void RenderTileLocked(TileIndex idx)
     {
         var tileRect = idx.ToPixelRect();
 
@@ -441,11 +495,7 @@ public sealed class Compositor : IDisposable
             var canvas = surface.Canvas;
             canvas.Clear(SKColors.Transparent);
 
-            bool hasContent;
-            lock (_document.SyncRoot)
-            {
-                hasContent = CompositeGroup(_document.Root, surface, tileRect);
-            }
+            var hasContent = CompositeGroup(_document.Root, surface, tileRect);
 
             SKImage? image = null;
             if (hasContent)
@@ -788,14 +838,24 @@ public sealed class Compositor : IDisposable
             var tile = source.GetTileForRead(srcIdx);
             if (tile == null) continue;
 
-            using var pixmap = tile.AsPixmap();
-            using var img = SKImage.FromPixels(pixmap); // 零拷貝；持 SyncRoot 期間使用
-            var srcTileRect = srcIdx.ToPixelRect();
-            canvas.DrawImage(
-                img,
-                srcTileRect.Left + layer.Offset.X - tileRect.Left,
-                srcTileRect.Top + layer.Offset.Y - tileRect.Top,
-                paint);
+            // 畫別人的像素之前先佔一份引用：零拷貝的 SKImage 直接指著那塊緩衝，
+            // 中途被釋放（寫時複製、undo 還原）就會還進池子被別人借走 —— 那是原生層的當機。
+            if (!tile.TryAddRef()) continue;
+            try
+            {
+                using var pixmap = tile.AsPixmap();
+                using var img = SKImage.FromPixels(pixmap); // 零拷貝；引用期間有效
+                var srcTileRect = srcIdx.ToPixelRect();
+                canvas.DrawImage(
+                    img,
+                    srcTileRect.Left + layer.Offset.X - tileRect.Left,
+                    srcTileRect.Top + layer.Offset.Y - tileRect.Top,
+                    paint);
+            }
+            finally
+            {
+                tile.Release();
+            }
             drew = true;
         }
         return drew;
@@ -845,8 +905,19 @@ public sealed class Compositor : IDisposable
         return new SKColor(pixel[2], pixel[1], pixel[0], pixel[3]);
     }
 
-    public void Dispose()
+    private int _stopped;
+
+    /// <summary>
+    /// 停掉 worker 並等它真的停下來（最多兩秒）。
+    ///
+    /// 關閉分頁時要**先**做這件事，才輪得到釋放那些「合成器正在畫的東西」——
+    /// 浮動內容的影像、殘影、覆疊快照都是 worker 每格都會讀的，
+    /// 一邊 Dispose 一邊還在畫就是踩到已釋放的記憶體（原生層直接當掉，攔不到）。
+    /// 可重複呼叫。
+    /// </summary>
+    public void StopRendering()
     {
+        if (Interlocked.Exchange(ref _stopped, 1) != 0) return;
         _document.Changed -= MarkDirty;
         _document.SizeChanged -= OnDocumentSizeChanged;
         _cts.Cancel();
@@ -855,6 +926,11 @@ public sealed class Compositor : IDisposable
         {
             // background thread，程序結束時自然回收
         }
+    }
+
+    public void Dispose()
+    {
+        StopRendering();
 
         foreach (var img in _cache.Values) img?.Dispose();
         _cache.Clear();

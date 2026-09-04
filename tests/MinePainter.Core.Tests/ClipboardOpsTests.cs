@@ -167,7 +167,7 @@ public class ClipboardOpsTests
     {
         using var session = NewSession();
         var layer = (RasterLayer)session.Document.ActiveLayer!;
-        layer.Surface.Fill(new SKRectI(100, 100, 200, 200), new SKColor(255, 0, 0));
+        lock (session.Document.SyncRoot) layer.Surface.Fill(new SKRectI(100, 100, 200, 200), new SKColor(255, 0, 0));
 
         using var path = new SKPath();
         path.AddRect(SKRect.Create(150, 150, 100, 100)); // 一半紅一半白

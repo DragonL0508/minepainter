@@ -1,4 +1,4 @@
-using MinePainter.Core.Adjustments;
+﻿using MinePainter.Core.Adjustments;
 using MinePainter.Core.Effects;
 using MinePainter.Core.History;
 using MinePainter.Core.IO;
@@ -34,6 +34,46 @@ public class LayerEffectStackTests
         var doc = ImageCodec.CreateBlankDocument(64, 64, new SKColor(100, 100, 100));
         var session = new EditorSession(doc);
         return (session, (RasterLayer)doc.ActiveLayer!);
+    }
+
+    /// <summary>
+    /// 看得到的圖層先算（GIMP 的 priority rect）：畫面外的圖層照樣會算，只是排在後面。
+    /// </summary>
+    [Fact]
+    public void RenderPending_ComputesLayersInsideThePriorityRectFirst()
+    {
+        using var doc = ImageCodec.CreateBlankDocument(1024, 512, SKColors.Transparent);
+
+        var far = new RasterLayer { Name = "遠" };
+        far.Surface.Fill(new SKRectI(800, 100, 1000, 300), SKColors.Red);
+        var near = new RasterLayer { Name = "近" };
+        near.Surface.Fill(new SKRectI(0, 100, 200, 300), SKColors.Blue);
+        lock (doc.SyncRoot)
+        {
+            doc.Root.Add(far);  // 先加的在後序裡排前面：沒有優先範圍時它會先算
+            doc.Root.Add(near);
+            far.SetEffects([LayerEffect.Create(new GaussianBlurEffect())]);
+            near.SetEffects([LayerEffect.Create(new GaussianBlurEffect())]);
+        }
+
+        var order = new List<string>();
+        void OnRendered(LayerNode layer)
+        {
+            if (ReferenceEquals(layer, far) || ReferenceEquals(layer, near))
+                lock (order) order.Add(layer.Name);
+        }
+
+        LayerEffectRenderer.LayerRendered += OnRendered;
+        try
+        {
+            LayerEffectRenderer.RenderPending(doc, priority: new SKRectI(0, 0, 256, 512));
+        }
+        finally
+        {
+            LayerEffectRenderer.LayerRendered -= OnRendered;
+        }
+
+        Assert.Equal(["近", "遠"], order); // 兩層都算完，看得到的那層先
     }
 
     [Fact]

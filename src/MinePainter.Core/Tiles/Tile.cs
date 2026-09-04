@@ -74,6 +74,20 @@ public sealed unsafe class Tile
         Interlocked.Increment(ref _refCount);
     }
 
+    /// <summary>
+    /// 已經釋放就回 false 而不是丟例外。合成器讀別人的 tile 時用這個佔住一份引用：
+    /// 佔得住就保證這塊緩衝在畫完之前不會被還回池子（拿到的內容可能是舊的，但不會是別人的）。
+    /// </summary>
+    public bool TryAddRef()
+    {
+        while (true)
+        {
+            var count = Volatile.Read(ref _refCount);
+            if (count <= 0) return false;
+            if (Interlocked.CompareExchange(ref _refCount, count + 1, count) == count) return true;
+        }
+    }
+
     public void Release()
     {
         var count = Interlocked.Decrement(ref _refCount);
