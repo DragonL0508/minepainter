@@ -277,7 +277,7 @@ public sealed record ObjectOutlineEffect : IEffect
         init => GradientStops = GradientStops.WithEnd(value);
     }
 
-    public string Name => "物件外框";
+    public string Name => "外框";
     public string Category => "物件";
 
     private int ClampedWidth => Math.Min(Width, 100);
@@ -422,7 +422,7 @@ public sealed record ObjectShadowEffect : IEffect
     public int Opacity { get; init; } = 60;    // 0..100
     public SKColor Color { get; init; } = SKColors.Black;
 
-    public string Name => "物件陰影";
+    public string Name => "陰影";
     public string Category => "物件";
     public int SourceMargin => Math.Max(Math.Abs(OffsetX), Math.Abs(OffsetY)) + Thickness + GaussianMargin(Blur);
 
@@ -549,7 +549,7 @@ public sealed record ObjectGlowEffect : IEffect
     public int Opacity { get; init; } = 85;  // 0..100
     public SKColor Color { get; init; } = new(0xFF, 0xD3, 0x4A);
 
-    public string Name => "物件光暈";
+    public string Name => "光暈";
     public string Category => "物件";
     public int SourceMargin => Spread + GaussianMargin(Size);
 
@@ -581,12 +581,83 @@ public sealed record ObjectGlowEffect : IEffect
     }
 }
 
+/// <summary>
+/// 物件塗色（PS 的「顏色覆蓋」）：把物件的不透明像素整片換成單一顏色，形狀與邊緣的
+/// 抗鋸齒完全保留。跟「漸層」是同一類的上色手段，只是單色 —— 想換個顏色試配色時，
+/// 比去改原始像素快得多，而且是非破壞性的。
+/// </summary>
+public sealed record ObjectFillEffect : IEffect
+{
+    public SKColor Color { get; init; } = new(0xE0, 0x4B, 0x4B);
+
+    /// <summary>0..100：塗上去的濃度（不是整層透明度，是這片顏色蓋過原色的程度）。</summary>
+    public int Opacity { get; init; } = 100;
+
+    public string Name => "塗色";
+    public string Category => "物件";
+
+    /// <summary>逐像素、不看鄰居；輸出不會長到內容外。</summary>
+    public int SourceMargin => 0;
+
+    private static readonly ParamDef[] Params =
+    [
+        new ColorParam("color", "顏色", o => ((ObjectFillEffect)o).Color,
+            (o, v) => ((ObjectFillEffect)o) with { Color = v }),
+        new SliderParam("opacity", "濃度", 0, 100, o => ((ObjectFillEffect)o).Opacity,
+            (o, v) => ((ObjectFillEffect)o) with { Opacity = (int)v }, "%"),
+    ];
+    public IReadOnlyList<ParamDef> Parameters => Params;
+
+    public void Render(EffectContext ctx)
+    {
+        var amount = Math.Clamp(Opacity, 0, 100) * 255 / 100;
+        if (amount <= 0)
+        {
+            ctx.CopySrcToDst();
+            return;
+        }
+        var fr = Color.Red;
+        var fg = Color.Green;
+        var fb = Color.Blue;
+        var fa = Color.Alpha;
+
+        ctx.ForRows(y =>
+        {
+            for (var x = 0; x < ctx.Width; x++)
+            {
+                var src = ctx.SrcAt(x, y);
+                var a = A(src);
+                if (a == 0)
+                {
+                    ctx.Dst[y * ctx.Width + x] = 0;
+                    continue;
+                }
+                // 塗上去的顏色也保有自己的 alpha；再乘上「濃度」與原像素的 alpha，
+                // 邊緣的半透明像素才不會被塗成硬邊
+                var cover = fa * amount / 255;
+                Unpremul(src, out var sb, out var sg, out var sr, out _);
+                var r = sr + (fr - sr) * cover / 255;
+                var g = sg + (fg - sg) * cover / 255;
+                var b = sb + (fb - sb) * cover / 255;
+                ctx.Dst[y * ctx.Width + x] = Premul((byte)b, (byte)g, (byte)r, a);
+            }
+        });
+    }
+}
+
 /// <summary>物件漸層：把不透明內容重新上色成多節點漸層（線性可轉角度，或放射狀）。</summary>
 public sealed record ObjectGradientEffect : IEffect
 {
     public GradientStops Stops { get; init; } = GradientStops.Two(SKColors.White, new SKColor(0x3A, 0x7B, 0xD5));
     public float Angle { get; init; } = 90f;
     public bool Radial { get; init; }
+
+    /// <summary>
+    /// 角度以「物件自己的方向」為準（預設）：文字轉了 45°，漸層也跟著轉 45° ——
+    /// 這才叫「物件的漸層」（使用者 2026-09-04 明示）。關掉就是以畫布為準（舊行為）。
+    /// 只有「整層剛好就是一個文字物件」時知道角度，其他情況兩者相同。
+    /// </summary>
+    public bool RelativeToObject { get; init; } = true;
 
     /// <summary>相容舊欄位：首節點顏色。</summary>
     public SKColor Start
@@ -602,7 +673,7 @@ public sealed record ObjectGradientEffect : IEffect
         init => Stops = Stops.WithEnd(value);
     }
 
-    public string Name => "物件漸層";
+    public string Name => "漸層";
     public string Category => "物件";
 
     /// <summary>以內容外接框為準：任何一處變了整層重算，但與畫布位置無關（圖層平移不重算）。</summary>
@@ -617,6 +688,8 @@ public sealed record ObjectGradientEffect : IEffect
             (o, v) => ((ObjectGradientEffect)o) with { Angle = (float)v }),
         new BoolParam("radial", "放射狀", o => ((ObjectGradientEffect)o).Radial,
             (o, v) => ((ObjectGradientEffect)o) with { Radial = v }),
+        new BoolParam("relative", "角度跟著物件轉", o => ((ObjectGradientEffect)o).RelativeToObject,
+            (o, v) => ((ObjectGradientEffect)o) with { RelativeToObject = v }),
     ];
     public IReadOnlyList<ParamDef> Parameters => Params;
 
@@ -643,7 +716,9 @@ public sealed record ObjectGradientEffect : IEffect
         var bh = Math.Max(1, maxY - minY + 1);
         var cx = minX + bw / 2f;
         var cy = minY + bh / 2f;
-        var rad = Angle * MathF.PI / 180f;
+        // 物件自己的角度（文字的 Rotation）加進來，漸層才會跟著物件轉
+        var angle = RelativeToObject ? Angle + ctx.ContentRotation : Angle;
+        var rad = angle * MathF.PI / 180f;
         var dx = MathF.Cos(rad);
         var dy = MathF.Sin(rad);
         var half = Math.Abs(dx) * bw / 2f + Math.Abs(dy) * bh / 2f;
@@ -691,7 +766,7 @@ public sealed record ObjectFeatherEffect : IEffect
     /// <summary>畫布邊界也視為物件邊（貼齊畫布邊的物件是否也羽化）。</summary>
     public bool FeatherCanvasEdge { get; init; }
 
-    public string Name => "羽化物件";
+    public string Name => "羽化";
     public string Category => "物件";
     public int SourceMargin => Math.Min(Radius, 100) + 2;
 
@@ -765,7 +840,7 @@ public sealed record InnerGlowEffect : IEffect
     /// <summary>畫布邊界也算物件邊（貼齊畫布邊的物件那一側要不要也發光）。</summary>
     public bool GlowCanvasEdge { get; init; }
 
-    public string Name => "物件內光暈";
+    public string Name => "內光暈";
     public string Category => "物件";
     public int SourceMargin => Pad;
 

@@ -1,4 +1,4 @@
-namespace MinePainter.Core.Effects;
+﻿namespace MinePainter.Core.Effects;
 
 /// <summary>
 /// 效果（paint.net 的「效果」選單；也可作為圖層的非破壞性效果堆疊條目）。
@@ -74,12 +74,15 @@ public static class EffectRegistry
         new("median", "雜訊", "中位數", () => new MedianEffect()),
         new("reduceNoise", "雜訊", "降低雜訊", () => new ReduceNoiseEffect()),
 
-        new("objectOutline", "物件", "物件外框", () => new ObjectOutlineEffect()),
-        new("objectShadow", "物件", "物件陰影", () => new ObjectShadowEffect()),
-        new("objectGlow", "物件", "物件光暈", () => new ObjectGlowEffect()),
-        new("innerGlow", "物件", "物件內光暈", () => new InnerGlowEffect()),
-        new("objectGradient", "物件", "物件漸層", () => new ObjectGradientEffect()),
-        new("objectFeather", "物件", "羽化物件", () => new ObjectFeatherEffect()),
+        // 已經在「物件」分類下了，名字不再重複「物件」兩個字（使用者 2026-09-04 明示）。
+        // 註冊用的 Id 是存檔格式的一部分，不能跟著改。
+        new("objectOutline", "物件", "外框", () => new ObjectOutlineEffect()),
+        new("objectShadow", "物件", "陰影", () => new ObjectShadowEffect()),
+        new("objectGlow", "物件", "光暈", () => new ObjectGlowEffect()),
+        new("innerGlow", "物件", "內光暈", () => new InnerGlowEffect()),
+        new("objectFill", "物件", "塗色", () => new ObjectFillEffect()),
+        new("objectGradient", "物件", "漸層", () => new ObjectGradientEffect()),
+        new("objectFeather", "物件", "羽化", () => new ObjectFeatherEffect()),
 
         new("glow", "相片", "光暈", () => new GlowEffect()),
         new("redEye", "相片", "紅眼移除", () => new RedEyeRemovalEffect()),

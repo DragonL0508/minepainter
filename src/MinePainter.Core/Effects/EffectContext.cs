@@ -1,4 +1,4 @@
-using SkiaSharp;
+﻿using SkiaSharp;
 
 namespace MinePainter.Core.Effects;
 
@@ -33,6 +33,14 @@ public sealed class EffectContext
     public SKColor PrimaryColor { get; init; } = SKColors.Black;
     public SKColor SecondaryColor { get; init; } = SKColors.White;
     public CancellationToken Cancellation { get; init; }
+
+    /// <summary>
+    /// 來源內容自己的旋轉角度（度，逆時針為正；不知道或不適用時為 0）。
+    /// 「物件」類的效果要跟著物件轉 —— 文字轉了 45°，它的漸層角度也該跟著轉，
+    /// 不然使用者調好的角度會在轉動物件的瞬間變成另一個方向（使用者 2026-09-04 明示）。
+    /// 由 LayerEffectRenderer 依這層唯一的文字物件填入。
+    /// </summary>
+    public float ContentRotation { get; init; }
 
     public EffectContext(SKRectI region, SKRectI srcRect, uint[] src, SKSizeI docSize)
     {

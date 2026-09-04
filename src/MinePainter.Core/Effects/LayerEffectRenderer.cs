@@ -85,6 +85,7 @@ public static class LayerEffectRenderer
         public required List<LayerEffect> Effects;
         public required List<byte[]?> Masks; // 每個效果在 Compute 範圍內的遮罩（null = 整層）
         public required SKSizeI DocSize;
+        public float ContentRotation;        // 這層唯一的文字物件的角度（見 EffectContext.ContentRotation）
     }
 
     /// <summary>算完所有待處理的圖層；回傳是否有任何圖層被更新（呼叫端據此決定要不要再跑一輪）。</summary>
@@ -357,10 +358,20 @@ public static class LayerEffectRenderer
                 Effects = effects,
                 Masks = masks,
                 DocSize = new SKSizeI(doc.Width, doc.Height),
+                ContentRotation = ContentRotationOf(layer),
             };
         }
         return null;
     }
+
+    /// <summary>
+    /// 這層內容自己的角度：只有「這層剛好就是一個文字物件」時才說得準（文字圖層的常態）。
+    /// 其他情況（多個物件、純像素、群組）回 0 ＝不轉。
+    /// </summary>
+    private static float ContentRotationOf(LayerNode layer) =>
+        layer is RasterLayer { Elements.Count: 1 } single && single.Elements[0] is Vectors.TextElement text
+            ? text.Rotation
+            : 0f;
 
     /// <summary>
     /// 效果堆疊的來源像素：點陣圖層＝基底像素＋這層的物件；群組＝整組合成起來的樣子。
@@ -388,6 +399,7 @@ public static class LayerEffectRenderer
             {
                 PrimaryColor = entry.Color,
                 Cancellation = ct,
+                ContentRotation = job.ContentRotation,
             };
             try
             {
@@ -508,6 +520,7 @@ public static class LayerEffectRenderer
             Effects = effects,
             Masks = effects.Select(_ => (byte[]?)null).ToList(),
             DocSize = docSize,
+            ContentRotation = element is Vectors.TextElement rotated ? rotated.Rotation : 0f,
         };
         return Compute(job, CancellationToken.None);
     }
