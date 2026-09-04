@@ -439,9 +439,16 @@ public sealed class Compositor : IDisposable
         var start = System.Diagnostics.Stopwatch.GetTimestamp();
         lock (_document.SyncRoot)
         {
+            // 浮動內容與拆離圖層的狀態整批解析一次，**在持鎖的這條執行緒上**。
+            // 這兩個 provider 自己會取 Document.SyncRoot（EditorSession.FloatingOverlay），
+            // 在批次內的執行緒上呼叫就會撞上本執行緒手上的鎖 —— lock 是執行緒綁定的，
+            // 那是死鎖不是等待。順帶語意也更對：同一批格子看到的是同一份狀態。
+            _batchFloating = _floatingProvider?.Invoke();
+            _batchDetached = _detachedProvider?.Invoke() ?? (null, false);
+
             if (ParallelComposite && batch.Count > 1)
             {
-                Parallel.ForEach(batch, ParallelOptions, RenderTileLocked);
+                CompositeWorkers.Run(batch, RenderTileLocked);
             }
             else
             {
@@ -454,16 +461,21 @@ public sealed class Compositor : IDisposable
     }
 
     /// <summary>
-    /// 批次內要不要分派到多執行緒同時合成。預設關閉：多執行緒同時走合成路徑時
-    /// 原生層會當掉（根因調查中），確定前不開。批次本身（一次取一次鎖）與它無關，一直是開的。
+    /// 一批最多幾格。批次本身（一次取一次鎖）與平行無關，一直是開的。
     /// </summary>
-    public static bool ParallelComposite { get; set; }
-
-    /// <summary>一批最多幾格 —— 開了平行合成時也就是最多幾條執行緒同時合成。</summary>
     private static readonly int BatchSize = Math.Clamp(Environment.ProcessorCount, 1, 8);
 
-    private static readonly ParallelOptions ParallelOptions = new() { MaxDegreeOfParallelism = BatchSize };
+    /// <summary>批次內要不要分派到共用執行緒同時合成（見 <see cref="CompositeWorkers"/>）。</summary>
+    public static bool ParallelComposite { get; set; } = true;
 
+    // ---- 批次內的平行合成 ----
+    //
+    // 執行緒是全域共用的（見 CompositeWorkers）：一個分頁一份的話，開幾個分頁就是幾倍的
+    // 執行緒，而它們大部分時間都在睡。
+    //
+    // 批次內的鐵則：**不准碰任何會取 Document.SyncRoot 的東西**（鎖在協調者這條執行緒手上，
+    // 別條執行緒取不到，那是死鎖不是等待）。合成路徑上唯一會取鎖的是浮動內容／拆離圖層
+    // 那兩個 provider，已經在 RenderBatch 開頭先解析掉。
 
     /// <summary>
     /// 超出預算就淘汰：從「這一刻看不到的格」裡挑最久沒被用到的丟掉，直到回到預算內。
@@ -633,9 +645,12 @@ public sealed class Compositor : IDisposable
     internal static uint[] StaticGroupSourceLocked(GroupLayer group, SKRectI docRect) =>
         ReadGroupPixelsLocked(group, docRect, null, null, (null, false));
 
+    private Selections.FloatingSelection? _batchFloating;
+    private (Guid? Id, bool IncludesElements) _batchDetached;
+
+    /// <summary>合成一格用的狀態一律取自這一批開頭解析好的那份（見 <see cref="RenderBatch"/>）。</summary>
     private bool CompositeGroup(GroupLayer group, SKSurface surface, SKRectI tileRect) =>
-        CompositeGroup(group, surface, tileRect, _strokeBuffer,
-            _floatingProvider?.Invoke(), _detachedProvider?.Invoke() ?? (null, false));
+        CompositeGroup(group, surface, tileRect, _strokeBuffer, _batchFloating, _batchDetached);
 
     /// <summary>把群組內容合成到 surface（canvas 原點 = tileRect 左上）。回傳是否畫了東西。</summary>
     private static bool CompositeGroup(GroupLayer group, SKSurface surface, SKRectI tileRect,
