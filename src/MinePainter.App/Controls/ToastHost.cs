@@ -1,9 +1,11 @@
-using Avalonia;
+﻿using Avalonia;
 using Avalonia.Animation;
 using Avalonia.Animation.Easings;
 using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Media.Imaging;
+using Avalonia.Platform;
 using Avalonia.Styling;
 using Avalonia.Threading;
 
@@ -27,6 +29,38 @@ public sealed class ToastHost : StackPanel
 
     /// <summary>跑馬燈到兩端的停頓：頭尾各停一下，眼睛才跟得上。</summary>
     private static readonly TimeSpan MarqueeHold = TimeSpan.FromMilliseconds(850);
+
+    // ---- 背景素材（1920×150 的黑色橫帶，兩端 alpha 淡出到 0、中段固定）----
+    //
+    // 三段切片而不是整張拉伸：整張拉伸的話淡出寬度會跟著訊息長度變，短訊息糊成一團、
+    // 長訊息淡出又太短。兩端固定、中段拉伸，任何長度看起來都一樣。
+    // 中段在原圖是純色，拉伸不會有任何損失；垂直方向也均勻，高度隨文字走即可。
+    private const double FadeCapWidth = 96;
+    private static readonly PixelRect LeftCapSource = new(0, 0, 520, 150);
+    private static readonly PixelRect MiddleSource = new(520, 0, 880, 150);
+    private static readonly PixelRect RightCapSource = new(1400, 0, 520, 150);
+
+    private static readonly Lazy<Bitmap?> Background = new(() =>
+    {
+        try
+        {
+            using var stream = AssetLoader.Open(new Uri("avares://MinePainter.App/Assets/toast-bg.png"));
+            return new Bitmap(stream);
+        }
+        catch
+        {
+            return null; // 素材讀不到就退回純色底，提示照樣看得見
+        }
+    });
+
+    /// <summary>壓在深色橫帶上的文字顏色（不隨主題變）。</summary>
+    private static readonly IBrush OnBandTextBrush = new SolidColorBrush(Color.FromUInt32(0xFFF2F2F6));
+
+    private static ImageBrush Slice(Bitmap bitmap, PixelRect source) => new(bitmap)
+    {
+        SourceRect = new RelativeRect(source.X, source.Y, source.Width, source.Height, RelativeUnit.Absolute),
+        Stretch = Stretch.Fill,
+    };
 
     public ToastHost()
     {
@@ -72,12 +106,14 @@ public sealed class ToastHost : StackPanel
 
     private static Border BuildToast(string message, out Marquee? marquee)
     {
+        // 素材是固定的深色橫帶，文字一律用淺色 —— 跟著主題走的話亮色主題會變成深字壓在黑帶上
         var text = new TextBlock
         {
             Text = message,
             FontSize = 12.5,
-            Foreground = AppTheme.ToastTextBrush,
+            Foreground = Background.Value != null ? OnBandTextBrush : AppTheme.ToastTextBrush,
             VerticalAlignment = VerticalAlignment.Center,
+            TextAlignment = TextAlignment.Center,
         };
         text.Measure(Size.Infinity);
         var natural = text.DesiredSize;
@@ -104,19 +140,41 @@ public sealed class ToastHost : StackPanel
             };
         }
 
+        content.Margin = new Thickness(4, 10);
+
+        Control body;
+        if (Background.Value is { } bitmap)
+        {
+            // 兩端的淡出各佔一欄（固定寬度），中段那欄跟著文字撐開
+            var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto") };
+            var left = new Border { Width = FadeCapWidth, Background = Slice(bitmap, LeftCapSource) };
+            var middle = new Panel { Background = Slice(bitmap, MiddleSource), Children = { content } };
+            var right = new Border { Width = FadeCapWidth, Background = Slice(bitmap, RightCapSource) };
+            Grid.SetColumn(left, 0);
+            Grid.SetColumn(middle, 1);
+            Grid.SetColumn(right, 2);
+            grid.Children.Add(left);
+            grid.Children.Add(middle);
+            grid.Children.Add(right);
+            body = grid;
+        }
+        else
+        {
+            body = new Border
+            {
+                Background = AppTheme.ToastBgBrush,
+                CornerRadius = new CornerRadius(6),
+                Padding = new Thickness(10, 0),
+                Child = content,
+            };
+        }
+
+        // 素材本身的淡出就是它的邊界處理 —— 不再加圓角、外框與陰影，那些會在淡出區切出硬邊
         return new Border
         {
-            // TODO(素材)：背景要換成指定的圖（Assets/ 已經是 AvaloniaResource，放進去就能用
-            // avares://MinePainter.App/Assets/<檔名> 取到）。圓角兩端會被拉扁的話改走三段切片。
-            Background = AppTheme.ToastBgBrush,
-            BorderBrush = AppTheme.AccentBrush,
-            BorderThickness = new Thickness(0, 0, 0, 2),
-            CornerRadius = new CornerRadius(6),
-            Padding = new Thickness(14, 9),
             Opacity = 0,
-            BoxShadow = BoxShadows.Parse("0 4 16 0 #70000000"),
             RenderTransform = new TranslateTransform(0, 22),
-            Child = content,
+            Child = body,
         };
     }
 
