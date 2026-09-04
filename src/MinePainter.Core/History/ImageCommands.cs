@@ -1,4 +1,4 @@
-using MinePainter.Core.Documents;
+﻿using MinePainter.Core.Documents;
 using MinePainter.Core.Layers;
 using MinePainter.Core.Tiles;
 using MinePainter.Core.Tools;
@@ -37,13 +37,15 @@ public static class ImageCommands
 
         var sx = width / (float)oldW;
         var sy = height / (float)oldH;
-        var states = new List<(RasterLayer Layer, TileSurface Before, SKPointI BeforeOffset, List<VectorElement> BeforeElements)>();
+        var states = new List<(RasterLayer Layer, TileSurface Before, SKPointI BeforeOffset,
+            List<VectorElement> BeforeElements, IReadOnlyList<Effects.LayerEffect> BeforeEffects)>();
+        var beforeOutput = (doc.OutputWidth, doc.OutputHeight);
 
         lock (doc.SyncRoot)
         {
             foreach (var layer in DocumentCommands.RasterLayers(doc.Root))
             {
-                states.Add((layer, layer.Surface, layer.Offset, layer.Elements.ToList()));
+                states.Add((layer, layer.Surface, layer.Offset, layer.Elements.ToList(), layer.Effects));
                 ScaleLayerCore(layer, sx, sy, resample);
             }
             doc.SetSize(width, height);
@@ -58,13 +60,15 @@ public static class ImageCommands
             {
                 lock (d.SyncRoot)
                 {
-                    foreach (var (layer, before, offset, elements) in states)
+                    foreach (var (layer, before, offset, elements, effects) in states)
                     {
                         layer.ReplaceSurface(before, disposeOld: true);
                         layer.Offset = offset;
                         RestoreElements(layer, elements);
+                        if (layer.HasEffects || effects.Count > 0) layer.SetEffects(effects);
                     }
                     d.SetSize(oldW, oldH);
+                    d.SetOutputSize(beforeOutput.OutputWidth, beforeOutput.OutputHeight);
                 }
                 session.ApplySelection(oldSelection);
                 InvalidateAll(d);
@@ -73,7 +77,7 @@ public static class ImageCommands
             {
                 lock (d.SyncRoot)
                 {
-                    foreach (var (layer, _, _, _) in states) ScaleLayerCore(layer, sx, sy, resample);
+                    foreach (var (layer, _, _, _, _) in states) ScaleLayerCore(layer, sx, sy, resample);
                     d.SetSize(width, height);
                 }
                 session.ApplySelection(null);
@@ -86,14 +90,17 @@ public static class ImageCommands
         var scaled = ScaleSurface(layer, sx, sy, resample);
         layer.ReplaceSurface(scaled, disposeOld: false); // 舊的留給 undo
         layer.Offset = SKPointI.Empty;
+
+        // 物件與效果都跟著縮（文字重新排版、外框／陰影／光暈與效果堆疊的像素長度一起縮）——
+        // 與快速模式的輸出共用同一套規則，兩條路的結果才會一樣（見 Documents.ScaleRules）
+        var matrix = SKMatrix.CreateScale(sx, sy);
         foreach (var element in layer.Elements.ToList())
+            layer.ReplaceElement(Documents.ScaleRules.ScaleElement(element, matrix, sx, sy));
+
+        if (layer.HasEffects)
         {
-            if (element is not TextElement text) continue;
-            layer.ReplaceElement(text with
-            {
-                Position = new SKPoint(text.Position.X * sx, text.Position.Y * sy),
-                FontSize = Math.Max(1f, text.FontSize * (sx + sy) / 2f),
-            });
+            var k = (Math.Abs(sx) + Math.Abs(sy)) / 2f;
+            layer.SetEffects([.. layer.Effects.Select(fx => Documents.ScaleRules.ScaleEffect(fx, k))]);
         }
         layer.ElementCache.MarkAllDirty();
     }

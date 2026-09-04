@@ -1029,6 +1029,8 @@ public partial class MainWindow : Window
         if (key is not ("move" or "text") && session.SelectedElement != null)
             session.SelectedElement = null;
 
+        WarnIfPixelToolInFastMode(session, key);
+
         var changed = _currentToolKey != key;
         _currentToolKey = key;
         session.ActiveTool = key switch
@@ -1138,7 +1140,7 @@ public partial class MainWindow : Window
         SelectTool(_currentToolKey);
         UpdateTitle();
         UpdateViewportStatus();
-        DocSizeLabel.Text = $"{session.Document.Width} × {session.Document.Height}";
+        DocSizeLabel.Text = DocSizeText(session.Document);
         RefreshUiState();
         UpdateTabVisuals();
         RefreshTabThumbnail(tab);
@@ -1260,7 +1262,7 @@ public partial class MainWindow : Window
         Avalonia.Threading.Dispatcher.UIThread.Post(() =>
         {
             if (!ReferenceEquals(tab, _activeTab)) return;
-            DocSizeLabel.Text = $"{tab.Session.Document.Width} × {tab.Session.Document.Height}";
+            DocSizeLabel.Text = DocSizeText(tab.Session.Document);
             UpdateViewportStatus();
             RefreshUiState();
         });
@@ -1431,6 +1433,17 @@ public partial class MainWindow : Window
         var dialog = new NewDocumentWindow();
         await dialog.ShowDialog(this);
         if (!dialog.Confirmed) return;
+
+        if (dialog.FastMode)
+        {
+            // 快速模式：畫布是代理，文件記著真正的輸出解析度（見 Core.Documents.FastMode）
+            var proxy = ImageCodec.CreateBlankDocument(dialog.ProxyWidth, dialog.ProxyHeight, dialog.DocBackground);
+            proxy.SetOutputSize(dialog.DocWidth, dialog.DocHeight);
+            SetDocument(proxy);
+            Toasts.Show($"快速模式：以 {dialog.ProxyWidth} × {dialog.ProxyHeight} 製作，" +
+                        $"輸出 {dialog.DocWidth} × {dialog.DocHeight}");
+            return;
+        }
 
         SetDocument(ImageCodec.CreateBlankDocument(dialog.DocWidth, dialog.DocHeight, dialog.DocBackground));
     }
@@ -1651,7 +1664,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private void OpenFile(string path)
+    private async void OpenFile(string path)
     {
         try
         {
@@ -1659,6 +1672,7 @@ public partial class MainWindow : Window
             if (Path.GetExtension(path).Equals(".mpp", StringComparison.OrdinalIgnoreCase))
             {
                 var doc = MppFormat.Load(path);
+                doc = await AskFastModeOnOpen(doc);
                 SetDocument(doc, path);
                 WarnAboutMissingFonts(doc, Path.GetFileName(path));
             }
@@ -1675,6 +1689,28 @@ public partial class MainWindow : Window
         {
             Title = $"MinePainter — 開啟失敗：{ex.Message}";
         }
+    }
+
+    /// <summary>
+    /// 開啟快速模式專案時問一次要用哪種模式。選「完整解析度」就當場把整份放大
+    /// （文字／形狀／效果重畫、像素重新取樣），之後就是一般專案。
+    /// </summary>
+    private async Task<Core.Documents.Document> AskFastModeOnOpen(Core.Documents.Document doc)
+    {
+        if (!doc.IsFastMode) return doc;
+
+        var dialog = new FastModeOpenDialog(doc.Width, doc.Height, doc.OutputWidth, doc.OutputHeight);
+        await dialog.ShowDialog(this);
+        if (dialog.Result == FastModeOpenDialog.Choice.Fast) return doc;
+
+        var width = doc.OutputWidth;
+        var height = doc.OutputHeight;
+        Core.Documents.Document? full = null;
+        await ProgressDialog.RunAsync(this, "轉成完整解析度",
+            _ => full = Core.Documents.OutputRender.CloneScaled(doc, width, height));
+        doc.Dispose();
+        Toasts.Show($"已以完整解析度開啟（{width} × {height}）");
+        return full!;
     }
 
     // ---- 最近使用的檔案 ----
@@ -1872,7 +1908,7 @@ public partial class MainWindow : Window
         CommitCanvasTextEdit();       // 匯出的是合成結果，先把進行中的編輯落地
         session.CommitPendingEdits(); // 浮動內容、變形框等所有進行中編輯一次涵蓋
 
-        var dialog = new ExportWindow(session.Document.Width, session.Document.Height);
+        var dialog = new ExportWindow(session.Document.OutputWidth, session.Document.OutputHeight);
         await dialog.ShowDialog(this);
         if (!dialog.Confirmed) return;
 
@@ -1921,7 +1957,7 @@ public partial class MainWindow : Window
         var doc = session.Document;
         SKImage? image = null;
         await ProgressDialog.RunAsync(this, "算出整張圖片",
-            _ => image = Core.Compositing.Compositor.RenderComposite(doc));
+            p => image = Core.Documents.OutputRender.Render(doc, p));
         using var flattened = image;
         if (image == null)
         {
@@ -2338,6 +2374,39 @@ public partial class MainWindow : Window
         _layersContent.Refresh();
         RefreshUiState();
         if (flattened) Toasts.Show("已平面化");
+    }
+
+    /// <summary>
+    /// 快速模式 →一般模式：把整份放大成專案的輸出解析度。
+    /// 文字、形狀、效果以新尺寸重畫，筆刷畫上去的像素重新取樣（與輸出時同一套規則）。
+    /// </summary>
+    private async void OnToFullResolutionClicked(object? sender, RoutedEventArgs e)
+    {
+        var session = CommitPending();
+        if (session == null) return;
+        var doc = session.Document;
+        if (!doc.IsFastMode)
+        {
+            Toasts.Show("這份專案已經是完整解析度");
+            return;
+        }
+
+        var w = doc.OutputWidth;
+        var h = doc.OutputHeight;
+        try
+        {
+            await ProgressDialog.RunAsync(this, "轉成完整解析度",
+                _ => ImageCommands.ResizeImage(session, w, h, "轉成完整解析度"));
+            lock (doc.SyncRoot) doc.SetOutputSize(0, 0);
+            _layersContent.Refresh();
+            RefreshUiState();
+            Toasts.Show($"已轉成完整解析度（{w} × {h}）");
+        }
+        catch (Exception ex)
+        {
+            Toasts.Show($"轉換失敗：{ex.Message}");
+            LogError("轉成完整解析度", ex);
+        }
     }
 
     // ---- 影像大小／畫布大小／圖層幾何（paint.net 的 Image / Layers 選單補齊） ----
@@ -4224,11 +4293,36 @@ public partial class MainWindow : Window
 
     // ---- UI 同步 ----
 
+    /// <summary>已經提醒過「這份文件在快速模式下用畫素工具」的文件（每份提醒一次就夠）。</summary>
+    private readonly HashSet<Core.Documents.Document> _fastModePaintWarned = new();
+
+    /// <summary>
+    /// 快速模式下第一次拿起畫素工具時提醒一次：畫上去的像素是代理解析度的，
+    /// 輸出時只能放大取樣（文字／形狀／效果則是重畫，不受影響）。
+    /// </summary>
+    private void WarnIfPixelToolInFastMode(Core.Tools.EditorSession session, string key)
+    {
+        if (!session.Document.IsFastMode) return;
+        if (key is not ("brush" or "pencil" or "eraser" or "bgeraser" or "fill" or "shape" or "line" or "pen")) return;
+        if (!_fastModePaintWarned.Add(session.Document)) return;
+
+        Toasts.Show($"快速模式：畫筆是畫在 {session.Document.Width} × {session.Document.Height} 上，" +
+                    "輸出時會放大取樣（文字與效果則是重畫）");
+    }
+
+    /// <summary>狀態列的尺寸文字。快速模式要看得出「畫布是代理、輸出是另一個尺寸」。</summary>
+    private static string DocSizeText(Core.Documents.Document doc) =>
+        doc.IsFastMode
+            ? $"{doc.Width} × {doc.Height}（快速模式 → 輸出 {doc.OutputWidth} × {doc.OutputHeight}）"
+            : $"{doc.Width} × {doc.Height}";
+
     private void RefreshUiState()
     {
         Canvas.RequestRedraw(); // 幾乎所有會改到畫面的操作最後都會經過這裡
         var session = Canvas.Session;
         if (session == null) return;
+
+        ToFullResolutionMenuItem.IsEnabled = session.Document.IsFastMode;
 
         _paletteContent.SetColor(session.Foreground);
 

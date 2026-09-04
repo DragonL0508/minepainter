@@ -74,6 +74,8 @@
             <MenuItem Header="裁切至選取範圍(_C)" Click="OnCropToSelectionClicked" Tag="image.crop" />
             <MenuItem Header="調整影像大小(_R)…" Click="OnResizeImageClicked" Tag="image.resize" />
             <MenuItem Header="調整畫布大小(_S)…" Click="OnCanvasSizeClicked" Tag="image.canvasSize" />
+            <MenuItem x:Name="ToFullResolutionMenuItem" Header="轉成完整解析度" Click="OnToFullResolutionClicked"
+                      ToolTip.Tip="快速模式專用：把整份放大成專案的輸出解析度，之後就是一般專案（可復原）。" />
             <Separator />
             <MenuItem Header="水平翻轉(_H)" Click="OnFlipHorizontalClicked" />
             <MenuItem Header="垂直翻轉(_V)" Click="OnFlipVerticalClicked" />

@@ -85,7 +85,7 @@ public static class OutputRender
                 // 物件：以新尺寸重新算（文字重新排版、形狀重畫）
                 var matrix = SKMatrix.CreateScale(sx, sy);
                 foreach (var element in raster.Elements)
-                    copy.AddElement(ScaleElement(element, matrix, sx, sy));
+                    copy.AddElement(ScaleRules.ScaleElement(element, matrix, sx, sy));
 
                 return copy;
             }
@@ -100,52 +100,7 @@ public static class OutputRender
         target.IsVisible = source.IsVisible;
         target.Opacity = source.Opacity;
         target.BlendMode = source.BlendMode;
-        if (source.HasEffects) target.SetEffects([.. source.Effects.Select(fx => ScaleEffect(fx, scale))]);
+        if (source.HasEffects) target.SetEffects([.. source.Effects.Select(fx => ScaleRules.ScaleEffect(fx, scale))]);
     }
 
-    /// <summary>把像素長度的效果參數乘上比例。</summary>
-    private static LayerEffect ScaleEffect(LayerEffect entry, float scale)
-    {
-        if (Math.Abs(scale - 1f) < 0.001f) return entry;
-        object current = entry.Effect;
-        foreach (var def in entry.Effect.Parameters)
-        {
-            if (def is not SliderParam { Geometric: true } slider) continue;
-            var value = Math.Clamp(slider.Get(current) * scale, slider.Min, slider.Max);
-            current = slider.With(current, value);
-        }
-        // 遮罩是 doc 座標的整層遮罩，縮放後對不上 —— 這種效果維持原遮罩（近似）
-        return entry with { Effect = (IEffect)current };
-    }
-
-    /// <summary>物件（文字／形狀）縮放：外觀上的像素長度也要跟著縮。</summary>
-    private static VectorElement ScaleElement(VectorElement element, SKMatrix matrix, float sx, float sy)
-    {
-        var scaled = element.TransformedBy(matrix, sx, sy, 0f);
-        if (scaled is not TextElement text) return scaled;
-
-        var k = (Math.Abs(sx) + Math.Abs(sy)) / 2f;
-        return text with
-        {
-            Stroke = ScaleStroke(text.Stroke, k),
-            Shadow = text.Shadow is { } shadow
-                ? shadow with
-                {
-                    Distance = shadow.Distance * k,
-                    Blur = shadow.Blur * k,
-                    Spread = shadow.Spread * k,
-                }
-                : null,
-            Glow = text.Glow is { } glow
-                ? glow with { Size = glow.Size * k, Spread = glow.Spread * k }
-                : null,
-        };
-    }
-
-    private static TextStroke? ScaleStroke(TextStroke? stroke, float k)
-    {
-        if (stroke == null) return null;
-        var layers = stroke.Layers().Select(s => s with { Width = s.Width * k }).ToList();
-        return TextStroke.FromLayers(layers);
-    }
 }

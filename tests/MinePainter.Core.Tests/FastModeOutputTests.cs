@@ -50,6 +50,27 @@ public class FastModeOutputTests
         return soft;
     }
 
+    [Theory]
+    [InlineData(1920, 1080, false)]  // 剛好 Full HD：不必問
+    [InlineData(1920, 1081, true)]
+    [InlineData(3840, 2160, true)]
+    [InlineData(1280, 720, false)]
+    public void 只有比FullHD大才提議快速模式(int w, int h, bool offer)
+        => Assert.Equal(offer, FastMode.ShouldOffer(w, h));
+
+    [Theory]
+    [InlineData(3840, 2160, 1920, 1080)]   // 4K → 一半
+    [InlineData(2560, 1440, 1920, 1080)]
+    [InlineData(4000, 1000, 1920, 480)]    // 超寬：以寬度為準
+    [InlineData(1000, 4000, 270, 1080)]    // 直向：以高度為準
+    [InlineData(800, 600, 800, 600)]       // 本來就小：不縮
+    public void 代理畫布等比裝進FullHD(int w, int h, int pw, int ph)
+    {
+        var (proxyW, proxyH) = FastMode.ProxySize(w, h);
+        Assert.Equal(pw, proxyW);
+        Assert.Equal(ph, proxyH);
+    }
+
     [Fact]
     public void 輸出解析度預設跟著畫布_設定之後才是快速模式()
     {
@@ -165,6 +186,35 @@ public class FastModeOutputTests
         {
             if (File.Exists(path)) File.Delete(path);
         }
+    }
+
+    /// <summary>
+    /// 「轉成完整解析度」＝一般的調整影像大小，所以效果與文字外觀也要跟著放大，而且可以復原。
+    /// </summary>
+    [Fact]
+    public void 轉成完整解析度會連效果一起放大_而且可復原()
+    {
+        using var session = new Tools.EditorSession(ImageCodec.CreateBlankDocument(480, 270, SKColors.Transparent));
+        var doc = session.Document;
+        var layer = new RasterLayer { Name = "圖" };
+        layer.Surface.Fill(new SKRectI(100, 60, 300, 200), SKColors.Red);
+        lock (doc.SyncRoot)
+        {
+            doc.Root.Add(layer);
+            layer.SetEffects([LayerEffect.Create(new ObjectOutlineEffect { Width = 6 })]);
+        }
+        doc.SetOutputSize(1920, 1080);
+
+        History.ImageCommands.ResizeImage(session, doc.OutputWidth, doc.OutputHeight, "轉成完整解析度");
+        lock (doc.SyncRoot) doc.SetOutputSize(0, 0);
+
+        Assert.Equal(1920, doc.Width);
+        Assert.False(doc.IsFastMode);
+        Assert.Equal(24, ((ObjectOutlineEffect)layer.Effects[0].Effect).Width); // 6px × 4
+
+        session.History.Undo();
+        Assert.Equal(480, doc.Width);
+        Assert.Equal(6, ((ObjectOutlineEffect)layer.Effects[0].Effect).Width);
     }
 
     [Fact]

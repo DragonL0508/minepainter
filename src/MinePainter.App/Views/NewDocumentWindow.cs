@@ -1,4 +1,4 @@
-using Avalonia;
+﻿using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
@@ -44,6 +44,13 @@ public sealed class NewDocumentWindow : ModalDialog
     public int DocHeight { get; private set; }
     public SKColor DocBackground { get; private set; }
 
+    /// <summary>使用者選了快速模式：畫布用 <see cref="ProxyWidth"/>×<see cref="ProxyHeight"/>，輸出仍是 Doc 尺寸。</summary>
+    public bool FastMode { get; private set; }
+
+    public int ProxyWidth { get; private set; }
+
+    public int ProxyHeight { get; private set; }
+
     private readonly ComboBox _presetCombo = new() { FontSize = 12, HorizontalAlignment = HorizontalAlignment.Stretch };
     private readonly NumberBox _widthBox = new() { Minimum = 1, Maximum = MaxSize, Width = 90 };
     private readonly NumberBox _heightBox = new() { Minimum = 1, Maximum = MaxSize, Width = 90 };
@@ -53,6 +60,22 @@ public sealed class NewDocumentWindow : ModalDialog
         FontSize = 11,
         Foreground = AppTheme.TextMutedBrush,
     };
+
+    private readonly CheckBox _fastMode = new()
+    {
+        Content = "快速模式（實驗）",
+        FontSize = 12,
+        IsVisible = false,
+    };
+
+    private readonly TextBlock _fastModeHint = new()
+    {
+        FontSize = 11,
+        Foreground = AppTheme.TextMutedBrush,
+        TextWrapping = TextWrapping.Wrap,
+        IsVisible = false,
+    };
+
     private bool _suppress;
 
     public NewDocumentWindow() : base("新增影像", 320)
@@ -90,6 +113,8 @@ public sealed class NewDocumentWindow : ModalDialog
                 LabeledRow("背景", _backgroundCombo),
                 new Separator { Margin = new Thickness(0, 3) },
                 _memoryLabel,
+                _fastMode,
+                _fastModeHint,
             },
         };
 
@@ -97,11 +122,17 @@ public sealed class NewDocumentWindow : ModalDialog
             MakeButton("確定", primary: true, confirm: true),
             MakeButton("取消")));
 
+        _fastMode.IsCheckedChanged += (_, _) => _lastFastMode = _fastMode.IsChecked == true;
+
         Closed += (_, _) =>
         {
             if (!Confirmed) return;
             DocWidth = (int)_widthBox.Value;
             DocHeight = (int)_heightBox.Value;
+            FastMode = _fastMode.IsVisible && _fastMode.IsChecked == true;
+            var (proxyW, proxyH) = Core.Documents.FastMode.ProxySize(DocWidth, DocHeight);
+            ProxyWidth = proxyW;
+            ProxyHeight = proxyH;
             DocBackground = Backgrounds[Math.Max(0, _backgroundCombo.SelectedIndex)].Color;
             _lastWidth = DocWidth;
             _lastHeight = DocHeight;
@@ -126,10 +157,32 @@ public sealed class NewDocumentWindow : ModalDialog
         _suppress = false;
     }
 
+    // 記住上次的選擇（App 存活期間）
+    private static bool _lastFastMode;
+
     private void UpdateMemoryLabel()
     {
-        var bytes = (long)_widthBox.Value * (long)_heightBox.Value * 4;
+        var w = (int)_widthBox.Value;
+        var h = (int)_heightBox.Value;
+        var bytes = (long)w * h * 4;
         _memoryLabel.Text = $"每個圖層約 {bytes / (1024.0 * 1024.0):0.#} MB";
+
+        // 比 Full HD 大才提議快速模式（見 Core.Documents.FastMode）
+        var offer = Core.Documents.FastMode.ShouldOffer(w, h);
+        _fastMode.IsVisible = offer;
+        _fastModeHint.IsVisible = offer;
+        if (!offer)
+        {
+            _fastMode.IsChecked = false;
+            return;
+        }
+
+        var (proxyW, proxyH) = Core.Documents.FastMode.ProxySize(w, h);
+        _fastMode.IsChecked = _lastFastMode;
+        _fastModeHint.Text =
+            $"以 {proxyW} × {proxyH} 製作，輸出時整份重算成 {w} × {h}。" +
+            "文字、形狀、效果都會用輸出解析度重畫；筆刷畫上去的像素則是放大取樣（會比較軟）。" +
+            "隨時可以用「影像 → 轉成完整解析度」切回一般模式。";
     }
 
     private static Control LabeledRow(string label, Control control)
