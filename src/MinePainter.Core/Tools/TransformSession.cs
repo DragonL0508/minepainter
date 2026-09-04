@@ -986,6 +986,13 @@ public sealed class TransformSession : IDisposable
     internal void CollectOverlay(Compositor compositor)
     {
         var state = _overlay;
+        // 效果快取還不是最新的就先別交還：合成結果裡的效果還在舊位置（或還沒套上），
+        // 這時收掉覆疊，畫面會閃一下（見 LayerEffectCache.UpToDate）
+        foreach (var item in _items)
+        {
+            if (item.Layer.HasActiveEffects && !item.Layer.FxCache.UpToDate) return;
+        }
+
         if (state is { HandingOver: true } &&
             (state.HandoverRegion.IsEmpty || compositor.IsRegionClean(state.HandoverRegion)))
         {

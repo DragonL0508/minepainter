@@ -363,6 +363,7 @@ public sealed class Compositor : IDisposable
 
                 var rendered = 0;
                 var batch = new List<TileIndex>(BatchSize);
+                var waitedForEffects = 0L;
                 while (!token.IsCancellationRequested)
                 {
                     // 效果堆疊先於 tile：有圖層的效果快取髒了就先算（鎖外計算，不擋 UI）
@@ -382,14 +383,18 @@ public sealed class Compositor : IDisposable
                     // 效果還沒算完就先別合成：那樣合出來的是「效果還在舊位置／還沒套上」的樣子，
                     // 而覆疊與殘影正是靠「合成器追上了沒」決定什麼時候交還畫面的。
                     // 別的 worker 正在算（工作已被領走）時就在這裡等，回頭再看看有沒有工作可領。
-                    if (Effects.LayerEffectRenderer.HasPendingWork(_document))
+                    // 等太久就照樣合成：效果一直算不完（例如某個效果每次都出錯重排）的話，
+                    // 畫面停在舊 tile 上不會自己好，而合成出來的至少是最新的像素。
+                    if (waitedForEffects < 2000 && Effects.LayerEffectRenderer.HasPendingWork(_document))
                     {
                         lock (_dirtyGate) Monitor.Wait(_dirtyGate, 10);
+                        waitedForEffects += 10;
                         continue;
                     }
 
                     TakeDirtyBatch(batch, BatchSize);
                     if (batch.Count == 0) break;
+                    waitedForEffects = 0;
                     RenderBatch(batch);
                     rendered += batch.Count;
 
