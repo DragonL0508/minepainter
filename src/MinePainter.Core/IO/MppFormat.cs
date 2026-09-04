@@ -19,7 +19,11 @@ namespace MinePainter.Core.IO;
 /// </summary>
 public static class MppFormat
 {
+    /// <summary>寫檔預設版本。</summary>
     public const int FormatVersion = 1;
+
+    /// <summary>有圖層帶「原始高清來源」時的版本：舊版程式讀了會拿到空圖層，寧可擋下來。</summary>
+    public const int PixelSourceFormatVersion = 2;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -57,6 +61,16 @@ public static class MppFormat
         public int[]? Offset { get; set; }
         public string? PixelsEntry { get; set; }
         public List<Element>? Elements { get; set; }
+
+        // 非破壞性縮放的原始高清來源（見 LayerPixelSource）：有這組欄位時 PixelsEntry 不存在，
+        // 圖層目前的像素＝SourceEntry 那張 × SourceMatrix，開檔時算回來。
+        public string? SourceEntry { get; set; }
+        public int[]? SourceBounds { get; set; }      // [l,t,r,b] 文件座標（SourceBaseOffset 基準）
+        public int[]? SourceBaseOffset { get; set; }  // [x,y]
+        public float[]? SourceMatrix { get; set; }    // 9 值，列優先
+        public float[]? SourceTargetRect { get; set; }// [l,t,r,b] 文件座標
+        public float? SourceRotation { get; set; }
+        public float[]? SourceOriginalSize { get; set; } // [w,h]
 
         // adjustment
         public string? AdjustmentType { get; set; }
@@ -156,6 +170,8 @@ public static class MppFormat
         // 在鎖內建 DTO 樹並抓 raster 快照（AddRef 零拷貝）；離鎖後寫檔
         var rasters = new List<(string Entry, TileSnapshot Snapshot, SKRectI Bounds)>();
         var masks = new List<(string Entry, byte[] Alpha, SKRectI Bounds)>();
+        // 原始高清來源：SKImage 本身 immutable，AddRef 不需要，離鎖後直接編碼
+        var sources = new List<(string Entry, SKImage Image)>();
         Manifest manifest;
         lock (doc.SyncRoot)
         {
@@ -163,11 +179,13 @@ public static class MppFormat
             {
                 Width = doc.Width,
                 Height = doc.Height,
-                Root = BuildNode(doc.Root, rasters, masks),
+                Root = BuildNode(doc.Root, rasters, masks, sources),
             };
+            // 只有真的寫了原始高清來源才升版本，一般檔案照舊是 v1（舊版程式仍讀得到）
+            if (sources.Count > 0) manifest.FormatVersion = PixelSourceFormatVersion;
         }
 
-        var total = rasters.Count + 2; // 縮圖合成 + 縮圖寫入各算一步
+        var total = rasters.Count + sources.Count + 2; // 縮圖合成 + 縮圖寫入各算一步
         var done = 0;
         void Step() => progress?.Report(++done / (double)total);
 
@@ -194,6 +212,16 @@ public static class MppFormat
                 Step();
             }
 
+            foreach (var (entry, image) in sources)
+            {
+                using (var stream = zip.CreateEntry(entry, CompressionLevel.NoCompression).Open())
+                {
+                    using var data = image.Encode(SKEncodedImageFormat.Png, 100);
+                    data.SaveTo(stream);
+                }
+                Step();
+            }
+
             foreach (var (entry, alpha, bounds) in masks)
             {
                 using var stream = zip.CreateEntry(entry, CompressionLevel.NoCompression).Open();
@@ -210,7 +238,7 @@ public static class MppFormat
     }
 
     private static Node BuildNode(LayerNode layer, List<(string, TileSnapshot, SKRectI)> rasters,
-        List<(string, byte[], SKRectI)> masks)
+        List<(string, byte[], SKRectI)> masks, List<(string Entry, SKImage Image)> sources)
     {
         var node = new Node
         {
@@ -225,12 +253,36 @@ public static class MppFormat
         {
             case GroupLayer group:
                 node.Type = "group";
-                node.Children = group.Children.Select(c => BuildNode(c, rasters, masks)).ToList();
+                node.Children = group.Children.Select(c => BuildNode(c, rasters, masks, sources)).ToList();
                 break;
 
             case RasterLayer raster:
                 node.Type = "raster";
                 node.Offset = [raster.Offset.X, raster.Offset.Y];
+                // 有原始高清那份就只存它（＋變形參數），縮放後的像素開檔時算回來 ——
+                // 這樣專案檔永遠記得這層本來多清楚，縮小存檔後再拉大也不糊。
+                if (raster.ValidPixelSource is { } src)
+                {
+                    var srcEntry = $"layers/{raster.Id:N}.src.png";
+                    node.SourceEntry = srcEntry;
+                    node.SourceBounds = [src.Bounds.Left, src.Bounds.Top, src.Bounds.Right, src.Bounds.Bottom];
+                    node.SourceBaseOffset = [src.BaseOffset.X, src.BaseOffset.Y];
+                    var m = src.Matrix;
+                    node.SourceMatrix =
+                    [
+                        m.ScaleX, m.SkewX, m.TransX,
+                        m.SkewY, m.ScaleY, m.TransY,
+                        m.Persp0, m.Persp1, m.Persp2,
+                    ];
+                    node.SourceTargetRect =
+                        [src.TargetRect.Left, src.TargetRect.Top, src.TargetRect.Right, src.TargetRect.Bottom];
+                    node.SourceRotation = src.RotationDeg;
+                    node.SourceOriginalSize = [src.OriginalSize.Width, src.OriginalSize.Height];
+                    sources.Add((srcEntry, src.Pixels));
+                    if (raster.HasElements)
+                        node.Elements = raster.Elements.Select(BuildElement).ToList();
+                    break;
+                }
                 var bounds = raster.Surface.ContentBounds;
                 if (!bounds.IsEmpty)
                 {
@@ -414,7 +466,7 @@ public static class MppFormat
             manifest = JsonSerializer.Deserialize<Manifest>(stream, JsonOptions)
                 ?? throw new InvalidDataException("manifest.json 解析失敗。");
         }
-        if (manifest.FormatVersion > FormatVersion)
+        if (manifest.FormatVersion > PixelSourceFormatVersion)
             throw new InvalidDataException($"檔案版本 {manifest.FormatVersion} 過新，請更新程式。");
 
         var doc = new Document(manifest.Width, manifest.Height);
@@ -564,11 +616,48 @@ public static class MppFormat
             using var pixmap = converted.PeekPixels();
             layer.Surface.CopyFrom(pixmap, new SKPointI(l, t));
         }
+        else if (BuildPixelSource(node, zip) is { } source)
+        {
+            // 存的是原始高清那份：把縮放後的樣子算回來，原始留在圖層上給下一次變形用
+            source.RenderInto(layer);
+            source.Revision = layer.Surface.Revision;
+            layer.SetPixelSource(source);
+        }
 
         foreach (var el in node.Elements ?? [])
             layer.AddElement(BuildElement(el));
 
         return layer;
+    }
+
+    /// <summary>
+    /// 讀回非破壞性縮放的原始高清來源；欄位不齊（舊檔、或這層本來就沒有）回 null。
+    /// 讀不到影像不擋開檔 —— 大不了這層是空的，總比整份檔案打不開好。
+    /// </summary>
+    private static LayerPixelSource? BuildPixelSource(Node node, ZipArchive zip)
+    {
+        if (node.SourceEntry is not { } name) return null;
+        if (node.SourceBounds is not [var sl, var st, var sr, var sb]) return null;
+        if (node.SourceBaseOffset is not [var bx, var by]) return null;
+        if (node.SourceMatrix is not [var a, var b, var c, var d, var e, var f, var g, var h, var i]) return null;
+        if (node.SourceTargetRect is not [var tl, var tt, var tr, var tb]) return null;
+        if (node.SourceOriginalSize is not [var ow, var oh]) return null;
+
+        var entry = zip.GetEntry(name);
+        if (entry == null) return null;
+        using var stream = entry.Open();
+        using var ms = new MemoryStream();
+        stream.CopyTo(ms);
+        ms.Position = 0;
+        using var decoded = SKBitmap.Decode(ms);
+        if (decoded == null) return null;
+        using var converted = EnsureBgraPremul(decoded);
+        var image = SKImage.FromBitmap(converted);
+        if (image == null) return null;
+
+        var matrix = new SKMatrix(a, b, c, d, e, f, g, h, i);
+        return new LayerPixelSource(image, new SKRectI(sl, st, sr, sb), matrix, new SKPointI(bx, by),
+            new SKRect(tl, tt, tr, tb), node.SourceRotation ?? 0f, new SKSize(ow, oh), revision: 0);
     }
 
     /// <summary>檔案裡的效果堆疊（一般圖層與群組共用）。未知效果略過，不擋開檔。</summary>

@@ -349,13 +349,10 @@ public sealed class EditorSession : IDisposable
         CommitFloating();
         if (Document.ActiveLayer is not { } target) return null;
 
-        // 上一輪剛落地、中間沒別的編輯 → 從最初的原始像素續接（縮小落地後再拉大不糊）
+        // 這些圖層還留著原始高清那份 → 從它續接（縮小落地後再拉大不糊，隔多久都一樣）
         TransformSession? session = null;
-        if (TakeTransformResume(target) is { } resume)
-        {
+        if (BuildResumeFromLayers(target) is { } resume)
             session = TransformSession.Resume(Document, target, resume);
-            if (session == null) resume.Release(Compositor);
-        }
         if (session == null)
         {
             session = TransformSession.Begin(Document, target, out var reason);
@@ -371,22 +368,73 @@ public sealed class EditorSession : IDisposable
 
     // ---- 變形／浮動內容落地後的續接點（「縮小落地再拉大不能糊」）----
 
-    private TransformResume? _transformResume;
     private FloatingResume? _floatingResume;
 
-    /// <summary>對 <paramref name="target"/> 還有有效的變形續接點（落地那步仍在 history 頂端）。</summary>
-    public bool HasResumeFor(LayerNode target) =>
-        _transformResume is { } r && r.IsValid(History) && ReferenceEquals(r.Target, target);
-
-    /// <summary>取出對 <paramref name="target"/> 有效的變形續接點（一次性；無效的順手釋放）。</summary>
-    private TransformResume? TakeTransformResume(LayerNode target)
+    /// <summary>目標底下所有點陣圖層（群組＝所有子孫）。</summary>
+    private static List<RasterLayer>? RasterLayersOf(LayerNode target)
     {
-        var r = _transformResume;
-        if (r == null) return null;
-        _transformResume = null;
-        if (r.IsValid(History) && ReferenceEquals(r.Target, target)) return r;
-        r.Release(Compositor);
-        return null;
+        var layers = new List<RasterLayer>();
+        switch (target)
+        {
+            case RasterLayer r: layers.Add(r); break;
+            case GroupLayer g: CollectRasters(g, layers); break;
+            default: return null;
+        }
+        return layers;
+
+        static void CollectRasters(GroupLayer group, List<RasterLayer> into)
+        {
+            foreach (var child in group.Children)
+            {
+                switch (child)
+                {
+                    case RasterLayer r: into.Add(r); break;
+                    case GroupLayer g: CollectRasters(g, into); break;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// <paramref name="target"/> 底下每一層都還留著原始高清那份（<see cref="RasterLayer.ValidPixelSource"/>）
+    /// —— 下一輪變形可以從原始重取樣，而不是從已經縮小的像素再放大。
+    /// </summary>
+    public bool HasResumeFor(LayerNode target) => BuildResumeFromLayers(target) != null;
+
+    /// <summary>
+    /// 從各圖層留著的原始高清來源組出續接資料；有一層沒有就整組不續接（回 null）。
+    /// 像素的擁有權留在圖層那邊，session 只是借用。
+    /// </summary>
+    private TransformResume? BuildResumeFromLayers(LayerNode target)
+    {
+        if (RasterLayersOf(target) is not { Count: > 0 } layers) return null;
+
+        var items = new (RasterLayer, SKImage, SKRectI)[layers.Count];
+        LayerPixelSource? first = null;
+        SKPointI delta = default;
+        for (var i = 0; i < layers.Count; i++)
+        {
+            var layer = layers[i];
+            if (layer.ValidPixelSource is not { } src) return null;
+            if (first == null)
+            {
+                first = src;
+                // 來源建立之後圖層被整層平移過：差值疊到框與映射上（像素還是同一份）
+                delta = new SKPointI(layer.Offset.X - src.BaseOffset.X, layer.Offset.Y - src.BaseOffset.Y);
+            }
+            items[i] = (layer, src.Pixels, src.Bounds);
+        }
+        if (first == null) return null;
+
+        var matrix = first.Matrix;
+        var rect = first.TargetRect;
+        if (delta != SKPointI.Empty)
+        {
+            matrix = SKMatrix.Concat(SKMatrix.CreateTranslation(delta.X, delta.Y), matrix);
+            rect = new SKRect(rect.Left + delta.X, rect.Top + delta.Y,
+                rect.Right + delta.X, rect.Bottom + delta.Y);
+        }
+        return new TransformResume(target, items, matrix, rect, first.RotationDeg, first.OriginalSize);
     }
 
     /// <summary>
@@ -418,11 +466,7 @@ public sealed class EditorSession : IDisposable
     /// <summary>history 一動就檢查續接點還有沒有效，沒效就立刻釋放（原始像素可能不小）。</summary>
     private void ReleaseStaleResumes()
     {
-        if (_transformResume is { } t && !t.IsValid(History))
-        {
-            _transformResume = null;
-            t.Release(Compositor);
-        }
+        // 變形的原始高清那份掛在圖層上、以像素版本號驗證，不隨 history 起落（見 LayerPixelSource）
         if (_floatingResume is { } f &&
             !(History.UndoStack.Count > 0 && ReferenceEquals(History.UndoStack[^1], f.Entry)))
         {
@@ -451,19 +495,15 @@ public sealed class EditorSession : IDisposable
 
         if (t.IsIdentity)
         {
-            t.RestoreOriginal(); // 蓋章期間的 Low/High 重取樣通通不留下 —— 逐位元回到原狀
+            t.RestoreOriginal();          // 蓋章期間的 Low/High 重取樣通通不留下 —— 逐位元回到原狀
+            t.RepublishBorrowedSources(); // 還原動到像素，借來的原始那份要重新掛回去
         }
         else
         {
             var entry = t.BuildCommit(t.IsGroup ? "變形群組" : "變形圖層");
-            if (entry != null)
-            {
-                History.Push(entry);
-                // 留下續接點：之後對同一目標再變形就從原始像素重取樣（要在 Push 之後，
-                // Push 會觸發 ReleaseStaleResumes）
-                _transformResume?.Release(Compositor);
-                _transformResume = t.BuildResume(entry);
-            }
+            if (entry != null) History.Push(entry);
+            // 把原始高清掛回各圖層：之後對同一目標再變形就從它重取樣（存檔也存這一份）
+            t.PublishPixelSources();
         }
         t.DisposeDeferred(Compositor); // render thread 可能還在畫覆疊影像
         RefreshSelectionHandles();
@@ -476,6 +516,7 @@ public sealed class EditorSession : IDisposable
         if (t == null) return;
         Transform = null;
         t.RestoreOriginal();
+        t.RepublishBorrowedSources(); // 還原動到像素，借來的原始那份要重新掛回去
         t.DisposeDeferred(Compositor);
         RefreshSelectionHandles();
     }
@@ -1693,8 +1734,6 @@ public sealed class EditorSession : IDisposable
         Transform = null;
         Floating?.Dispose();
         Floating = null;
-        _transformResume?.Release(Compositor);
-        _transformResume = null;
         if (_floatingResume is { } fr) Compositor.Retire(fr.Pixels);
         _floatingResume = null;
         if (_ghost is { } ghost) Compositor.Retire(ghost.Image); // Compositor.Dispose 會清掉退役佇列

@@ -29,6 +29,38 @@ public sealed class RasterLayer : LayerNode, IDisposable
         Surface = surface;
         if (disposeOld) old.Dispose();
         FxCache.MarkAllDirty();
+        SetPixelSource(null); // 換掉整片像素＝原始那份對不上了
+    }
+
+    private LayerPixelSource? _pixelSource;
+
+    /// <summary>
+    /// 這層像素的「原始高清來源」；null＝沒有（就是一般圖層）。見 <see cref="LayerPixelSource"/>。
+    /// 讀的人要用 <see cref="ValidPixelSource"/>，它會順便檢查有沒有被別的編輯改過。
+    /// </summary>
+    public LayerPixelSource? PixelSource => _pixelSource;
+
+    /// <summary>
+    /// 還有效的原始高清來源：像素從那次變形之後沒被別的編輯改過才算數。
+    /// 失效的那份會就地釋放掉（記憶體不留著）。
+    /// </summary>
+    public LayerPixelSource? ValidPixelSource
+    {
+        get
+        {
+            if (_pixelSource is not { } src) return null;
+            if (src.Revision == Surface.Revision) return src;
+            SetPixelSource(null);
+            return null;
+        }
+    }
+
+    /// <summary>換掉（或清掉）原始高清來源；舊的就地釋放。</summary>
+    public void SetPixelSource(LayerPixelSource? source)
+    {
+        if (ReferenceEquals(_pixelSource, source)) return;
+        _pixelSource?.Dispose();
+        _pixelSource = source;
     }
 
     // ---- 非破壞性效果堆疊（清單／快取在 LayerNode，群組也有一份）----
@@ -183,5 +215,7 @@ public sealed class RasterLayer : LayerNode, IDisposable
         Surface.Dispose();
         ElementCache.Dispose();
         FxCache.Dispose();
+        _pixelSource?.Dispose();
+        _pixelSource = null;
     }
 }

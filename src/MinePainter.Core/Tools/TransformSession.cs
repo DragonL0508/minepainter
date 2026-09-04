@@ -37,6 +37,12 @@ public sealed class TransformSession : IDisposable
         public required VectorElement[] StartElements;
         public SKRectI LastStamp;                // 目前蓋章的 doc 範圍（Offset=Base 基準；呈現位置再加 OffsetDelta）
 
+        /// <summary>
+        /// Pixels 的擁有權在本 session 手上。false＝借用圖層的 <see cref="LayerPixelSource"/>
+        /// （續接時），釋放由圖層負責，session 結束不能動它。
+        /// </summary>
+        public bool OwnsPixels = true;
+
         /// <summary>進入四角／彎曲模式時的文字物件（已含矩形模式的變形）：網格變形疊在它們的輸出端。</summary>
         public Dictionary<Guid, VectorElement>? MeshStartElements;
     }
@@ -572,6 +578,7 @@ public sealed class TransformSession : IDisposable
                     Before = layer.Surface.Snapshot(),
                     StartElements = layer.HasElements ? layer.Elements.ToArray() : Array.Empty<VectorElement>(),
                     LastStamp = current,
+                    OwnsPixels = false, // 像素是圖層 LayerPixelSource 那份，session 只是借用
                 });
             }
         }
@@ -584,36 +591,68 @@ public sealed class TransformSession : IDisposable
             RotationDeg = resume.RotationDeg,
             ResetSize = resume.OriginalSize,
         };
-        resume.Detach(); // 像素已交給 session
         return session;
     }
 
     /// <summary>
-    /// 落地後把「最初的原始像素 × 到目前為止的累積映射」打包起來，讓下一輪對同一目標的變形
-    /// 能從原始像素續接。只有像素真的被重取樣過才值得保留（純平移沒有）。
-    /// 須在 <see cref="BuildCommit"/> 之後呼叫；成功時接手各層像素的擁有權（session 之後不再釋放它們）。
+    /// 落地後把「最初的原始像素 × 到目前為止的累積映射」掛回各個圖層（<see cref="LayerPixelSource"/>）：
+    /// 之後不論隔多久、做過多少別的事、甚至存檔重開，只要沒有直接改到這層像素，
+    /// 再變形都是從原始高清重取樣 —— 縮小落地後再拉大不會糊。
+    /// 須在 <see cref="BuildCommit"/> 之後呼叫；像素的擁有權移交給圖層。
     /// </summary>
-    internal TransformResume? BuildResume(IHistoryEntry entry)
+    internal void PublishPixelSources()
     {
-        var target = Target;
-        if (_disposed || !_pixelsStamped) return null;
-        if (_warp != null && IsWarpChanged) return null; // 彎曲不是矩陣，下一輪從落地結果重新提起
-        var pm = PixelMatrix;
-        if (IsIntegerTranslation(pm)) return null; // 像素還是無損的，下一輪從圖層重新提起即可
+        if (_disposed) return;
+        if (!_pixelsStamped) return; // 像素沒被重取樣過（純平移）：原有的來源照舊有效
 
-        var items = new List<(RasterLayer, SKImage, SKRectI)>();
-        foreach (var item in _items)
+        // 彎曲不是矩陣、整數平移本來就無損 —— 兩種都沒有「保留原始」的價值，
+        // 但像素已經被重蓋過，舊的來源對不上了，得清掉。
+        var pm = PixelMatrix;
+        if (_warp != null && IsWarpChanged || IsIntegerTranslation(pm))
         {
-            if (item.Pixels == null) continue;
-            items.Add((item.Layer, item.Pixels, item.SrcBounds));
-            item.Pixels = null; // 擁有權移交
+            foreach (var item in _items) item.Layer.SetPixelSource(null);
+            return;
         }
+
         // 落地後 layer.Offset = BaseOffset + OffsetDelta，而 Matrix 是從（含位移的）TargetRect 算的，
         // 兩者指向同一個 doc 位置 —— 下一輪以 BaseOffset = 目前 Offset 蓋章，Pre 直接用 PixelMatrix 即可。
         // 四角模式落地後，下一輪的框是變形結果的外接矩形（PS 也一樣），角度視為 0（已烙進像素矩陣）
-        return _quad != null
-            ? new TransformResume(target, entry, items.ToArray(), pm, FrameRect, 0f, ResetSize)
-            : new TransformResume(target, entry, items.ToArray(), pm, TargetRect, RotationDeg, ResetSize);
+        var rect = _quad != null ? FrameRect : TargetRect;
+        var rotation = _quad != null ? 0f : RotationDeg;
+
+        foreach (var item in _items)
+        {
+            var layer = item.Layer;
+            if (item.Pixels is not { } pixels)
+            {
+                layer.SetPixelSource(null);
+                continue;
+            }
+            // 借用中的那份就是同一張影像：先 Detach 讓舊來源別把它釋放掉
+            layer.PixelSource?.Detach();
+            layer.SetPixelSource(new LayerPixelSource(pixels, item.SrcBounds, pm, layer.Offset,
+                rect, rotation, ResetSize, layer.Surface.Revision));
+            item.Pixels = null;      // 擁有權移交給圖層
+            item.OwnsPixels = false;
+        }
+    }
+
+    /// <summary>
+    /// 沒有落地（Esc 取消、或恰好回到原狀無損還原）時，把借來的原始像素原封不動掛回圖層。
+    /// 還原會動到像素（版本號變了），不重掛的話原本的來源會被判定失效、之後拉大就糊了。
+    /// </summary>
+    internal void RepublishBorrowedSources()
+    {
+        if (_disposed || _preIsIdentity) return;
+        foreach (var item in _items)
+        {
+            var layer = item.Layer;
+            if (item.OwnsPixels || item.Pixels is not { } pixels) continue;
+            layer.PixelSource?.Detach();
+            layer.SetPixelSource(new LayerPixelSource(pixels, item.SrcBounds, _preMatrix, item.BaseOffset,
+                SourceRect, _baseRotation, ResetSize, layer.Surface.Revision));
+            item.Pixels = null;
+        }
     }
 
     private static void Collect(GroupLayer group, List<RasterLayer> into)
@@ -1092,7 +1131,8 @@ public sealed class TransformSession : IDisposable
         _overlay = null;
         foreach (var item in _items)
         {
-            if (item.Pixels != null)
+            // 借來的原始像素屬於圖層的 LayerPixelSource，session 不能釋放它
+            if (item.Pixels != null && item.OwnsPixels)
             {
                 if (_overlayEverPublished && compositor != null) compositor.Retire(item.Pixels);
                 else item.Pixels.Dispose();
@@ -1114,46 +1154,28 @@ public sealed class TransformSession : IDisposable
 }
 
 /// <summary>
-/// 變形落地後留下的「續接點」：最初的原始像素＋累積映射＋落地那步的 history entry。
-/// 只要 history 頂端還是那一步（中間沒有別的編輯、也沒 undo 走掉），對同一目標再開變形
-/// 就從原始像素續接 —— 縮小落地後再拉大也不糊。由 <see cref="EditorSession"/> 持有與驗證。
-/// </summary>
+/// 開變形時交給 <see cref="TransformSession.Resume"/> 的「續接資料」：各層的原始高清像素
+/// ＋累積映射＋目前的框。內容由各圖層的 <see cref="LayerPixelSource"/> 組出來
+/// （見 <see cref="EditorSession.BuildResumeFromLayers"/>），像素的擁有權一直在圖層那邊，
+/// 本物件只是借過來用。</summary>
 public sealed class TransformResume
 {
     internal LayerNode Target { get; }
-    internal IHistoryEntry Entry { get; }
     internal (RasterLayer Layer, SKImage Pixels, SKRectI SrcBounds)[] Items { get; }
     internal SKMatrix PreMatrix { get; }
     internal SKRect TargetRect { get; }
     internal float RotationDeg { get; }
     internal SKSize OriginalSize { get; }
-    private bool _detached;
 
-    internal TransformResume(LayerNode target, IHistoryEntry entry,
+    internal TransformResume(LayerNode target,
         (RasterLayer Layer, SKImage Pixels, SKRectI SrcBounds)[] items,
         SKMatrix preMatrix, SKRect targetRect, float rotationDeg, SKSize originalSize)
     {
         Target = target;
-        Entry = entry;
         Items = items;
         PreMatrix = preMatrix;
         TargetRect = targetRect;
         RotationDeg = rotationDeg;
         OriginalSize = originalSize;
-    }
-
-    /// <summary>還有效＝落地那步仍在 history 頂端（狀態就是落地當時的樣子）。</summary>
-    internal bool IsValid(HistoryManager history) =>
-        history.UndoStack.Count > 0 && ReferenceEquals(history.UndoStack[^1], Entry);
-
-    /// <summary>像素已交給新的 session（不再由本物件釋放）。</summary>
-    internal void Detach() => _detached = true;
-
-    /// <summary>釋放保留的像素（render thread 可能還在畫上一輪的覆疊殘影，走退役佇列）。</summary>
-    internal void Release(Compositor compositor)
-    {
-        if (_detached) return;
-        _detached = true;
-        foreach (var (_, pixels, _) in Items) compositor.Retire(pixels);
     }
 }

@@ -1,4 +1,4 @@
-using MinePainter.Core.History;
+﻿using MinePainter.Core.History;
 using MinePainter.Core.IO;
 using MinePainter.Core.Layers;
 using MinePainter.Core.Tiles;
@@ -9,8 +9,10 @@ using Xunit;
 namespace MinePainter.Core.Tests;
 
 /// <summary>
-/// 「縮小落地後再拉大不能糊」：變形框／浮動內容落地後留下續接點，
-/// 只要 history 頂端還是那一步，對同一目標再變形就從最初的原始像素重取樣。
+/// 「縮小落地後再拉大不能糊」：變形落地後把原始高清像素掛回圖層
+/// （<see cref="LayerPixelSource"/>），之後不論隔多久、中間做過什麼，
+/// 只要沒有直接改到這層像素，再變形都是從原始重取樣。
+/// 浮動選取另有一套短命的續接點（history 頂端驗證），也在這裡一起測。
 /// </summary>
 public class TransformResumeTests
 {
@@ -87,7 +89,7 @@ public class TransformResumeTests
     }
 
     [Fact]
-    public void Transform_ResumeDropped_WhenAnotherEditHappensInBetween()
+    public void Transform_ResumeSurvivesUnrelatedEdits_ButDropsWhenPixelsAreEdited()
     {
         using var session = new EditorSession(ImageCodec.CreateBlankDocument(512, 512, SKColors.White));
         var doc = session.Document;
@@ -101,11 +103,63 @@ public class TransformResumeTests
         t1.Apply(preview: false);
         session.CommitTransform();
 
-        // 中間多了別的步驟 → 續接點失效，下一輪從目前像素重新提起
+        // 中間做了不碰這層像素的事 → 原始高清那份還在，照樣續接
         session.History.Push(new ActionHistoryEntry("別的編輯", SKRectI.Empty, _ => { }, _ => { }));
         var t2 = session.BeginTransform()!;
-        Assert.False(t2.IsResumed);
+        Assert.True(t2.IsResumed);
         session.CancelTransform();
+
+        // 直接改到這層像素 → 原始那份對不上了，下一輪從目前像素重新提起
+        lock (doc.SyncRoot) layer.Surface.Fill(new SKRectI(0, 0, 8, 8), SKColors.Red);
+        var t3 = session.BeginTransform()!;
+        Assert.False(t3.IsResumed);
+        session.CancelTransform();
+    }
+
+
+    [Fact]
+    public void Transform_ShrinkCommit_SaveReload_ThenEnlargeBack_IsLossless()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"mp-src-{Guid.NewGuid():N}.mpp");
+        SKRect source;
+        try
+        {
+            using (var session = new EditorSession(ImageCodec.CreateBlankDocument(512, 512, SKColors.White)))
+            {
+                var doc = session.Document;
+                var layer = (RasterLayer)doc.ActiveLayer!;
+                lock (doc.SyncRoot) FillChecker(layer, 100, 100);
+                session.ActiveTool = session.Move;
+
+                var t1 = session.BeginTransform()!;
+                source = t1.SourceRect;
+                t1.TargetRect = new SKRect(source.Left, source.Top,
+                    source.Left + source.Width / 8, source.Top + source.Height / 8);
+                t1.Apply(preview: false);
+                session.CommitTransform();
+                Assert.NotNull(layer.ValidPixelSource);
+
+                MppFormat.Save(doc, path);
+            }
+
+            // 存檔重開：專案檔記的是原始高清那份，拉回原尺寸仍然逐位元還原
+            using var reopened = new EditorSession(MppFormat.Load(path));
+            var reloaded = (RasterLayer)reopened.Document.ActiveLayer!;
+            Assert.NotNull(reloaded.ValidPixelSource);
+            reopened.ActiveTool = reopened.Move;
+
+            var t2 = reopened.BeginTransform()!;
+            Assert.True(t2.IsResumed);
+            t2.TargetRect = source;
+            t2.Apply(preview: false);
+            reopened.CommitTransform();
+
+            AssertChecker(reloaded, 100, 100, SKColors.White);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
     }
 
     [Fact]

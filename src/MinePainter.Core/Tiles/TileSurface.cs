@@ -22,6 +22,12 @@ public sealed class TileSurface : IDisposable
     public int TileCount => _tiles.Count;
     public IReadOnlyDictionary<TileIndex, Tile> Tiles => _tiles;
 
+    /// <summary>
+    /// 寫入版本號。<see cref="Layers.LayerPixelSource"/> 靠它判斷「這層像素從那次變形之後
+    /// 有沒有被別的編輯改過」—— 變了就代表原始高清那份對不上目前的圖層，該作廢。
+    /// </summary>
+    public int Revision => _revision;
+
     /// <summary>tile 粒度的內容邊界（文件像素座標）；無內容回傳 Empty。</summary>
     public SKRectI ContentBounds
     {
