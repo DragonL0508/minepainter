@@ -32,28 +32,24 @@ public class MemoryFootprintTests
     [Fact]
     public void CompositeCache_EvictsBeyondBudget()
     {
-        using var doc = ImageCodec.CreateBlankDocument(2048, 2048, SKColors.White); // 8×8 = 64 格
-        using var compositor = new Compositor(doc) { CacheBudgetBytes = 8L * Tile.BytesPerTile };
+        const long budget = 4L * Tile.BytesPerTile;
+        using var doc = ImageCodec.CreateBlankDocument(1024, 1024, SKColors.White); // 4×4 = 16 格
+        using var compositor = new Compositor(doc) { CacheBudgetBytes = budget };
 
-        var deadline = Environment.TickCount64 + 5000;
-        // 不用 TryGetTile 等（那會把淘汰掉的格又排回去）：看 worker 自己的計數
-        while (compositor.TilesRendered < 64 || compositor.DirtyCount > 0)
+        // 不用 TryGetTile 等（那會把淘汰掉的格又排回去）：看 worker 自己的計數。
+        // 逾時放寬 —— 這條驗的是「會不會淘汰」，不是機器多快。
+        var deadline = Environment.TickCount64 + 30000;
+        while (compositor.TilesRendered < 16 || compositor.DirtyCount > 0 ||
+               compositor.CachedBytes > budget)
         {
-            if (Environment.TickCount64 > deadline) throw new TimeoutException("合成逾時");
-            Thread.Sleep(10);
-        }
-
-        // 淘汰是 worker 合成完一批之後才做的，等它收斂
-        deadline = Environment.TickCount64 + 3000;
-        while (compositor.CachedBytes > 8L * Tile.BytesPerTile)
-        {
-            if (Environment.TickCount64 > deadline) break;
+            if (Environment.TickCount64 > deadline)
+                throw new TimeoutException($"合成/淘汰逾時：已合成 {compositor.TilesRendered} 格、" +
+                    $"待處理 {compositor.DirtyCount} 格、快取 {compositor.CachedBytes} bytes");
             Thread.Sleep(10);
         }
 
         Assert.True(compositor.EvictedTiles > 0, "超出預算應該要淘汰");
-        Assert.True(compositor.CachedBytes <= 8L * Tile.BytesPerTile,
-            $"快取 {compositor.CachedBytes} bytes 超出預算");
+        Assert.True(compositor.CachedBytes <= budget, $"快取 {compositor.CachedBytes} bytes 超出預算");
     }
 
     [Fact]

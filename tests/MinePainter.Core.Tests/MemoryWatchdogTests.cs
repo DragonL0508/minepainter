@@ -32,7 +32,10 @@ public class MemoryWatchdogTests
     public void OnlyTerminatesOnceHoweverLongItStaysOverBudget()
     {
         var terminated = 0;
-        using var watchdog = new MemoryWatchdog(budgetBytes: 0, () => Interlocked.Increment(ref terminated));
+        // 預算 -1：任何用量（含「完全沒長」）都算超標，第一次取樣就一定會跳。
+        // 用 0 的話得等工作集真的長出來，機器忙的時候 5 秒內未必會長 —— 這條驗的是
+        // 「只中止一次」，不該被那個時機影響。
+        using var watchdog = new MemoryWatchdog(budgetBytes: -1, () => Interlocked.Increment(ref terminated));
 
         var deadline = DateTime.UtcNow.AddSeconds(5);
         while (!watchdog.Tripped && DateTime.UtcNow < deadline) Thread.Sleep(50);

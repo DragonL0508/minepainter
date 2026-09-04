@@ -76,7 +76,17 @@ public sealed class Compositor : IDisposable
     /// 我們的快取是純加速結構（丟了就重算），所以只淘汰、不落盤。
     /// 超出時從「看不到的格」裡挑最久沒用到的丟（可見範圍永遠留著，否則畫面會自己閃）。
     /// </summary>
-    public long CacheBudgetBytes { get; set; } = DefaultBudgetBytes;
+    public long CacheBudgetBytes
+    {
+        get => _cacheBudgetBytes;
+        set
+        {
+            _cacheBudgetBytes = value;
+            TrimCache(); // 調小了要立刻生效，不能等下一批合成（可能永遠不會再有）
+        }
+    }
+
+    private long _cacheBudgetBytes = DefaultBudgetBytes;
 
     /// <summary>預設預算：實體記憶體的 1/8，夾在 64 MB ~ 512 MB 之間。</summary>
     public static long DefaultBudgetBytes { get; } = ComputeDefaultBudget();
@@ -462,7 +472,7 @@ public sealed class Compositor : IDisposable
     /// </summary>
     private void TrimCache()
     {
-        var budget = CacheBudgetBytes;
+        var budget = _cacheBudgetBytes;
         if (budget <= 0 || CachedBytes <= budget) return;
 
         var visible = _visibleTiles;
