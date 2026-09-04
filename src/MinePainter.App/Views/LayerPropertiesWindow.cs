@@ -123,6 +123,9 @@ public sealed class LayerPropertiesWindow : Window
             Background = Brushes.Transparent,
             HorizontalContentAlignment = HorizontalAlignment.Center,
             VerticalContentAlignment = VerticalAlignment.Center,
+            // 標題列是「可拖曳」的 SizeAll 游標，會被子元素繼承；✕ 上面要蓋回一般游標，
+            // 不然滑上去看起來還是在拖視窗，不像按得下去的鈕
+            Cursor = new Cursor(StandardCursorType.Arrow),
         };
         closeButton.Click += (_, _) => { CommitName(); Close(); };
 

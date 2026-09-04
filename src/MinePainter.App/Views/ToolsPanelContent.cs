@@ -13,6 +13,8 @@ public sealed class ToolsPanelContent : UserControl
     /// <summary>
     /// 工具依用途分組（組間畫一條分隔線），每組內成對排在同一列（面板是雙欄）：
     /// 選取與移動 → 手繪 → 填色取色 → 形狀與物件。
+    /// 鋼筆排在移動旁邊（第一組的第六格）：它畫出來的路徑 Enter 就變成選取範圍，
+    /// 用途比較靠選取那一組，也剛好把第一組原本空著的格子補滿。
     /// </summary>
     private static readonly (string Key, MaterialIconKind Icon, string Tip)[][] Groups =
     [
@@ -22,6 +24,7 @@ public sealed class ToolsPanelContent : UserControl
             ("lasso", MaterialIconKind.Lasso, "套索選取 (L)"),
             ("wand", MaterialIconKind.AutoFix, "魔術棒 (W)"),
             ("move", MaterialIconKind.CursorMove, "移動 (M)"),
+            ("pen", MaterialIconKind.VectorBezier, "鋼筆 (P)：點一下加角點、按住拖曳拉出曲線、點回起點封閉；Enter 轉為選取、Backspace 退一點、Esc 清除"),
         ],
         [
             ("brush", MaterialIconKind.Brush, "筆刷 (B)：柔邊、抗鋸齒"),
@@ -37,7 +40,6 @@ public sealed class ToolsPanelContent : UserControl
             ("shape", MaterialIconKind.ShapeOutline, "形狀 (O)：矩形／橢圓"),
             ("line", MaterialIconKind.VectorLine, "直線 (U)：拖曳畫線，Shift 吸附 15°"),
             ("text", MaterialIconKind.FormatText, "文字 (T)"),
-            ("pen", MaterialIconKind.VectorBezier, "鋼筆 (P)：點一下加角點、按住拖曳拉出曲線、點回起點封閉；Enter 轉為選取、Backspace 退一點、Esc 清除"),
         ],
     ];
 
