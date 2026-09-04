@@ -93,8 +93,16 @@ public static class ImageCommands
 
     private static void ScaleLayerCore(RasterLayer layer, float sx, float sy, ResampleMode resample)
     {
+        // 縮小時先把現在的高清像素拍下來，之後輸出（快速模式）能從它重畫而不是再放大一次
+        var keep = Documents.ScaleRules.CaptureSource(layer, sx, sy, 0);
+
         var scaled = ScaleSurface(layer, sx, sy, resample);
         layer.ReplaceSurface(scaled, disposeOld: false); // 舊的留給 undo
+        if (keep != null)
+        {
+            keep.Revision = layer.Surface.Revision;
+            layer.SetPixelSource(keep);
+        }
         layer.Offset = SKPointI.Empty;
 
         // 物件與效果都跟著縮（文字重新排版、外框／陰影／光暈與效果堆疊的像素長度一起縮）——
@@ -263,8 +271,34 @@ public static class ImageCommands
     {
         var doc = session.Document;
         var layer = new RasterLayer { Name = name };
-        using (var pixmap = bitmap.PeekPixels())
+
+        // 快速模式：畫布是代理，放進來的圖也要照同樣比例縮，不然一張 4K 圖會塞爆 1080p 的畫布。
+        // 原圖留成「原始高清來源」，輸出時直接從它重畫（見 Documents.OutputRender）。
+        var scale = doc.IsFastMode ? 1f / doc.OutputScale : 1f;
+        if (scale < 0.999f)
         {
+            var w = Math.Max(1, (int)MathF.Round(bitmap.Width * scale));
+            var h = Math.Max(1, (int)MathF.Round(bitmap.Height * scale));
+            using var small = bitmap.Resize(
+                new SKImageInfo(w, h, SKColorType.Bgra8888, SKAlphaType.Premul), SKFilterQuality.High);
+            if (small != null)
+            {
+                using var smallPixels = small.PeekPixels();
+                layer.Surface.CopyFrom(smallPixels, SKPointI.Empty);
+                layer.SetPixelSource(new Layers.LayerPixelSource(
+                    SKImage.FromBitmap(bitmap.Copy()),
+                    new SKRectI(0, 0, bitmap.Width, bitmap.Height),
+                    SKMatrix.CreateScale(scale, scale),
+                    SKPointI.Empty,
+                    SKRect.Create(0, 0, w, h),
+                    0f,
+                    new SKSize(bitmap.Width, bitmap.Height),
+                    layer.Surface.Revision));
+            }
+        }
+        else
+        {
+            using var pixmap = bitmap.PeekPixels();
             layer.Surface.CopyFrom(pixmap, SKPointI.Empty);
         }
 

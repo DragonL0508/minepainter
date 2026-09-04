@@ -2,6 +2,7 @@
 using MinePainter.Core.Effects;
 using MinePainter.Core.History;
 using MinePainter.Core.Layers;
+using MinePainter.Core.Tiles;
 using MinePainter.Core.Vectors;
 using SkiaSharp;
 
@@ -50,12 +51,12 @@ public static class OutputRender
 
         lock (doc.SyncRoot)
         {
-            foreach (var child in doc.Root.Children) clone.Root.Add(CloneNode(child, sx, sy, resample));
+            foreach (var child in doc.Root.Children) clone.Root.Add(CloneNode(clone, child, sx, sy, resample));
         }
         return clone;
     }
 
-    private static LayerNode CloneNode(LayerNode node, float sx, float sy, ResampleMode resample)
+    private static LayerNode CloneNode(Document clone, LayerNode node, float sx, float sy, ResampleMode resample)
     {
         var k = (Math.Abs(sx) + Math.Abs(sy)) / 2f;
         switch (node)
@@ -64,7 +65,7 @@ public static class OutputRender
             {
                 var copy = new GroupLayer { Name = group.Name };
                 CopyCommon(group, copy, k);
-                foreach (var child in group.Children) copy.Add(CloneNode(child, sx, sy, resample));
+                foreach (var child in group.Children) copy.Add(CloneNode(clone, child, sx, sy, resample));
                 return copy;
             }
             case AdjustmentLayer adjustment:
@@ -78,8 +79,20 @@ public static class OutputRender
                 var copy = new RasterLayer { Name = raster.Name };
                 CopyCommon(raster, copy, k);
 
-                // 像素：整層縮放（含畫布外的部分；Offset 併進表面）
-                copy.ReplaceSurface(ImageCommands.ScaleSurface(raster, sx, sy, resample));
+                // 像素：能從「原始高清來源」重畫就重畫（放進來的大圖不會被放大兩次），
+                // 不行才把代理解析度的像素重新取樣
+                if (!TryRedrawFromSource(clone, raster, copy, sx, sy))
+                {
+                    // 縮小（例如把一般專案轉成快速模式）：把原本的高清像素留給複本，
+                    // 之後輸出時就能從它重畫，而不是拿縮過的再放大
+                    var keep = ScaleRules.CaptureSource(raster, sx, sy, 0);
+                    copy.ReplaceSurface(ImageCommands.ScaleSurface(raster, sx, sy, resample));
+                    if (keep != null)
+                    {
+                        keep.Revision = copy.Surface.Revision;
+                        copy.SetPixelSource(keep);
+                    }
+                }
                 copy.Offset = SKPointI.Empty;
 
                 // 物件：以新尺寸重新算（文字重新排版、形狀重畫）
@@ -93,6 +106,63 @@ public static class OutputRender
                 throw new NotSupportedException($"未知的圖層類型：{node.GetType().Name}");
         }
     }
+
+    /// <summary>
+    /// 這層的像素若還留著「原始高清來源」（<see cref="RasterLayer.ValidPixelSource"/>），
+    /// 輸出時直接拿原圖以最終尺寸重畫一次，而不是把代理解析度的那份放大。
+    ///
+    /// 差別很實際：在 1080p 代理上放一張 4K 照片、縮小擺好，輸出 4K 時這條路是「原圖 → 4K」
+    /// 一次重取樣；走放大那條則是「原圖 → 1080p → 4K」，第二次放大只會糊。
+    /// 來源在圖層被畫過之後會自動失效（Revision 對不上），那時就只能走放大。
+    /// </summary>
+    private static bool TryRedrawFromSource(Document clone, RasterLayer source, RasterLayer target,
+        float sx, float sy)
+    {
+        if (source.ValidPixelSource is not { } pixels) return false;
+        var image = pixels.Pixels;
+        if (image == null) return false;
+
+        // 原始 → 目前呈現（doc 座標）→ 圖層後來的平移 → 輸出比例
+        var delta = new SKPointI(source.Offset.X - pixels.BaseOffset.X, source.Offset.Y - pixels.BaseOffset.Y);
+        var matrix = SKMatrix.Concat(
+            SKMatrix.CreateScale(sx, sy),
+            SKMatrix.Concat(SKMatrix.CreateTranslation(delta.X, delta.Y), pixels.Matrix));
+
+        var bounds = new SKRect(pixels.Bounds.Left, pixels.Bounds.Top, pixels.Bounds.Right, pixels.Bounds.Bottom);
+        var dest = SKRectI.Round(matrix.MapRect(bounds));
+        if (dest.Width <= 0 || dest.Height <= 0) return false;
+
+        // 畫布外的內容留一圈就好（效果會吃到邊界外的東西），整份留著在放大之後可能非常大
+        var limit = new SKRectI(-OutsideMargin, -OutsideMargin,
+            clone.Width + OutsideMargin, clone.Height + OutsideMargin);
+        dest = SKRectI.Intersect(dest, limit);
+        if (dest.Width <= 0 || dest.Height <= 0) return false;
+
+        var info = new SKImageInfo(dest.Width, dest.Height, SKColorType.Bgra8888, SKAlphaType.Premul);
+        using var surface = SKSurface.Create(info);
+        if (surface == null) return false;
+
+        var canvas = surface.Canvas;
+        canvas.Clear(SKColors.Transparent);
+        canvas.Translate(-dest.Left, -dest.Top);
+        canvas.Concat(ref matrix);
+        using (var paint = new SKPaint { FilterQuality = SKFilterQuality.High, IsAntialias = true })
+        {
+            canvas.DrawImage(image, pixels.Bounds.Left, pixels.Bounds.Top, paint);
+        }
+        canvas.Flush();
+
+        using var snapshot = surface.Snapshot();
+        using var bitmap = SKBitmap.FromImage(snapshot);
+        using var pixmap = bitmap.PeekPixels();
+        var result = new TileSurface();
+        result.CopyFrom(pixmap, new SKPointI(dest.Left, dest.Top));
+        target.ReplaceSurface(result);
+        return true;
+    }
+
+    /// <summary>從原始來源重畫時，畫布外要多留多少（效果可能吃到畫布外的內容）。</summary>
+    private const int OutsideMargin = 256;
 
     private static void CopyCommon(LayerNode source, LayerNode target, float scale)
     {

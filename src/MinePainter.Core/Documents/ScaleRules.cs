@@ -14,6 +14,44 @@ namespace MinePainter.Core.Documents;
 /// </summary>
 internal static class ScaleRules
 {
+    /// <summary>
+    /// 縮小時保留「原始高清那份」的面積上限（像素數）。4K 一層是 830 萬，這裡放到 4000 萬，
+    /// 超過就不留 —— 那種尺寸的原圖留在記憶體裡代價太高，輸出時只好走放大。
+    /// </summary>
+    private const long MaxSourcePixels = 40_000_000;
+
+    /// <summary>
+    /// 把圖層現在的像素拍成「原始高清來源」，讓之後輸出時能從它重畫（見 OutputRender）。
+    /// 只在縮小時有意義：放大不會有更清楚的來源。
+    /// </summary>
+    internal static Layers.LayerPixelSource? CaptureSource(Layers.RasterLayer layer, float sx, float sy,
+        int revision)
+    {
+        if (sx >= 0.999f && sy >= 0.999f) return null;
+
+        var content = layer.Surface.ExactContentBounds();
+        if (content.Width <= 0 || content.Height <= 0) return null;
+        if ((long)content.Width * content.Height > MaxSourcePixels) return null;
+
+        var docRect = new SKRectI(
+            content.Left + layer.Offset.X, content.Top + layer.Offset.Y,
+            content.Right + layer.Offset.X, content.Bottom + layer.Offset.Y);
+
+        using var bitmap = History.ImageCommands.ReadRegion(layer.Surface, content);
+        var image = SKImage.FromBitmap(bitmap);
+        if (image == null) return null;
+
+        return new Layers.LayerPixelSource(
+            image,
+            docRect,
+            SKMatrix.CreateScale(sx, sy),
+            SKPointI.Empty,
+            SKRect.Create(docRect.Left * sx, docRect.Top * sy, docRect.Width * sx, docRect.Height * sy),
+            0f,
+            new SKSize(docRect.Width, docRect.Height),
+            revision);
+    }
+
     /// <summary>把像素長度的效果參數乘上比例。</summary>
     internal static LayerEffect ScaleEffect(LayerEffect entry, float scale)
     {

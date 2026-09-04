@@ -245,6 +245,108 @@ public class FastModeOutputTests
         Assert.Equal(3840, doc.OutputWidth);
     }
 
+    /// <summary>
+    /// 放進來的大圖：輸出時要從「原始高清那份」重畫，不能拿代理解析度的再放大一次。
+    /// （原始那份是變形工具留下的 LayerPixelSource，.mpp 也會存。）
+    /// </summary>
+    [Fact]
+    public void 有原始高清來源時_輸出是從原圖重畫的()
+    {
+        const int originalSide = 512;
+        const int proxySide = 128; // 代理上縮成 1/4
+
+        // 細格紋：縮小之後細節一定糊掉，從原圖重畫則會回來
+        using var original = new SKBitmap(new SKImageInfo(originalSide, originalSide,
+            SKColorType.Bgra8888, SKAlphaType.Premul));
+        for (var y = 0; y < originalSide; y++)
+        for (var x = 0; x < originalSide; x++)
+        {
+            original.SetPixel(x, y, ((x / 4) + (y / 4)) % 2 == 0 ? SKColors.Black : SKColors.White);
+        }
+
+        using var doc = ImageCodec.CreateBlankDocument(proxySide, proxySide, SKColors.White);
+        var layer = new RasterLayer { Name = "圖" };
+        lock (doc.SyncRoot)
+        {
+            doc.Root.Add(layer);
+            // 代理畫布上的樣子：把原圖縮成 128×128 蓋進去
+            using var small = original.Resize(new SKImageInfo(proxySide, proxySide,
+                SKColorType.Bgra8888, SKAlphaType.Premul), SKFilterQuality.High);
+            using var pixmap = small.PeekPixels();
+            layer.Surface.CopyFrom(pixmap, SKPointI.Empty);
+
+            // 變形工具留下的原始高清來源：原圖 → 目前呈現（縮 1/4）
+            var scale = proxySide / (float)originalSide;
+            layer.SetPixelSource(new Layers.LayerPixelSource(
+                SKImage.FromBitmap(original),
+                new SKRectI(0, 0, originalSide, originalSide),
+                SKMatrix.CreateScale(scale, scale),
+                SKPointI.Empty,
+                SKRect.Create(0, 0, proxySide, proxySide),
+                0f,
+                new SKSize(originalSide, originalSide),
+                layer.Surface.Revision));
+        }
+        doc.SetOutputSize(originalSide, originalSide);
+
+        using var output = OutputRender.Render(doc);
+        Assert.Equal(originalSide, output.Width);
+
+        // 從原圖重畫 → 格紋邊緣銳利（純黑純白多）；從代理放大 → 幾乎都是灰的
+        using var bitmap = SKBitmap.FromImage(output);
+        var crisp = 0;
+        for (var y = 0; y < bitmap.Height; y += 2)
+        for (var x = 0; x < bitmap.Width; x += 2)
+        {
+            var p = bitmap.GetPixel(x, y);
+            if (p.Red < 30 || p.Red > 225) crisp++;
+        }
+        var sampled = (bitmap.Width / 2) * (bitmap.Height / 2);
+        Assert.True(crisp > sampled * 0.8,
+            $"只有 {crisp}/{sampled} 個像素是銳利的 —— 看起來是拿代理放大的，不是從原圖重畫");
+    }
+
+    /// <summary>
+    /// 端到端：一般的 4K 專案轉成快速模式（畫布縮到 1080p），輸出回 4K 時
+    /// 要從轉換前保留的原始像素重畫，而不是把縮過的再放大。
+    /// </summary>
+    [Fact]
+    public void 轉成快速模式之後_輸出仍然拿得回原本的細節()
+    {
+        const int side = 512;
+        using var session = new Tools.EditorSession(ImageCodec.CreateBlankDocument(side, side, SKColors.White));
+        var doc = session.Document;
+        var layer = Assert.IsType<RasterLayer>(doc.ActiveLayer);
+
+        // 細格紋：縮小之後糊掉，從原始重畫才會回來
+        lock (doc.SyncRoot)
+        {
+            for (var y = 0; y < side; y += 4)
+            for (var x = 0; x < side; x += 4)
+            {
+                var colour = ((x / 4) + (y / 4)) % 2 == 0 ? SKColors.Black : SKColors.White;
+                layer.Surface.Fill(new SKRectI(x, y, x + 4, y + 4), colour);
+            }
+        }
+
+        History.ImageCommands.ResizeImage(session, 128, 128, "轉成快速模式",
+            outputWidth: side, outputHeight: side);
+        Assert.True(doc.IsFastMode);
+        Assert.NotNull(layer.ValidPixelSource); // 原始像素留著了
+
+        using var output = OutputRender.Render(doc);
+        using var bitmap = SKBitmap.FromImage(output);
+        var crisp = 0;
+        for (var y = 0; y < bitmap.Height; y += 2)
+        for (var x = 0; x < bitmap.Width; x += 2)
+        {
+            var p = bitmap.GetPixel(x, y);
+            if (p.Red < 30 || p.Red > 225) crisp++;
+        }
+        var sampled = (bitmap.Width / 2) * (bitmap.Height / 2);
+        Assert.True(crisp > sampled * 0.8, $"只有 {crisp}/{sampled} 個像素銳利 —— 細節沒回來");
+    }
+
     [Fact]
     public void 複製出來的文件與原文件互不影響()
     {
