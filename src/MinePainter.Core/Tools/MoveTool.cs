@@ -168,20 +168,19 @@ public sealed class MoveTool : ITool
         // 4) 平移整個圖層／群組（群組 = 所有子孫點陣圖層的像素與文字物件一起動；單層只動像素）
         session.SelectedElement = null;
 
-        // 圖層內容框的出現／消失：點在內容框內＝點到這層的東西（框回來，可拖角縮放）；
-        // 點在框外＝點空白處，沒拖曳的話放開時就把框收掉（見 OnPointerUp）。
-        // 拖曳照舊平移整層 —— 只有「點一下沒拖」才算點空白處。
-        SKRect? contentFrame;
+        // 圖層內容框的出現／消失：點到這層真的有東西的地方＝框回來（可拖角縮放）；
+        // 點在空白處＝沒拖曳的話放開時就把框收掉（見 OnPointerUp）。
+        // 判準是實際像素而不是內容的外接矩形 —— L 形或散落的圖層，外接矩形裡大半是空的，
+        // 用矩形判會變成「明明是空白卻清不掉框」。
+        // 拖曳照舊平移整層，只有「點一下沒拖」才算點空白處。
+        bool onContent;
         lock (doc.SyncRoot)
         {
-            contentFrame = doc.ActiveLayer is GroupLayer contentGroup
-                ? HandleDragController.GroupContentFrame(contentGroup)
-                : HandleDragController.LayerContentFrame(session);
+            onContent = doc.ActiveLayer is { } node &&
+                        HandleDragController.HitsContent(node, e.DocPosition, HandleTolerance / 2f);
         }
-        if (contentFrame is { } cf && cf.Contains(e.DocPosition.X, e.DocPosition.Y))
-            session.LayerFrameDismissed = false;
-        else
-            _pressedOutsideSelection = true;
+        if (onContent) session.LayerFrameDismissed = false;
+        else _pressedOutsideSelection = true;
 
         _moveLayers.Clear();
         _startOffsets.Clear();

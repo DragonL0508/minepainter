@@ -23,6 +23,8 @@ public sealed class HandleDragController
         Selection,
         /// <summary>變形框 session（圖層/群組的移動縮放旋轉）。</summary>
         Transform,
+        /// <summary>沒有別的東西被框住時，框住的是整個圖層／群組內容（僅移動工具）。</summary>
+        LayerContent,
     }
 
     private readonly ElementDragHelper _elementDrag = new();
@@ -119,8 +121,12 @@ public sealed class HandleDragController
     }
 
     /// <summary>目前畫布上「被框住的東西」的外框；null = 沒有。</summary>
-    public static SKRect? GetFrame(EditorSession session)
+    public static SKRect? GetFrame(EditorSession session) => GetFrame(session, out _);
+
+    /// <summary>同上，另外回報框住的是什麼 —— 繪製端要靠它決定畫法（見 <see cref="EditorSession.SelectionHandlesKind"/>）。</summary>
+    public static SKRect? GetFrame(EditorSession session, out TargetKind kind)
     {
+        kind = TargetKind.None;
         // 選取工具拖曳中：畫面上只留正在框出來的那條線，把手框全部收掉，
         // 放開（選取區確定）才讓把手出現。
         if (session.SelectionGestureActive) return null;
@@ -129,10 +135,15 @@ public sealed class HandleDragController
         if (session.Transform is { } transform)
         {
             // 四角模式的框就是四角本身（SelectionHandlesQuad），外接矩形只給其他消費者用、不加效果外擴
+            kind = TargetKind.Transform;
             if (transform.Quad != null) return transform.FrameRect;
             return Inflated(transform.TargetRect, EffectPad(transform.Target));
         }
-        if (session.Floating is { } floating) return floating.TargetRect;
+        if (session.Floating is { } floating)
+        {
+            kind = TargetKind.Floating;
+            return floating.TargetRect;
+        }
 
         if (session.SelectedElement is { } sel &&
             session.Document.FindLayer(sel.LayerId) is RasterLayer layer &&
@@ -140,11 +151,14 @@ public sealed class HandleDragController
             layer.FindElement(sel.ElementId) is { } element)
         {
             var frame = ElementFrame(layer, element);
-            return frame.IsEmpty ? null : frame;
+            if (frame.IsEmpty) return null;
+            kind = TargetKind.Element;
+            return frame;
         }
 
         if (session.Selection is { IsEmpty: false } selection)
         {
+            kind = TargetKind.Selection;
             var b = selection.Bounds;
             return new SKRect(b.Left, b.Top, b.Right, b.Bottom);
         }
@@ -156,11 +170,70 @@ public sealed class HandleDragController
         // 下一次點到圖層內容或換圖層會重新框起來（見 EditorSession.LayerFrameDismissed）。
         if (session.ActiveTool == session.Move && !session.LayerFrameDismissed)
         {
-            return session.Document.ActiveLayer is GroupLayer group
+            var content = session.Document.ActiveLayer is GroupLayer group
                 ? GroupContentFrame(group)
                 : LayerContentFrame(session);
+            if (content != null) kind = TargetKind.LayerContent;
+            return content;
         }
         return null;
+    }
+
+    /// <summary>
+    /// 這一點上有沒有「這個圖層（或群組）的內容」：像素不透明（含外框／陰影等效果畫出來的），
+    /// 或落在某個物件的框裡。用外接矩形判斷會把 L 形、散落內容之間的空白也算成內容
+    /// —— 使用者在明顯空無一物的地方點下去卻清不掉框，就是那樣來的。
+    /// <paramref name="tolerance"/> 是允許的誤差半徑（doc px），細線與小點才抓得到。
+    /// 須在 Document.SyncRoot 內呼叫。
+    /// </summary>
+    public static bool HitsContent(LayerNode node, SKPoint p, float tolerance)
+    {
+        switch (node)
+        {
+            case RasterLayer raster:
+                return HitsRaster(raster, p, tolerance);
+            case GroupLayer group:
+                foreach (var child in group.Children)
+                {
+                    if (child.IsVisible && HitsContent(child, p, tolerance)) return true;
+                }
+                return false;
+            default:
+                return false;
+        }
+    }
+
+    private static bool HitsRaster(RasterLayer layer, SKPoint p, float tolerance)
+    {
+        foreach (var el in layer.Elements)
+        {
+            var b = el.FrameBounds;
+            if (b.IsEmpty) continue;
+            b.Inflate(tolerance, tolerance);
+            if (b.Contains(p.X, p.Y)) return true;
+        }
+
+        // 中心＋一圈取樣點：只測單一像素的話，細線在縮小檢視下幾乎點不到
+        if (AlphaAt(layer, p.X, p.Y)) return true;
+        if (tolerance < 0.5f) return false;
+        for (var i = 0; i < 8; i++)
+        {
+            var a = i * MathF.PI / 4f;
+            if (AlphaAt(layer, p.X + MathF.Cos(a) * tolerance, p.Y + MathF.Sin(a) * tolerance)) return true;
+        }
+        return false;
+    }
+
+    private static bool AlphaAt(RasterLayer layer, float docX, float docY)
+    {
+        var lx = (int)MathF.Floor(docX) - layer.Offset.X;
+        var ly = (int)MathF.Floor(docY) - layer.Offset.Y;
+        var idx = Tiles.TileIndex.FromPixel(lx, ly);
+        var tile = layer.DisplaySurface.GetTileForRead(idx); // 效果算好的那份：陰影／外框也算內容
+        if (tile == null) return false;
+        var rect = idx.ToPixelRect();
+        using var pixmap = tile.AsPixmap();
+        return pixmap.GetPixelColor(lx - rect.Left, ly - rect.Top).Alpha > 0;
     }
 
     /// <summary>群組內容外框 = 所有子孫點陣圖層的像素內容 ∪ 文字物件。須在 SyncRoot 內呼叫。</summary>

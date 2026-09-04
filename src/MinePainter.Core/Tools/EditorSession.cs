@@ -126,6 +126,13 @@ public sealed class EditorSession : IDisposable
     /// <summary>彎曲模式（扭曲）的把手框：4×4 控制點網格（render thread 直接讀）。</summary>
     public WarpMesh? SelectionHandlesWarp { get; private set; }
 
+    /// <summary>
+    /// 把手框現在框住的是什麼（與 <see cref="SelectionHandles"/> 同一次推導）。
+    /// 繪製端靠它決定畫法：框住的是像素選取時，螞蟻線已經圈出邊界了，
+    /// 再描一圈藍框只會變成同一條線畫兩次。
+    /// </summary>
+    public HandleDragController.TargetKind SelectionHandlesKind { get; private set; }
+
     private bool _layerFrameDismissed;
 
     /// <summary>
@@ -200,7 +207,8 @@ public sealed class EditorSession : IDisposable
     {
         lock (Document.SyncRoot)
         {
-            var frame = HandleDragController.GetFrame(this);
+            var frame = HandleDragController.GetFrame(this, out var frameKind);
+            SelectionHandlesKind = frameKind;
             // 物件手勢覆疊中：把手跟著覆疊圖的變換走（原件還在原位、還沒改）
             var overlayRotation = 0f;
             if (frame is { } f && _elementOverlay is { } overlay && SelectedElement?.ElementId == overlay.ElementId)
@@ -1656,9 +1664,8 @@ public sealed class EditorSession : IDisposable
             _activeTool = value;
             // 手勢旗標不跨工具（拖到一半被切走時放開事件收不到，框會永遠藏著）
             if (changed) _selectionGestureActive = false;
-            // 切到移動工具＝明示「我要動這層的東西」，圖層內容框重新框一次
-            // （上一輪點空白處把它收掉的狀態不留到這一輪）
-            if (changed && ReferenceEquals(value, Move)) _layerFrameDismissed = false;
+            // 「收掉的框」跨工具維持收著：使用者已經明示不要那個框了，
+            // 去畫個筆刷再切回來又冒出來只會覺得自己白清了。要它回來就點一下圖層內容。
             RefreshSelectionHandles(); // 圖層內容框只在移動工具下顯示，切工具要重算
         }
     }

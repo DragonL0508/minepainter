@@ -542,7 +542,10 @@ public sealed class CanvasDrawOperation : ICustomDrawOperation
                 Color = new SKColor(0x2A, 0x9D, 0xF4),
                 IsAntialias = true,
             };
-            canvas.DrawRect(hr, frame);
+            // 框住的是像素選取時不描這圈藍線：螞蟻線已經圈出邊界了，矩形選取下兩者
+            // 位置完全重合，描了只是同一條線畫兩次（看起來像沒對齊的雙線）。只留把手。
+            if (_session.SelectionHandlesKind != Core.Tools.HandleDragController.TargetKind.Selection)
+                canvas.DrawRect(hr, frame);
 
             using var handleFill = new SKPaint { Color = SKColors.White, IsAntialias = true };
             using var handleStroke = new SKPaint

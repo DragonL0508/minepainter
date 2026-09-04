@@ -41,10 +41,19 @@ public sealed class CanvasView : Control
     // ---- 筆刷游標（畫筆型工具畫成筆刷實際大小的虛線圈）----
     private Point _hoverView;
     private bool _pointerInside;
-    private bool _brushCursorShown;
+    private StandardCursorType? _appliedCursor;
+
+    /// <summary>指標下的把手索引（<see cref="MoveTool.HandlePoints"/> 的順序）；-1＝沒有、8＝四角／彎曲模式的控制點。</summary>
+    private int _hoverHandle = -1;
 
     /// <summary>圈小於這個螢幕半徑就看不出是圈了，改回十字游標。</summary>
     private const double MinBrushCursorRadius = 3.5;
+
+    /// <summary>
+    /// 把手的命中半徑（螢幕像素）。把手畫出來是 8px 見方，命中範圍給得比它大一圈才好抓 ——
+    /// 拖角是高頻操作，抓不到的代價（不小心平移整層、或重畫一個選取範圍）比誤抓大。
+    /// </summary>
+    private const double HandleHitRadius = 13;
 
     // 黑白交錯的虛線：任何底色上都看得見（純白圈在亮圖上、純黑圈在暗圖上都會消失）
     private static readonly Pen BrushCursorPenDark =
@@ -59,6 +68,9 @@ public sealed class CanvasView : Control
 
     /// <summary>十字臂長（螢幕像素）；圈太小時再縮短，不要戳出圈外。</summary>
     private const double BrushCenterArm = 4;
+
+    /// <summary><see cref="HandleHitRadius"/> 換算成 doc 像素（命中測試都在 doc 座標做）。</summary>
+    private float DocHandleTolerance => (float)(HandleHitRadius / Math.Max(0.01, _viewport.Scale));
     private bool _toolActive;
     private Point _lastPointerView;
     private bool _animationRunning;
@@ -140,8 +152,7 @@ public sealed class CanvasView : Control
     public CanvasView()
     {
         ClipToBounds = true;
-        Cursor = new Cursor(StandardCursorType.Cross);
-        UpdateBrushCursor();
+        ApplyCursor();
 
         // ---- dirty 驅動重繪的變動來源（見 StartAnimationLoop）----
         StateChanged += RequestRedraw;
@@ -380,7 +391,7 @@ public sealed class CanvasView : Control
             _session?.CollectOverlayGhost(); // 落地後的殘影：合成器追上就收掉
             StepViewportAnimation();
             StepNudgeAnimation(dt);
-            UpdateBrushCursor();
+            ApplyCursor();
             FrameTick?.Invoke();
 
             var nowMs = _animClock.ElapsedMilliseconds;
@@ -564,7 +575,7 @@ public sealed class CanvasView : Control
         {
             // 讓工具能以螢幕距離判定「算不算拖曳」，手感不受縮放影響
             _session.Move.ViewScale = _viewport.Scale;
-            _session.Move.HandleTolerance = (float)(9 / Math.Max(0.01, _viewport.Scale));
+            _session.Move.HandleTolerance = (float)(HandleHitRadius / Math.Max(0.01, _viewport.Scale));
             _session.SnapTolerance = (float)(8 / Math.Max(0.01, _viewport.Scale)); // 對齊吸附 ≈ 螢幕 8px
         }
         var point = e.GetCurrentPoint(this);
@@ -573,7 +584,7 @@ public sealed class CanvasView : Control
         if (point.Properties.IsMiddleButtonPressed || (_spaceDown && point.Properties.IsLeftButtonPressed))
         {
             _panning = true;
-            Cursor = new Cursor(StandardCursorType.SizeAll);
+            ApplyCursor();
         }
         else if (point.Properties.IsRightButtonPressed && _session != null &&
                  (_session.ActiveTool == _session.Move || _session.ActiveTool == _session.Text))
@@ -619,8 +630,7 @@ public sealed class CanvasView : Control
                               _session.ActiveTool == _session.EllipseSelect ||
                               _session.ActiveTool == _session.Lasso ||
                               _session.ActiveTool == _session.Wand;
-            if (handleTools && _handles.TryBegin(_session, docPoint,
-                    tolerance: (float)(9 / Math.Max(0.01, _viewport.Scale))))
+            if (handleTools && _handles.TryBegin(_session, docPoint, tolerance: DocHandleTolerance))
             {
                 _handleDragging = true;
             }
@@ -738,10 +748,59 @@ public sealed class CanvasView : Control
             StateChanged?.Invoke();
         }
         _panning = false;
-        _brushCursorShown = false; // 平移把游標換成 SizeAll 了，強制重新決定一次
-        Cursor = new Cursor(StandardCursorType.Cross);
-        UpdateBrushCursor();
+        ApplyCursor();
         e.Pointer.Capture(null);
+    }
+
+    /// <summary>
+    /// 指標捕獲被系統收走（alt-tab、彈出視窗搶焦點、觸控取消）：放開事件不會來，
+    /// 進行中的手勢要在這裡收尾。不收的話工具會停在「拖曳中」——選取工具那個狀態下
+    /// 把手框是藏起來的（EditorSession.SelectionGestureActive），畫面上會憑空少一個框。
+    /// </summary>
+    protected override void OnPointerCaptureLost(PointerCaptureLostEventArgs e)
+    {
+        base.OnPointerCaptureLost(e);
+        EndActiveGesture();
+    }
+
+    /// <summary>把進行中的手勢結束掉（用最後一次已知的指標位置）。</summary>
+    private void EndActiveGesture()
+    {
+        var session = _session;
+        if (session == null) return;
+
+        if (_elementRotating)
+        {
+            _elementRotating = false;
+            _elementRotate.End(session);
+        }
+        else if (_transformRotating)
+        {
+            _transformRotating = false;
+            session.Move.EndRotate(session);
+        }
+        else if (_handleDragging)
+        {
+            _handleDragging = false;
+            _handles.End(session);
+        }
+        else if (_toolActive)
+        {
+            _toolActive = false;
+            var doc = _viewport.ViewToDoc(_lastPointerView);
+            session.ActiveTool.OnPointerUp(new ToolPointerEvent(
+                new SKPoint((float)doc.X, (float)doc.Y), 1f,
+                ToModifiers(_currentModifiers), _currentClickCount, (float)_viewport.Scale), session);
+        }
+        else
+        {
+            _panning = false;
+            return;
+        }
+
+        _panning = false;
+        session.SelectionGestureActive = false; // 保險：工具沒收乾淨也不讓框永遠藏著
+        StateChanged?.Invoke();
     }
 
     protected override void OnPointerEntered(PointerEventArgs e)
@@ -757,15 +816,68 @@ public sealed class CanvasView : Control
         _pointerInside = false;
     }
 
-    /// <summary>畫筆型工具且圈夠大時藏掉系統游標，只留我們畫的圈。</summary>
-    private void UpdateBrushCursor()
+    /// <summary>
+    /// 決定目前該用哪個游標（每幀呼叫，形狀沒變就不動）。優先序：
+    /// 平移 → 指到把手（依把手位置給對應的縮放游標）→ 畫筆型工具藏游標只留圈 → 十字。
+    /// </summary>
+    private void ApplyCursor()
     {
-        if (_panning) return; // 平移中的 SizeAll 不要被蓋掉
-        var wanted = BrushCursorRadius() != null;
-        if (wanted == _brushCursorShown) return;
-        _brushCursorShown = wanted;
-        Cursor = new Cursor(wanted ? StandardCursorType.None : StandardCursorType.Cross);
+        if (!_panning) _hoverHandle = HoveredHandle();
+        var wanted =
+            _panning ? StandardCursorType.SizeAll
+            : _hoverHandle >= 0 ? CursorForHandle(_hoverHandle)
+            : BrushCursorRadius() != null ? StandardCursorType.None
+            : StandardCursorType.Cross;
+        if (_appliedCursor == wanted) return;
+        _appliedCursor = wanted;
+        Cursor = new Cursor(wanted);
     }
+
+    /// <summary>四角／彎曲模式的控制點沒有方向可言，一律給 SizeAll。</summary>
+    private const int MeshHandle = 8;
+
+    /// <summary>
+    /// 指標下的把手；-1＝沒有。只有拖得動把手的工具才回報（移動＋四個選取工具，
+    /// 與 OnPointerPressed 的攔截條件同一份），繪畫工具下指到框上不該換游標。
+    /// </summary>
+    private int HoveredHandle()
+    {
+        var session = _session;
+        if (session == null || !_pointerInside || _handleDragging || _toolActive ||
+            _elementRotating || _transformRotating) return -1;
+
+        var tool = session.ActiveTool;
+        if (tool != session.Move && tool != session.RectSelect && tool != session.EllipseSelect &&
+            tool != session.Lasso && tool != session.Wand) return -1;
+
+        var view = _viewport.ViewToDoc(_hoverView);
+        var p = new SKPoint((float)view.X, (float)view.Y);
+        var tolerance = DocHandleTolerance;
+
+        if (session.SelectionHandlesWarp is { } warp)
+            return warp.HitPoint(p, tolerance) >= 0 ? MeshHandle : -1;
+        if (session.SelectionHandlesQuad is { } quad)
+            return QuadGeometry.HitHandle(quad, p, tolerance, includeEdges: false) >= 0 ? MeshHandle : -1;
+        if (session.SelectionHandles is not { } rect) return -1;
+
+        // 框可能已旋轉：把指標反轉回未旋轉空間再測（與 HandleDragController.TryBegin 同一套）
+        var rotation = session.SelectionHandlesRotation;
+        var local = Math.Abs(rotation) > 0.01f
+            ? MoveTool.RotatePoint(p, new SKPoint(rect.MidX, rect.MidY), -rotation)
+            : p;
+        return MoveTool.HitCorner(rect, local, tolerance);
+    }
+
+    private static StandardCursorType CursorForHandle(int handle) => handle switch
+    {
+        0 => StandardCursorType.TopLeftCorner,
+        1 => StandardCursorType.TopRightCorner,
+        2 => StandardCursorType.BottomRightCorner,
+        3 => StandardCursorType.BottomLeftCorner,
+        4 or 6 => StandardCursorType.SizeNorthSouth,
+        5 or 7 => StandardCursorType.SizeWestEast,
+        _ => StandardCursorType.SizeAll,
+    };
 
     /// <summary>目前該畫的圈的螢幕半徑；不該畫時回 null。</summary>
     private double? BrushCursorRadius()
