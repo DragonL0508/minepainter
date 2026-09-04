@@ -29,33 +29,116 @@ public sealed unsafe class GpuLayerRenderer : IDisposable
     {
         public readonly Dictionary<TileIndex, (long Version, SKImage Image)> Tiles = new();
 
+        /// <summary>縮小檢視時改貼的降取樣貼圖（key＝階數＋區塊座標；見 <see cref="LodLevelFor"/>）。</summary>
+        public readonly Dictionary<(int Level, int X, int Y), LodImage> Lods = new();
+
         public void Dispose()
         {
             foreach (var (_, image) in Tiles.Values) image.Dispose();
             Tiles.Clear();
+            foreach (var lod in Lods.Values) lod.Image.Dispose();
+            Lods.Clear();
         }
     }
+
+    /// <summary>一張 LOD 貼圖，連同「它是拿哪一份來源建的」。</summary>
+    private sealed class LodImage
+    {
+        public long Version;    // 來源那幾格的 Tile.Version 混出來的數（見 LodVersion）
+        public SKImage Image = null!;
+        public long Used;       // 最後用到的幀序（LRU／過期回收用）
+    }
+
+    /// <summary>
+    /// LOD 最高做到第幾階。第 3 階一張貼圖已經涵蓋 8×8 格（2048×2048 文件像素），
+    /// 再往下一張貼圖要讀 256 格來源才建得起來，重建成本反而蓋過省下來的 draw call。
+    /// </summary>
+    public const int MaxLodLevel = 3;
+
+    /// <summary>
+    /// 每個圖層的 LOD 貼圖張數上限。一張 256KB；一個區塊在螢幕上恆為 128～256px
+    /// （選階的必然結果，見 <see cref="LodLevelFor"/>），所以一個 4K 視窗的可見範圍
+    /// 也在這個數以內 —— 上限只是「別無限長大」的保險，正常情況碰不到。
+    /// </summary>
+    private const int MaxLodImages = 256;
+
+    /// <summary>連續幾幀沒用到就丟掉：一放大或平移離開，那些區塊立刻失去意義，沒必要佔著 GPU 記憶體。</summary>
+    private const int LodKeepFrames = 3;
 
     private readonly Dictionary<Guid, LayerImages> _images = new();
     private readonly RotatedTextCache _rotatedText = new();
     private readonly Dictionary<Guid, (Core.Adjustments.IAdjustment Adjustment, SKColorFilter Filter)> _adjustments = new();
 
+    /// <summary>這一幀要用第幾階 LOD（0＝照舊逐格畫全解析度）。</summary>
+    private int _lodLevel;
+
+    /// <summary>這一幀的 GPU context（建 LOD 貼圖的離屏 surface 用；null＝退回 raster surface）。</summary>
+    private GRContext? _gpuContext;
+
+    private long _frame;
+    private readonly List<(SKImage Image, float X, float Y)> _lodBatch = new();
+    private readonly List<(int Level, int X, int Y)> _lodEvict = new();
+
     /// <summary>診斷：上一幀畫了幾格。</summary>
     public int LastTiles { get; private set; }
+
+    /// <summary>診斷／測試：上一幀貼了幾張 LOD 貼圖（一張抵 2^L×2^L 格）。</summary>
+    public int LastLodTiles { get; private set; }
 
     /// <summary>診斷／測試：上一幀有幾個文字物件是貼快照畫的（見 <see cref="RotatedTextCache"/>）。</summary>
     public int LastCachedTextDraws { get; private set; }
 
     /// <summary>
+    /// 依檢視縮放比選 LOD 階：scale ≤ 1/2^L 就用第 L 階，最高 <see cref="MaxLodLevel"/> 階。
+    ///
+    /// 選出來的階數保證「貼圖比目的地大一點點」（texel:螢幕像素落在 0.5～1 之間），
+    /// 也就是永遠是降取樣、不會把低解析度的東西放大回去糊掉 —— 縮小檢視原本就該是這個方向。
+    /// </summary>
+    public static int LodLevelFor(double scale)
+    {
+        if (!double.IsFinite(scale) || scale <= 0) return 0; // 算不出縮放比就照舊逐格畫
+        var level = 0;
+        while (level < MaxLodLevel && scale <= 1.0 / (1 << (level + 1))) level++;
+        return level;
+    }
+
+    /// <summary>
+    /// 一張 LOD 貼圖的「來源版本」：把它涵蓋的每一格 <see cref="Tile.Version"/> 依固定順序混成一個數。
+    ///
+    /// 缺的格子算 0 而不是跳過 —— 不然「某格被畫出來／被擦掉整格」會混出同一個數，
+    /// 貼圖就停在上一份（這正是逐格路徑當年踩過的坑，見 Tile.Version 的註解）。
+    /// </summary>
+    public static long LodVersion(TileSurface surface, int level, int blockX, int blockY)
+    {
+        var span = 1 << level;
+        var h = unchecked((long)14695981039346656037UL); // FNV-1a
+        for (var ty = 0; ty < span; ty++)
+        for (var tx = 0; tx < span; tx++)
+        {
+            var tile = surface.GetTileForRead(new TileIndex(blockX * span + tx, blockY * span + ty));
+            h = unchecked((h ^ (tile?.Version ?? 0)) * 1099511628211L);
+        }
+        return h;
+    }
+
+    /// <summary>
     /// 試著畫。回傳 false＝這份文件目前的狀態這條路處理不了，呼叫端請走原本的 tile 路徑。
     /// 必須在 render thread、Document.SyncRoot 內呼叫。
     /// </summary>
-    public bool TryDraw(SKCanvas canvas, EditorSession session, SKRectI visibleDoc)
+    /// <param name="viewScale">文件像素→螢幕像素的實際比例（含顯示器 DPI 縮放），用來選 LOD 階。</param>
+    /// <param name="gpuContext">上屏用的 GPU context；給了就在 GPU 上建 LOD 貼圖，null 則退回 raster。</param>
+    public bool TryDraw(SKCanvas canvas, EditorSession session, SKRectI visibleDoc,
+        double viewScale = 1.0, GRContext? gpuContext = null)
     {
         if (!CanHandle(session)) return false;
         LastTiles = 0;
+        LastLodTiles = 0;
         LastCachedTextDraws = 0;
+        _frame++;
+        _lodLevel = LodLevelFor(viewScale);
+        _gpuContext = gpuContext;
         DrawGroup(canvas, session, session.Document.Root, visibleDoc);
+        SweepLods();
         return true;
     }
 
@@ -312,6 +395,9 @@ public sealed unsafe class GpuLayerRenderer : IDisposable
             visibleDoc.Left - offset.X, visibleDoc.Top - offset.Y,
             visibleDoc.Right - offset.X, visibleDoc.Bottom - offset.Y);
 
+        // 縮小檢視：改貼涵蓋一整塊的降取樣貼圖（見 DrawLod）。建不出來就照舊逐格畫。
+        if (_lodLevel > 0 && DrawLod(canvas, cache, surface, offset, layerRect, opacity, blend)) return;
+
         using var paint = opacity >= 1f && blend == BlendMode.Normal
             ? null
             : new SKPaint
@@ -329,6 +415,167 @@ public sealed unsafe class GpuLayerRenderer : IDisposable
             var rect = idx.ToPixelRect();
             canvas.DrawImage(image, rect.Left + offset.X, rect.Top + offset.Y, paint);
             LastTiles++;
+        }
+    }
+
+    /// <summary>
+    /// 縮小檢視時的貼法（GEGL/GIMP 的 mipmap 金字塔在這裡的對應物）：
+    /// 一張 256×256 的貼圖涵蓋 2^L×2^L 格，也就是那塊區域降到 1/2^L。
+    ///
+    /// 為什麼要這樣：25% 檢視下每層的可見格數是 100% 的 16 倍，圖層一多一幀就是幾千次 draw call；
+    /// 而且逐格貼上去是最近鄰取樣，縮小時鋸齒很明顯。改貼 LOD 之後 draw call 與縮放比無關
+    /// （一個區塊在螢幕上恆為 128～256px），降取樣也在建貼圖時用雙線性＋mipmap 做好。
+    ///
+    /// 回傳 false＝這一輪有東西建不出來，呼叫端請照舊逐格畫。**還沒畫任何東西才回 false**：
+    /// 所有貼圖都備齊了才開始貼，不然半路退回會把同一塊畫兩次。
+    /// </summary>
+    private bool DrawLod(SKCanvas canvas, LayerImages cache, TileSurface surface, SKPointI offset,
+        SKRectI layerRect, float opacity, BlendMode blend)
+    {
+        if (layerRect.Width <= 0 || layerRect.Height <= 0) return false;
+
+        var level = _lodLevel;
+        var span = 1 << level;              // 一張貼圖涵蓋幾格（每邊）
+        var blockPx = span * Tile.Size;     // 對應的文件像素邊長
+
+        var bx0 = FloorDiv(layerRect.Left, blockPx);
+        var by0 = FloorDiv(layerRect.Top, blockPx);
+        var bx1 = FloorDiv(layerRect.Right - 1, blockPx);
+        var by1 = FloorDiv(layerRect.Bottom - 1, blockPx);
+
+        _lodBatch.Clear();
+        for (var by = by0; by <= by1; by++)
+        for (var bx = bx0; bx <= bx1; bx++)
+        {
+            var version = LodVersion(surface, level, bx, by);
+            var key = (level, bx, by);
+            if (cache.Lods.TryGetValue(key, out var lod) && lod.Version == version)
+            {
+                lod.Used = _frame;
+            }
+            else if (IsBlockEmpty(surface, level, bx, by))
+            {
+                // 整塊沒東西：不必建也不必畫（舊的那張留著也沒用了）
+                if (lod != null) { lod.Image.Dispose(); cache.Lods.Remove(key); }
+                continue;
+            }
+            else
+            {
+                var image = BuildLod(surface, level, bx, by);
+                if (image == null) return false; // 建不起來 → 整份退回逐格（此時一筆都還沒畫）
+                if (lod != null) { lod.Image.Dispose(); cache.Lods.Remove(key); }
+                if (!StoreLod(cache, key, new LodImage { Version = version, Image = image, Used = _frame }))
+                {
+                    image.Dispose();
+                    return false;
+                }
+            }
+            _lodBatch.Add((cache.Lods[key].Image, bx * blockPx + offset.X, by * blockPx + offset.Y));
+        }
+
+        using var paint = new SKPaint
+        {
+            Color = new SKColor(255, 255, 255, (byte)(opacity * 255)),
+            BlendMode = blend.ToSkia(),
+            // 貼上去大約是 1:1（0.5～1 倍），縮放比不是整倍時靠雙線性把鋸齒吃掉
+            FilterQuality = SKFilterQuality.Low,
+        };
+        foreach (var (image, x, y) in _lodBatch)
+        {
+            canvas.DrawImage(image, SKRect.Create(x, y, blockPx, blockPx), paint);
+            LastLodTiles++;
+        }
+        return true;
+    }
+
+    private static int FloorDiv(int a, int b) => (int)Math.Floor(a / (double)b);
+
+    private static bool IsBlockEmpty(TileSurface surface, int level, int blockX, int blockY)
+    {
+        var span = 1 << level;
+        for (var ty = 0; ty < span; ty++)
+        for (var tx = 0; tx < span; tx++)
+        {
+            if (surface.GetTileForRead(new TileIndex(blockX * span + tx, blockY * span + ty)) != null)
+                return false;
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// 把一塊區域的來源格以 1/2^L 畫進離屏 surface 再 Snapshot 成貼圖。
+    /// 拿不到 GPU context 就用 raster surface —— 慢一點，但畫面照樣正確。
+    /// </summary>
+    private SKImage? BuildLod(TileSurface surface, int level, int blockX, int blockY)
+    {
+        var span = 1 << level;
+        var info = new SKImageInfo(Tile.Size, Tile.Size, SKColorType.Bgra8888, SKAlphaType.Premul);
+        using var target = _gpuContext != null
+            ? SKSurface.Create(_gpuContext, true, info)
+            : SKSurface.Create(info);
+        if (target == null) return null;
+
+        var c = target.Canvas;
+        c.Clear(SKColors.Transparent);
+        c.Scale(1f / span);
+        // Medium＝雙線性＋mipmap：降到 1/8 時只用雙線性會跳著取樣、細線閃爍
+        using var paint = new SKPaint { FilterQuality = SKFilterQuality.Medium };
+        for (var ty = 0; ty < span; ty++)
+        for (var tx = 0; tx < span; tx++)
+        {
+            var tile = surface.GetTileForRead(new TileIndex(blockX * span + tx, blockY * span + ty));
+            if (tile == null) continue;
+            using var pixmap = tile.AsPixmap();
+            // 複製一份：tile 的記憶體會被繼續改寫（這張是一次性的，畫完就丟）
+            using var image = SKImage.FromPixelCopy(pixmap);
+            if (image == null) return null;
+            c.DrawImage(image, tx * Tile.Size, ty * Tile.Size, paint);
+        }
+        c.Flush();
+        return target.Snapshot();
+    }
+
+    /// <summary>
+    /// 存進快取；滿了就讓最久沒用到的那張出局。回傳 false＝擠不出位子（正常情況碰不到，見
+    /// <see cref="MaxLodImages"/>），呼叫端請退回逐格 —— **這一幀已經用到的那幾張絕不能動**，
+    /// 它們的貼圖此刻正排在待畫清單裡。
+    /// </summary>
+    private bool StoreLod(LayerImages cache, (int Level, int X, int Y) key, LodImage lod)
+    {
+        if (cache.Lods.Count >= MaxLodImages)
+        {
+            var oldest = key;
+            var oldestUsed = _frame; // 這一幀用過的（Used == _frame）不列入候選
+            foreach (var (k, v) in cache.Lods)
+            {
+                if (v.Used >= oldestUsed) continue;
+                oldestUsed = v.Used;
+                oldest = k;
+            }
+            if (oldestUsed >= _frame) return false;
+            cache.Lods[oldest].Image.Dispose();
+            cache.Lods.Remove(oldest);
+        }
+        cache.Lods[key] = lod;
+        return true;
+    }
+
+    /// <summary>這一幀沒用到、而且已經連續 <see cref="LodKeepFrames"/> 幀沒用到的 LOD 貼圖就收掉。</summary>
+    private void SweepLods()
+    {
+        foreach (var cache in _images.Values)
+        {
+            if (cache.Lods.Count == 0) continue;
+            _lodEvict.Clear();
+            foreach (var (key, lod) in cache.Lods)
+            {
+                if (_frame - lod.Used > LodKeepFrames) _lodEvict.Add(key);
+            }
+            foreach (var key in _lodEvict)
+            {
+                cache.Lods[key].Image.Dispose();
+                cache.Lods.Remove(key);
+            }
         }
     }
 
