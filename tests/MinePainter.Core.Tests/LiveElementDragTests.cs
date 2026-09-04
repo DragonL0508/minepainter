@@ -95,4 +95,23 @@ public class LiveElementDragTests
         Assert.Null(session.Ghost);          // 殘影是拿來蓋合成器的延遲的，即時渲染不需要
         Assert.Null(layer.HiddenElementId);  // 原件解除隱藏，畫面上馬上就是它
     }
+
+    [Fact]
+    public void 效果進不了GPU時要沿用效果快取而不是整個重算()
+    {
+        // 快取蓋得到物件時就該直接裁一塊用。覆疊範圍比效果邊界多留一圈餘裕（重取樣用），
+        // 判斷「蓋不蓋得到」時要把那一圈還回去 —— 否則永遠不成立，每次按下去都整個重算
+        // （4K 帶效果的大字 200–350 ms，就是「點下去卡死」）。
+        var (session, layer, element) = NewText(
+            LayerEffect.Create(new ObjectGradientEffect()),                 // 翻不成 GPU 濾鏡
+            LayerEffect.Create(new ObjectOutlineEffect { Width = 6 }));
+        LayerEffectRenderer.RenderAllNow(session.Document);
+        Assert.True(layer.FxCache.Rendered);
+
+        session.LiveElementRendering = true; // 即使開著，這層也只能走快照那條路
+        lock (session.Document.SyncRoot) session.BeginElementOverlayLocked(layer, element);
+
+        Assert.NotNull(session.ElementOverlay?.Image);
+        Assert.True(session.OverlayReusedCache);
+    }
 }

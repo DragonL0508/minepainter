@@ -593,6 +593,12 @@ public sealed class EditorSession : IDisposable
     public ElementDragOverlay? ElementOverlay => _elementOverlay;
 
     /// <summary>開始物件拖曳覆疊（在 Document.SyncRoot 內呼叫）。</summary>
+    /// <summary>覆疊範圍在效果邊界之外多留的一圈（重取樣的邊緣餘裕）。</summary>
+    private const int Slack = 1;
+
+    /// <summary>診斷／測試用：上一次的物件覆疊有沒有沿用效果快取（沒沿用＝整個物件重算一遍）。</summary>
+    internal bool OverlayReusedCache { get; private set; }
+
     public unsafe void BeginElementOverlayLocked(RasterLayer layer, Vectors.VectorElement element)
     {
         EndElementOverlayLocked(discardGhost: true);
@@ -601,7 +607,7 @@ public sealed class EditorSession : IDisposable
 
         var withEffects = RenderEffectsWhileDragging && layer.HasActiveEffects;
         var margin = withEffects ? LayerEffectRenderer.TotalMargin(layer) : 0;
-        bounds.Inflate(margin + 1, margin + 1);
+        bounds.Inflate(margin + Slack, margin + Slack);
         if (bounds.Width <= 0 || bounds.Height <= 0) return;
 
         // GPU 路徑接得住這個物件（效果翻得成 Skia 濾鏡，或根本沒效果）：不做快照，
@@ -615,11 +621,13 @@ public sealed class EditorSession : IDisposable
 
         SKImage? image = null;
         var scale = OverlayScale(bounds);
+        OverlayReusedCache = false;
         if (withEffects && scale >= 1f)
         {
             // 帶效果拖曳：物件單獨跑一遍這層的效果堆疊（外框／陰影／漸層跟著走）。
             // 快取剛好蓋得到就直接裁一塊（省下重跑一遍）。
             var cached = TryReadEffectCache(layer, element, bounds);
+            OverlayReusedCache = cached != null;
             image = ImageFrom(cached ?? LayerEffectRenderer.RenderElementPreview(layer, element, out _), bounds);
         }
 
@@ -707,7 +715,13 @@ public sealed class EditorSession : IDisposable
         // 快取只算「畫布看得到的那塊」時（見 LayerEffectRenderer 的裁切）蓋不到整個物件，
         // 直接裁出來的話拖曳中把畫布外那段拉進畫面會是一片空白 —— 那種情況乖乖整份現算。
         // 直接問「這塊在不在上次算的範圍裡」，不靠旗標推論。
-        if (layer.FxCache.LastClipped || !layer.FxCache.LastRegion.Contains(layerRect)) return null;
+        // 要的範圍比效果邊界多留了一圈安全餘裕（見 BeginElementOverlayLocked 的 margin + 1）。
+        // 那一圈本來就是空的，卻會讓「快取蓋得到嗎」永遠不成立 —— 於是每次按下去都整個重算一遍
+        // （4K 帶漸層／外框／光暈的大字實測 200–350 ms，就是使用者說的「點下去卡死」）。
+        // 判斷時把餘裕還回去：真正要問的是「效果算過的那塊蓋不蓋得到物件」。
+        var wanted = layerRect;
+        wanted.Inflate(-Slack, -Slack);
+        if (layer.FxCache.LastClipped || !layer.FxCache.LastRegion.Contains(wanted)) return null;
 
         return LayerEffectRenderer.ReadPixels(layer.FxCache.Surface, layerRect);
     }
