@@ -6,6 +6,8 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
     <ApplicationIcon>Assets\icon.ico</ApplicationIcon>
+    <!-- Win32 版本資源的 FileDescription（工作管理員與 SmartScreen 顯示的就是這個名字） -->
+    <AssemblyTitle>MinePainter 影像編輯器</AssemblyTitle>
   </PropertyGroup>
 
   <ItemGroup>

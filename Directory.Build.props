@@ -9,4 +9,17 @@
     <!-- Microsoft.AI.DirectML 只在明確的 x64 目標才會把 DirectML.dll 複製到輸出（AnyCPU 不會），AI 去背的 GPU 選項才用得到 -->
     <PlatformTarget>x64</PlatformTarget>
   </PropertyGroup>
+
+  <!--
+    發行者資訊：會寫進成品的 Win32 版本資源（檔案內容 → 詳細資料、工作管理員、
+    SmartScreen 的「不明發行者」對話框都讀這裡）。沒填的話全部退回組件名稱
+    （"MinePainter.App"）、著作權空白 —— 那本身就是防毒啟發式的扣分項。
+    FileDescription 由各專案自己的 AssemblyTitle 決定。
+  -->
+  <PropertyGroup>
+    <Company>DragonL</Company>
+    <Authors>DragonL</Authors>
+    <Product>MinePainter</Product>
+    <Copyright>Copyright © 2026 DragonL</Copyright>
+  </PropertyGroup>
 </Project>

@@ -9,6 +9,7 @@
   <PropertyGroup>
     <TargetFramework>net8.0-windows</TargetFramework>
     <AssemblyName>MinePainterThumbs</AssemblyName>
+    <AssemblyTitle>MinePainter .mpp 縮圖處理常式</AssemblyTitle>
     <PublishAot>true</PublishAot>
     <NativeLib>Shared</NativeLib>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
