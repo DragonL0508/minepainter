@@ -695,8 +695,21 @@ public sealed record ObjectGradientEffect : IEffect
 
     public void Render(EffectContext ctx)
     {
-        // 內容外接框（alpha > 0）
+        // 物件自己的角度（文字的 Rotation）加進來，漸層才會跟著物件轉
+        var angle = RelativeToObject ? Angle + ctx.ContentRotation : Angle;
+        var rad = angle * MathF.PI / 180f;
+        var dx = MathF.Cos(rad);
+        var dy = MathF.Sin(rad);
+
+        // 內容外接框（alpha > 0），同時量出內容在漸層方向上真正的頭尾。
+        //
+        // 頭尾不能用外接框推算（|dx|·寬 + |dy|·高 那種）：那是「外接框在這個方向上的支撐寬度」，
+        // 只有方向沿著軸時才等於內容的長度。物件一轉，外接框就變大一塊，斜過去的支撐寬度
+        // 遠大於內容自己的厚度 —— 漸層被拉到那個大範圍上，物件上看得到的只剩中間一小段，
+        // 看起來就像「漸層不見了、只剩一個顏色」（勾了「角度跟著物件轉」再旋轉就會遇到）。
         int minX = int.MaxValue, minY = int.MaxValue, maxX = -1, maxY = -1;
+        var minP = float.MaxValue;
+        var maxP = float.MinValue;
         for (var y = 0; y < ctx.Height; y++)
         for (var x = 0; x < ctx.Width; x++)
         {
@@ -705,6 +718,9 @@ public sealed record ObjectGradientEffect : IEffect
             if (x > maxX) maxX = x;
             if (y < minY) minY = y;
             if (y > maxY) maxY = y;
+            var p = (x + 0.5f) * dx + (y + 0.5f) * dy;
+            if (p < minP) minP = p;
+            if (p > maxP) maxP = p;
         }
         if (maxX < 0)
         {
@@ -716,12 +732,7 @@ public sealed record ObjectGradientEffect : IEffect
         var bh = Math.Max(1, maxY - minY + 1);
         var cx = minX + bw / 2f;
         var cy = minY + bh / 2f;
-        // 物件自己的角度（文字的 Rotation）加進來，漸層才會跟著物件轉
-        var angle = RelativeToObject ? Angle + ctx.ContentRotation : Angle;
-        var rad = angle * MathF.PI / 180f;
-        var dx = MathF.Cos(rad);
-        var dy = MathF.Sin(rad);
-        var half = Math.Abs(dx) * bw / 2f + Math.Abs(dy) * bh / 2f;
+        var span = MathF.Max(1e-3f, maxP - minP);
         var maxR = MathF.Sqrt(bw * bw + bh * bh) / 2f;
         var colors = Stops.BuildLut(257);
         var lut = new uint[257];
@@ -739,11 +750,17 @@ public sealed record ObjectGradientEffect : IEffect
                     ctx.Dst[y * ctx.Width + x] = 0;
                     continue;
                 }
-                var px = x + 0.5f - cx;
-                var py = y + 0.5f - cy;
                 float t;
-                if (Radial) t = MathF.Sqrt(px * px + py * py) / Math.Max(1f, maxR);
-                else t = half <= 0 ? 0.5f : (px * dx + py * dy) / (2 * half) + 0.5f;
+                if (Radial)
+                {
+                    var px = x + 0.5f - cx;
+                    var py = y + 0.5f - cy;
+                    t = MathF.Sqrt(px * px + py * py) / Math.Max(1f, maxR);
+                }
+                else
+                {
+                    t = ((x + 0.5f) * dx + (y + 0.5f) * dy - minP) / span;
+                }
                 var c = lut[(int)(Math.Clamp(t, 0f, 1f) * 256)];
                 // 漸層色的 alpha × 原 alpha
                 var ca = A(c) * a / 255;
