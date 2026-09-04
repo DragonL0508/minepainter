@@ -1640,7 +1640,9 @@ public partial class MainWindow : Window
         {
             if (Path.GetExtension(path).Equals(".mpp", StringComparison.OrdinalIgnoreCase))
             {
-                SetDocument(MppFormat.Load(path), path);
+                var doc = MppFormat.Load(path);
+                SetDocument(doc, path);
+                WarnAboutMissingFonts(doc, Path.GetFileName(path));
             }
             else if (PdnFormat.IsPdnFile(path))
             {
@@ -1665,6 +1667,25 @@ public partial class MainWindow : Window
 
         Toasts.Show("已匯入 paint.net 專案（儲存時會存成 .mpp）");
         foreach (var warning in warnings.Take(2)) Toasts.Show(warning);
+        WarnAboutMissingFonts(doc, Path.GetFileName(path));
+    }
+
+    /// <summary>
+    /// 專案檔用到的字型這台機器沒裝就跳視窗說明。檔案只記家族名，換一台機器沒裝那支，
+    /// Skia 會安靜地換一支畫出來 —— 排版跑掉卻沒有任何提示，所以要主動講。
+    /// 對話框在文件已經開好、畫面看得到之後才彈（使用者可以一邊看著那份文件一邊讀）。
+    /// </summary>
+    private void WarnAboutMissingFonts(MinePainter.Core.Documents.Document doc, string fileName)
+    {
+        IReadOnlyList<MinePainter.Core.Vectors.MissingFont> missing;
+        lock (doc.SyncRoot) missing = MinePainter.Core.Vectors.FontAvailability.MissingIn(doc);
+        if (missing.Count == 0) return;
+
+        Dispatcher.UIThread.Post(async () =>
+        {
+            if (!IsVisible) return;
+            await new MissingFontsDialog(fileName, missing).ShowDialog(this);
+        }, DispatcherPriority.Background);
     }
 
     /// <summary>存檔／匯出對話框的預設檔名：沿用目前檔案，或匯入來源（.pdn／影像）的名字。</summary>
