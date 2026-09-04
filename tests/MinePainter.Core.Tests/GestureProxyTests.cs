@@ -116,6 +116,33 @@ public class GestureProxyTests
         session.Dispose();
     }
 
+    /// <summary>
+    /// 手勢期間物件被藏起來（由代理圖代替），效果快取會被算成「空的」。手勢一結束、
+    /// 效果還沒重算回來的那段時間，合成器不能拿那份空快取當畫面 —— 那就是使用者看到的
+    /// 「文字閃一下不見／卡很久才出現」。
+    /// </summary>
+    [Fact]
+    public void RightAfterAGesture_TheLayerStillHasSomethingToDraw()
+    {
+        var (session, layer) = TextWithOutline(80);
+        var doc = session.Document;
+        var transform = session.EnterTransformMode(TransformMode.Free)!;
+
+        transform.BeginGesturePreview();
+        LayerEffectRenderer.RenderAllNow(doc); // worker 在手勢中把「沒有物件」的樣子算完
+        transform.RotationDeg = 15f;
+        transform.Apply(preview: true);
+        transform.EndGesture();
+
+        // 這一刻：物件回來了、效果還沒重算。畫面上一定要有東西 ——
+        // 要嘛效果快取還有內容，要嘛就當作沒算好、改畫原始的文字。
+        var usable = layer.EffectsRendered
+            ? layer.FxCache.Surface.TileCount > 0
+            : layer.Elements.Count > 0;
+        Assert.True(usable, "手勢剛結束時這層畫不出任何東西（文字會消失一下）");
+        session.Dispose();
+    }
+
     [Fact]
     public void EndGesture_PutsElementsBack_EvenWhenNothingMoved()
     {

@@ -339,7 +339,17 @@ public static class LayerEffectRenderer
 
             var content = ContentRegion(layer);
             if (!content.IsEmpty && margin > 0) content.Inflate(margin, margin);
-            var region = content.IsEmpty ? content : SKRectI.Intersect(content, visibleWindow);
+
+            // 只有「比畫布大很多」才裁。裁過的快取蓋不到整個物件，拖曳快照就得現算一次
+            // （或先顯示沒有效果的樣子再換上），使用者看到的就是拖一下閃一下。
+            // 稍微超出畫布的物件整份算完便宜得多，也讓拖曳／旋轉的快照永遠是完整的。
+            var canvasArea = (long)Math.Max(1, canvasInLayer.Width) * Math.Max(1, canvasInLayer.Height);
+            var contentArea = (long)Math.Max(0, content.Width) * Math.Max(0, content.Height);
+            var worthClipping = contentArea > canvasArea * 4;
+
+            var region = content.IsEmpty || !worthClipping
+                ? content
+                : SKRectI.Intersect(content, visibleWindow);
             if (region.Width <= 0 || region.Height <= 0) region = SKRectI.Empty;
             cache.LastClipped = !content.IsEmpty && region != content;
             if (canvasDependent) region = region.IsEmpty ? canvasInLayer : SKRectI.Union(region, canvasInLayer);
