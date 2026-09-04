@@ -245,6 +245,10 @@ public static class LayerEffectRenderer
 
     private static Job? TakeJobLocked(Document doc, LayerNode? only = null, GroupPixelReader? groupReader = null)
     {
+        // 手勢進行中不算效果：每動一步就重算一次的話，合成器永遠追不上，畫面等於停住
+        // （見 Document.InteractiveGesture）。髒區留著，放開之後照樣算。
+        if (doc.InteractiveGesture && only == null) return null;
+
         foreach (var layer in EffectOrder(doc))
         {
             if (!layer.CanHaveEffects) continue;

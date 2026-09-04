@@ -569,7 +569,11 @@ public sealed class CanvasView : Control
             _elementRotating = _elementRotate.TryBeginRotate(_session, rotatePos);
             if (!_elementRotating && _session.ActiveTool == _session.Move)
                 _transformRotating = _session.Move.BeginRotate(_session, rotatePos);
-            if (_elementRotating || _transformRotating) StateChanged?.Invoke();
+            if (_elementRotating || _transformRotating)
+            {
+                _session.BeginInteractiveGesture(); // 右鍵旋轉也是手勢
+                StateChanged?.Invoke();
+            }
         }
         else if (point.Properties.IsLeftButtonPressed && _session != null)
         {
@@ -608,10 +612,12 @@ public sealed class CanvasView : Control
                     tolerance: (float)(9 / Math.Max(0.01, _viewport.Scale))))
             {
                 _handleDragging = true;
+                BeginGestureIfMoving();
             }
             else
             {
                 _toolActive = true;
+                BeginGestureIfMoving();
                 _session.ActiveTool.OnPointerDown(ToToolEvent(point), _session);
             }
             StateChanged?.Invoke();
@@ -620,6 +626,20 @@ public sealed class CanvasView : Control
         e.Pointer.Capture(this);
         e.Handled = true;
     }
+
+    /// <summary>
+    /// 移動／旋轉／縮放手勢期間不算效果堆疊（見 Document.InteractiveGesture）——
+    /// 帶外框陰影的大物件，效果一次上百毫秒，每動一步排一次的話畫面等於停住。
+    /// 只有「會搬東西」的工具算手勢；筆刷那些不能停掉效果（畫上去要立刻看到結果）。
+    /// </summary>
+    private void BeginGestureIfMoving()
+    {
+        if (_session is not { } session) return;
+        if (session.ActiveTool != session.Move && !_handleDragging) return;
+        session.BeginInteractiveGesture();
+    }
+
+    private void EndGesture() => _session?.EndInteractiveGesture();
 
     private readonly Core.Tools.HandleDragController _handles = new();
     private readonly Core.Tools.ElementDragHelper _elementRotate = new(); // 右鍵旋轉文字物件
@@ -684,24 +704,28 @@ public sealed class CanvasView : Control
         {
             _elementRotating = false;
             _elementRotate.End(_session); // 一步「旋轉文字」undo
+            EndGesture();
             StateChanged?.Invoke();
         }
         else if (_transformRotating && _session != null)
         {
             _transformRotating = false;
             _session.Move.EndRotate(_session);
+            EndGesture();
             StateChanged?.Invoke();
         }
         else if (_handleDragging && _session != null)
         {
             _handleDragging = false;
             _handles.End(_session);
+            EndGesture();
             StateChanged?.Invoke();
         }
         else if (_toolActive && _session != null)
         {
             _toolActive = false;
             _session.ActiveTool.OnPointerUp(ToToolEvent(e.GetCurrentPoint(this)), _session);
+            EndGesture();
 
             // 文字工具剛建立元素 → 直接進入畫布內編輯
             if (_session.PendingTextEdit is { } pending)

@@ -69,6 +69,27 @@ public sealed class EditorSession : IDisposable
         foreach (var id in exclude) _snapExclude.Add(id);
     }
 
+    /// <summary>
+    /// 移動／旋轉／縮放手勢開始：手勢期間不算效果堆疊（畫原始內容），放開才算回來。
+    /// 帶外框／陰影的大物件，效果算一次上百毫秒，每動一步排一次的話畫面會整個停住。
+    /// </summary>
+    public void BeginInteractiveGesture() => Document.InteractiveGesture = true;
+
+    /// <summary>手勢結束：恢復效果，並把畫面標髒讓合成器重算一遍。</summary>
+    public void EndInteractiveGesture()
+    {
+        if (!Document.InteractiveGesture) return;
+        Document.InteractiveGesture = false;
+        lock (Document.SyncRoot)
+        {
+            foreach (var node in Document.Descendants())
+            {
+                if (node.HasActiveEffects) node.FxCache.MarkAllDirty();
+            }
+        }
+        Document.NotifyChanged(Document.Bounds);
+    }
+
     /// <summary>拖曳結束：收掉導線與參考框快取（下一趟重新蒐集，才看得到這趟的新位置）。</summary>
     public void EndSnapDrag()
     {

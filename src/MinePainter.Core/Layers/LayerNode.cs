@@ -55,8 +55,12 @@ public abstract class LayerNode
     /// </summary>
     public virtual SKPointI EffectOffset => SKPointI.Empty;
 
-    /// <summary>效果快取此刻是否代表這個節點的畫面。</summary>
-    public bool EffectsRendered => HasActiveEffects && FxCache.Rendered;
+    /// <summary>
+    /// 效果快取此刻是否代表這個節點的畫面。
+    /// 手勢進行中一律當作「還沒算好」：合成器改畫原始內容（見 Document.InteractiveGesture）。
+    /// </summary>
+    public bool EffectsRendered =>
+        HasActiveEffects && FxCache.Rendered && Document is not { InteractiveGesture: true };
 
     /// <summary>換整份效果清單（在 Document.SyncRoot 內），整個節點重算。</summary>
     public void SetEffects(IReadOnlyList<LayerEffect> effects)
