@@ -126,6 +126,25 @@ public sealed class EditorSession : IDisposable
     /// <summary>彎曲模式（扭曲）的把手框：4×4 控制點網格（render thread 直接讀）。</summary>
     public WarpMesh? SelectionHandlesWarp { get; private set; }
 
+    private bool _layerFrameDismissed;
+
+    /// <summary>
+    /// 「圖層內容框」已被使用者點掉。移動工具下沒有別的東西被框住時會自動框住整個圖層內容，
+    /// 但那個框以前點空白處也清不掉（清掉後立刻又從圖層內容推導回來），畫面上永遠有一個框。
+    /// 現在點一次空白處就把它收起來，直到下一次點到圖層內容、或換作用中圖層才自動框回來
+    /// —— 「點空白處一定清得掉」對所有框都成立。
+    /// </summary>
+    public bool LayerFrameDismissed
+    {
+        get => _layerFrameDismissed;
+        set
+        {
+            if (_layerFrameDismissed == value) return;
+            _layerFrameDismissed = value;
+            RefreshSelectionHandles();
+        }
+    }
+
     /// <summary>
     /// 依模式開始（或切換）變形：Free＝一般變形框；Perspective＝四角模式；Warp＝彎曲模式。
     /// 目標含文字物件時先自動「圖層文字平面化」再框（PS 也是先柵格化；Esc 取消會連平面化一起還原）。
@@ -1574,7 +1593,11 @@ public sealed class EditorSession : IDisposable
         get => _activeTool;
         set
         {
+            var changed = !ReferenceEquals(_activeTool, value);
             _activeTool = value;
+            // 切到移動工具＝明示「我要動這層的東西」，圖層內容框重新框一次
+            // （上一輪點空白處把它收掉的狀態不留到這一輪）
+            if (changed && ReferenceEquals(value, Move)) _layerFrameDismissed = false;
             RefreshSelectionHandles(); // 圖層內容框只在移動工具下顯示，切工具要重算
         }
     }
@@ -1602,7 +1625,7 @@ public sealed class EditorSession : IDisposable
         RegisterPendingEdit(new FloatingPendingEdit(this));
         RegisterPendingEdit(new TransformPendingEdit(this));
         History.Changed += ReleaseStaleResumes; // 續接點只在「落地那步仍是最後一步」時有效
-        Document.ActiveLayerChanged += DropSelectionOnTextLayer;
+        Document.ActiveLayerChanged += OnActiveLayerChanged;
 
         Brush = new BrushTool();
         Pencil = new PencilTool();
@@ -1633,9 +1656,19 @@ public sealed class EditorSession : IDisposable
         if (Document.ActiveLayer is RasterLayer { IsTextLayer: true }) ApplySelection(null);
     }
 
+    /// <summary>
+    /// 換作用中圖層：放掉文字圖層上的像素選取，並讓圖層內容框重新自動出現一次
+    /// （「點進圖層時永遠先框一次」；上一層被點掉的狀態不帶到新圖層）。
+    /// </summary>
+    private void OnActiveLayerChanged()
+    {
+        DropSelectionOnTextLayer();
+        LayerFrameDismissed = false;
+    }
+
     public void Dispose()
     {
-        Document.ActiveLayerChanged -= DropSelectionOnTextLayer;
+        Document.ActiveLayerChanged -= OnActiveLayerChanged;
         Transform?.DisposeDeferred(Compositor); // 退役佇列由 Compositor.Dispose 清掉
         Transform = null;
         Floating?.Dispose();

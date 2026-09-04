@@ -402,30 +402,61 @@ public sealed class CanvasDrawOperation : ICustomDrawOperation
         for (var x = l; x <= r; x++) canvas.DrawLine(x, t, x, b, paint);
     }
 
+    /// <summary>
+    /// 目前把手框的外框路徑（doc 座標）；null＝畫面上沒有框。
+    /// 螞蟻線與把手都畫在這條路徑上 —— 兩者是同一個框，位置不會有第二個來源。
+    /// </summary>
+    private SKPath? FramePath()
+    {
+        if (_session.SelectionHandlesWarp is { } warp) return warp.BoundaryPath();
+
+        if (_session.SelectionHandlesQuad is { Length: 4 } quad)
+        {
+            var path = new SKPath();
+            path.MoveTo(quad[0]);
+            for (var i = 1; i < 4; i++) path.LineTo(quad[i]);
+            path.Close();
+            return path;
+        }
+
+        if (_session.SelectionHandles is { } rect)
+        {
+            var path = new SKPath();
+            path.AddRect(rect);
+            var rotation = _session.SelectionHandlesRotation;
+            if (Math.Abs(rotation) > 0.01f)
+                path.Transform(SKMatrix.CreateRotationDegrees(rotation, rect.MidX, rect.MidY));
+            return path;
+        }
+
+        return null;
+    }
+
     private void DrawSelectionAndPreview(SKCanvas canvas)
     {
         var screenPx = (float)(1.0 / _viewport.Scale); // 螢幕 1px 對應的 doc 長度
         var dash = 6f * screenPx;
         var phase = Environment.TickCount % 1000 / 1000f * dash * 2;
 
-        // 選取螞蟻線（白底黑蟻雙層，縮放下維持螢幕寬度）。
-        // 浮動中時用變換過的輪廓 —— 選取框跟著內容一起走。
-        using var floatingOutline = _session.Floating?.GetTransformedOutline();
-        var outline = floatingOutline ?? _session.Selection?.OutlinePath;
-        if (outline != null)
+        // 選取區的淡藍填色（只在選取類工具下）：螞蟻線一律走把手框，套索／魔術棒這種
+        // 不規則選取的實際形狀就靠這層填色看得出來（借鏡 Pinta）。
+        if (_highlightSelection && _session.Floating == null &&
+            _session.Selection?.OutlinePath is { } maskOutline)
         {
-            // 選取類工具下把選取區填淡藍，讓「正在動框」和「正在動像素」一眼可辨（借鏡 Pinta）
-            if (_highlightSelection && floatingOutline == null)
+            using var fill = new SKPaint
             {
-                using var fill = new SKPaint
-                {
-                    Style = SKPaintStyle.Fill,
-                    Color = new SKColor(0xB3, 0xCC, 0xE6, 0x33),
-                    IsAntialias = true,
-                };
-                canvas.DrawPath(outline, fill);
-            }
+                Style = SKPaintStyle.Fill,
+                Color = new SKColor(0xB3, 0xCC, 0xE6, 0x33),
+                IsAntialias = true,
+            };
+            canvas.DrawPath(maskOutline, fill);
+        }
 
+        // 螞蟻線（白底黑蟻雙層，縮放下維持螢幕寬度）一律畫在「把手框」上 ——
+        // 畫面上只有一個框的概念，螞蟻線與把手是同一個框的兩層外觀，不會再各走各的。
+        using var antsPath = FramePath();
+        if (antsPath != null)
+        {
             using var white = new SKPaint
             {
                 Style = SKPaintStyle.Stroke,
@@ -433,7 +464,7 @@ public sealed class CanvasDrawOperation : ICustomDrawOperation
                 Color = SKColors.White,
                 IsAntialias = true,
             };
-            canvas.DrawPath(outline, white);
+            canvas.DrawPath(antsPath, white);
 
             using var dashEffect = SKPathEffect.CreateDash([dash, dash], phase);
             using var black = new SKPaint
@@ -444,7 +475,7 @@ public sealed class CanvasDrawOperation : ICustomDrawOperation
                 PathEffect = dashEffect,
                 IsAntialias = true,
             };
-            canvas.DrawPath(outline, black);
+            canvas.DrawPath(antsPath, black);
         }
 
         // 彎曲模式（扭曲）的把手框：3×3 貝茲網格線＋16 個控制點（角＝方塊、切線把手＝圓、內點＝小方塊）

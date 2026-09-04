@@ -162,6 +162,19 @@ public sealed record WarpMesh(SKPoint[] Points, SKRect Frame)
         b[3] = t * t * t;
     }
 
+    /// <summary>曲面四邊的封閉外框（螞蟻線畫在這條路徑上，跟著彎曲後的邊走）。</summary>
+    public SKPath BoundaryPath(int segments = 16)
+    {
+        var path = new SKPath();
+        path.MoveTo(Evaluate(0, 0));
+        for (var i = 1; i <= segments; i++) path.LineTo(Evaluate(i / (float)segments, 0));
+        for (var i = 1; i <= segments; i++) path.LineTo(Evaluate(1, i / (float)segments));
+        for (var i = segments - 1; i >= 0; i--) path.LineTo(Evaluate(i / (float)segments, 1));
+        for (var i = segments - 1; i >= 1; i--) path.LineTo(Evaluate(0, i / (float)segments));
+        path.Close();
+        return path;
+    }
+
     /// <summary>畫在畫布上的 3×3 網格線（曲面上 u,v = 0,1/3,2/3,1 的曲線）。</summary>
     public SKPath GridPath(int segments = 16)
     {

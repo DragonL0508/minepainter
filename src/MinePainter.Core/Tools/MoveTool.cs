@@ -167,6 +167,22 @@ public sealed class MoveTool : ITool
 
         // 4) 平移整個圖層／群組（群組 = 所有子孫點陣圖層的像素與文字物件一起動；單層只動像素）
         session.SelectedElement = null;
+
+        // 圖層內容框的出現／消失：點在內容框內＝點到這層的東西（框回來，可拖角縮放）；
+        // 點在框外＝點空白處，沒拖曳的話放開時就把框收掉（見 OnPointerUp）。
+        // 拖曳照舊平移整層 —— 只有「點一下沒拖」才算點空白處。
+        SKRect? contentFrame;
+        lock (doc.SyncRoot)
+        {
+            contentFrame = doc.ActiveLayer is GroupLayer contentGroup
+                ? HandleDragController.GroupContentFrame(contentGroup)
+                : HandleDragController.LayerContentFrame(session);
+        }
+        if (contentFrame is { } cf && cf.Contains(e.DocPosition.X, e.DocPosition.Y))
+            session.LayerFrameDismissed = false;
+        else
+            _pressedOutsideSelection = true;
+
         _moveLayers.Clear();
         _startOffsets.Clear();
         _startElements.Clear();
@@ -391,7 +407,8 @@ public sealed class MoveTool : ITool
             return;
         }
 
-        // 點一下（沒拖曳）在框外 → 落地（變形框/浮動內容）並取消選取
+        // 點一下（沒拖曳）在框外 → 落地（變形框/浮動內容）並取消選取。
+        // 畫面上任何一種框都在這裡一起收掉（含圖層內容框），點空白處才是真的「清乾淨」。
         var moved = SKPoint.Distance(e.DocPosition, _pressPoint) * ViewScale;
         if (_pressedOutsideSelection && moved <= DragThreshold)
         {
@@ -402,6 +419,8 @@ public sealed class MoveTool : ITool
             session.CommitFloating();  // 浮動中先落地（沒動過等同還原，不會多記一步歷史）
             if (session.Selection != null)
                 SelectionCommands.SetSelection(session, null, "取消選取");
+            session.SelectedElement = null;
+            session.LayerFrameDismissed = true;
             return;
         }
         _pressedOutsideSelection = false;

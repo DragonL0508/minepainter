@@ -225,7 +225,10 @@ public sealed class CanvasView : Control
     private bool HasAnimatedDashes()
     {
         var session = _session;
-        return session != null && (session.Selection != null || session.Floating != null || session.Preview != null);
+        // 螞蟻線畫在把手框上，所以只要畫面上有框就要跑動畫（不再只看有沒有像素選取）
+        return session != null &&
+               (session.SelectionHandles != null || session.SelectionHandlesQuad != null ||
+                session.SelectionHandlesWarp != null || session.Preview != null);
     }
 
     public EditorSession? Session => _session;
@@ -828,11 +831,14 @@ public sealed class CanvasView : Control
             }
             if (Services.ShortcutMap.Matches("edit.deselect", e.Key, e.KeyModifiers))
             {
+                // 「取消選取」＝把畫面上的框清乾淨，和點空白處同一件事
                 if (session.Selection != null)
                 {
                     session.CommitFloating();
                     Core.Tools.SelectionCommands.SetSelection(session, null, "取消選取");
                 }
+                session.SelectedElement = null;
+                session.LayerFrameDismissed = true;
                 StateChanged?.Invoke();
                 e.Handled = true;
                 return;

@@ -148,7 +148,9 @@ public sealed class HandleDragController
         // 移動工具、什麼都沒被框住：框住的是「整個圖層（或群組）內容」（可超出畫布 ——
         // 圖層本來就可持有畫布外像素，這個框是把它們整批縮放回來的入口）。
         // 只在移動工具下顯示，繪畫類工具不該一直有個框在畫面上。
-        if (session.ActiveTool == session.Move)
+        // 點過空白處（LayerFrameDismissed）就不再自動長回來，畫面才是真的乾淨；
+        // 下一次點到圖層內容或換圖層會重新框起來（見 EditorSession.LayerFrameDismissed）。
+        if (session.ActiveTool == session.Move && !session.LayerFrameDismissed)
         {
             return session.Document.ActiveLayer is GroupLayer group
                 ? GroupContentFrame(group)
