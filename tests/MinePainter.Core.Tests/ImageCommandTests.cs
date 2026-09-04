@@ -195,6 +195,29 @@ public class TextTransformResetTests
 public class ElementDragOverlayTests
 {
     [Fact]
+    public void HugeText_StillGetsAVisibleOverlay_AtReducedResolution()
+    {
+        // GPU 貼圖有尺寸上限，整張畫不出來時畫面上就是「拖曳大物件時物件整個消失」。
+        // 寧可解析度低也要看得到（使用者 2026-09-04 回報）。
+        using var doc = ImageCodec.CreateBlankDocument(1920, 1080, SKColors.White);
+        var layer = (RasterLayer)doc.ActiveLayer!;
+        var text = new TextElement { Text = "很長的一段標題文字", FontSize = 3000, Position = new SKPoint(0, 0) };
+        lock (doc.SyncRoot) layer.AddElement(text);
+        using var session = new EditorSession(doc);
+
+        lock (doc.SyncRoot) session.BeginElementOverlayLocked(layer, text);
+
+        var overlay = session.ElementOverlay;
+        Assert.NotNull(overlay);
+        Assert.True(overlay!.Bounds.Width > 20000, "這個測試要的就是超大物件");
+        Assert.True(overlay.Image.Width <= 4096 && overlay.Image.Height <= 4096,
+            $"覆疊圖 {overlay.Image.Width}x{overlay.Image.Height} 超過貼圖上限，畫面上會整個看不到");
+        Assert.True(overlay.Image.Width > 0 && overlay.Image.Height > 0);
+        // 框仍然是原尺寸：畫的時候會拉回去，位置與大小都對
+        Assert.Equal(overlay.Bounds.Width, overlay.CurrentRect.Width);
+    }
+
+    [Fact]
     public void RotateText_UsesOverlayDuringGesture_AndCommitsOnEnd()
     {
         using var doc = ImageCodec.CreateBlankDocument(300, 200, SKColors.White);

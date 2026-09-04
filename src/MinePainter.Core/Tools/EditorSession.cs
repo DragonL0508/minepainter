@@ -612,7 +612,13 @@ public sealed class EditorSession : IDisposable
 
         SKImage? image = null;
         var upgradeInBackground = false;
-        if (withEffects && TryReadEffectCache(layer, element, bounds) is { } cached)
+        var scale = OverlayScale(bounds);
+        if (scale < 1f)
+        {
+            // 太大：整張當一張貼圖畫不出來（見 OverlayScale），降解析度、也不跑效果堆疊
+            // （那要先配一塊同樣大的緩衝區）。低解析度的預覽總比手勢中整個物件消失好。
+        }
+        else if (withEffects && TryReadEffectCache(layer, element, bounds) is { } cached)
         {
             // 快路徑：效果快取就是「這層算好的樣子」，直接裁一塊出來 —— 重跑一遍堆疊在 4K
             // 要 0.26 秒，手勢一開始就卡在那裡。只有「這層只有這一個物件」時才行，
@@ -627,7 +633,7 @@ public sealed class EditorSession : IDisposable
             upgradeInBackground = true;
         }
 
-        image ??= RenderElementOnly(element, bounds);
+        image ??= RenderElementOnly(element, bounds, scale);
         if (image == null) return;
 
         var overlay = new ElementDragOverlay(layer, element.Id, image, bounds);
@@ -636,14 +642,40 @@ public sealed class EditorSession : IDisposable
         if (upgradeInBackground) UpgradeOverlayWithEffects(overlay, layer, element, bounds);
     }
 
-    /// <summary>只畫物件本身（不跑效果堆疊）到指定範圍。</summary>
-    private static SKImage? RenderElementOnly(Vectors.VectorElement element, SKRectI bounds)
+    /// <summary>
+    /// 手勢覆疊圖的解析度上限。
+    ///
+    /// 覆疊是「一張圖」，要當成 GPU 貼圖畫出來；貼圖有尺寸上限（常見 16384），超過就整張
+    /// **靜靜地畫不出來** —— 畫面上看起來就是「拖曳／旋轉大物件時，物件整個消失」
+    /// （使用者 2026-09-04 回報）。而且一張 27000×4500 的圖也要 466 MB。
+    /// 超過就縮小畫、之後照樣拉回原本的框顯示：手勢中糊一點，總比看不到好。
+    /// </summary>
+    private const int MaxOverlaySide = 4096;
+
+    private const long MaxOverlayPixels = 8L * 1024 * 1024; // 8 MPx ＝ 32 MB
+
+    /// <summary>覆疊快照要縮多少（1 ＝ 原尺寸）。</summary>
+    private static float OverlayScale(SKRectI bounds)
     {
-        var info = new SKImageInfo(bounds.Width, bounds.Height, SKColorType.Bgra8888, SKAlphaType.Premul);
+        var longest = Math.Max(bounds.Width, bounds.Height);
+        if (longest <= 0) return 1f;
+        var scale = longest > MaxOverlaySide ? MaxOverlaySide / (float)longest : 1f;
+        var pixels = (long)MathF.Ceiling(bounds.Width * scale) * (long)MathF.Ceiling(bounds.Height * scale);
+        if (pixels > MaxOverlayPixels) scale *= MathF.Sqrt(MaxOverlayPixels / (float)pixels);
+        return Math.Min(1f, scale);
+    }
+
+    /// <summary>只畫物件本身（不跑效果堆疊）到指定範圍；太大時縮小解析度。</summary>
+    private static SKImage? RenderElementOnly(Vectors.VectorElement element, SKRectI bounds, float scale = 1f)
+    {
+        var w = Math.Max(1, (int)MathF.Ceiling(bounds.Width * scale));
+        var h = Math.Max(1, (int)MathF.Ceiling(bounds.Height * scale));
+        var info = new SKImageInfo(w, h, SKColorType.Bgra8888, SKAlphaType.Premul);
         using var surface = SKSurface.Create(info);
         if (surface == null) return null;
         var canvas = surface.Canvas;
         canvas.Clear(SKColors.Transparent);
+        if (scale != 1f) canvas.Scale(scale);
         canvas.Translate(-bounds.Left, -bounds.Top);
         element.Render(canvas);
         canvas.Flush();

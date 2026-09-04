@@ -302,7 +302,10 @@ public sealed class CanvasDrawOperation : ICustomDrawOperation
         {
             var elementRect = element.CurrentRect; // 只讀一次：UI thread 正在改它
             var rotation = element.Rotation;
-            var transformed = rotation != 0 ||
+            // 太大的物件覆疊圖是降解析度存的（見 EditorSession.OverlayScale），
+            // 放大回原本的框時要平滑取樣，不然糊之外還會有硬邊格子
+            var reduced = element.Image.Width < element.Bounds.Width;
+            var transformed = rotation != 0 || reduced ||
                               elementRect.Width != element.Bounds.Width ||
                               elementRect.Height != element.Bounds.Height;
             using var paint = new SKPaint
