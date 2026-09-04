@@ -782,6 +782,8 @@ public static class LayerEffectRenderer
         var docSize = doc == null ? new SKSizeI(bounds.Width, bounds.Height) : new SKSizeI(doc.Width, doc.Height);
         var job = new Job
         {
+            // 拖曳快照是拿來上屏的，畫面縮著看就沒必要算全解析度（見 EffectPreviewScale）
+            Scale = doc == null ? 1f : PreviewScaleFor(doc, effects, bounds, exact: false),
             Layer = layer,
             Region = bounds,
             Compute = bounds,
