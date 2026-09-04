@@ -31,16 +31,40 @@ public class EffectPreviewScaleTests
     }
 
     [Theory]
-    [InlineData(1.0f, 1.0f)]
-    [InlineData(0.8f, 1.0f)]
-    [InlineData(0.5f, 0.5f)]
-    [InlineData(0.4f, 0.5f)]
-    [InlineData(0.25f, 0.25f)]
-    [InlineData(0.2f, 0.25f)]
-    [InlineData(0.1f, 0.125f)]
-    [InlineData(0.01f, 0.125f)]
-    public void 檢視比例對齊到二的冪次(float view, float expected)
-        => Assert.Equal(expected, EffectPreviewScale.Quantize(view));
+    [InlineData(1.0f, 1.0f)]      // 100%：照實算
+    [InlineData(0.8f, 1.0f)]      // 幾乎 1:1 也照實算
+    [InlineData(0.5f, 0.25f)]     // 50% 檢視 → 算一半大
+    [InlineData(0.35f, 0.177f)]
+    [InlineData(0.25f, 0.125f)]   // 25% 檢視
+    [InlineData(0.125f, 0.0625f)]
+    [InlineData(0.01f, 0.0625f)]  // 再縮也不會低於下限
+    public void 檢視比例對齊到每階根號二的階梯(float view, float expected)
+        => Assert.Equal(expected, EffectPreviewScale.Quantize(view), 3);
+
+    [Fact]
+    public void 階梯是單調的_放越大算越細()
+    {
+        var last = 0f;
+        for (var view = 0.05f; view <= 1.0f; view += 0.01f)
+        {
+            var scale = EffectPreviewScale.Quantize(view);
+            Assert.True(scale >= last - 0.0001f, $"檢視 {view:P0} 的比例 {scale} 比更小的檢視還粗");
+            last = scale;
+        }
+    }
+
+    [Fact]
+    public void 幾何參數不會被縮到滑桿下限以下()
+    {
+        // 外框寬度 5px：縮到 1/8 會變 0.6px、被夾成 1px，放大回來就是 8px 的框（粗 60%）
+        var effects = new List<LayerEffect> { LayerEffect.Create(new ObjectOutlineEffect { Width = 5 }) };
+        var safe = EffectPreviewScale.SafeScale(effects, 0.0625f);
+        Assert.True(safe >= 0.2f - 0.001f, $"比例 {safe} 會讓 5px 的外框被夾寬");
+
+        // 半徑 80 的模糊沒有這個問題（下限 0），可以縮到底
+        var blur = new List<LayerEffect> { LayerEffect.Create(new GaussianBlurEffect { Radius = 80 }) };
+        Assert.Equal(EffectPreviewScale.MinScale, EffectPreviewScale.SafeScale(blur, EffectPreviewScale.MinScale), 3);
+    }
 
     [Fact]
     public void 幾何參數會跟著比例縮()
@@ -59,7 +83,7 @@ public class EffectPreviewScaleTests
         {
             doc.PreviewScale = 0.25f;
             LayerEffectRenderer.RenderLayerNow(doc, layer);
-            Assert.Equal(0.25f, layer.FxCache.PreviewScale);
+            Assert.True(layer.FxCache.PreviewScale < 1f, "縮著看就該用降解析度算");
             Assert.True(layer.FxCache.Rendered);
 
             // 使用者放大到 100%：畫面需要更細的東西，快取要重算
@@ -77,7 +101,7 @@ public class EffectPreviewScaleTests
         {
             doc.PreviewScale = 0.25f;
             LayerEffectRenderer.RenderLayerNow(doc, layer);
-            Assert.Equal(0.25f, layer.FxCache.PreviewScale);
+            Assert.True(layer.FxCache.PreviewScale < 1f);
 
             using var composite = Compositor.RenderComposite(doc); // 匯出／拼合走這條
             Assert.Equal(1f, layer.FxCache.PreviewScale);
@@ -143,7 +167,7 @@ public class EffectPreviewScaleTests
             LayerEffectRenderer.RenderLayerNow(docA, layerA);
             docB.PreviewScale = 0.25f;
             LayerEffectRenderer.RenderLayerNow(docB, layerB);
-            Assert.Equal(0.25f, layerB.FxCache.PreviewScale);
+            Assert.True(layerB.FxCache.PreviewScale < 1f);
 
             // 外框往內容外長出來的範圍要差不多（差一格 tile 以內）
             var a = layerA.FxCache.Surface.ContentBounds;

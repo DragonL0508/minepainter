@@ -394,7 +394,10 @@ public static class LayerEffectRenderer
             cache.LastCanvas = canvasInLayer;
 
             // 快取是用比現在需要的更粗的比例算的（使用者放大了、或這次要輸出）→ 整層重算
-            var wanted = exact ? 1f : EffectPreviewScale.Quantize(doc.PreviewScale);
+            var wanted = exact
+                ? 1f
+                : EffectPreviewScale.SafeScale(layer.Effects.Where(e => e.Enabled).ToList(),
+                    EffectPreviewScale.Quantize(doc.PreviewScale));
             if (cache.PreviewScale < wanted - 0.001f) cache.MarkAllDirty();
 
             if (!cache.HasPending) continue;
@@ -443,7 +446,9 @@ public static class LayerEffectRenderer
         var want = EffectPreviewScale.Quantize(doc.PreviewScale);
         if (want >= 1f) return 1f;
         if ((long)compute.Width * compute.Height < PreviewAreaThreshold) return 1f;
-        return EffectPreviewScale.CanScale(effects) ? want : 1f;
+        if (!EffectPreviewScale.CanScale(effects)) return 1f;
+        var safe = EffectPreviewScale.SafeScale(effects, want);
+        return safe >= 1f ? 1f : safe;
     }
 
     /// <summary>這層（含效果外擴）在 doc 座標上碰不碰得到優先範圍。</summary>

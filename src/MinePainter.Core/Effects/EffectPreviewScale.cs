@@ -17,19 +17,58 @@ namespace MinePainter.Core.Effects;
 /// </summary>
 public static class EffectPreviewScale
 {
-    /// <summary>最小容許的預覽比例（再小下去外框之類的東西會縮到看不出形狀）。</summary>
-    public const float MinScale = 0.125f;
+    /// <summary>最小容許的預覽比例。</summary>
+    public const float MinScale = 0.0625f;
 
     /// <summary>
-    /// 把檢視比例對齊到 1、1/2、1/4、1/8。不對齊的話使用者每滾一格滾輪就換一個比例、
-    /// 整份效果就得重算一次。
+    /// 效果比例相對檢視比例的倍率。0.5 ＝ 算出來的東西是螢幕上的一半大再放大回去 ——
+    /// 外框／陰影／光暈本身就是平滑的，看不太出來，計算量卻是 1/4。
+    /// </summary>
+    private const float ViewRatio = 0.5f;
+
+    /// <summary>
+    /// 檢視比例 → 效果要算多細。
+    ///
+    /// 階梯是每階 √2（1、0.71、0.5、0.35、0.25…）而不是每階減半：放大的過程中畫面會
+    /// **一階一階變清楚**，而不是在幾個大跳階之間突然變。對齊階梯是必要的，
+    /// 不然每滾一格滾輪就換一個比例、整份效果重算一次。
+    ///
+    /// 幾乎 1:1（≥ 75%）時一律照實算 —— 那時使用者就是在看細節。
+    /// 真正的下限由 <see cref="SafeScale"/> 決定：幾何參數不能被縮到滑桿下限以下。
     /// </summary>
     public static float Quantize(float viewScale)
     {
         if (!float.IsFinite(viewScale) || viewScale >= 0.75f) return 1f;
-        if (viewScale >= 0.375f) return 0.5f;
-        if (viewScale >= 0.1875f) return 0.25f;
-        return MinScale;
+        var raw = Math.Max(viewScale * ViewRatio, MinScale);
+        var step = (int)Math.Round(-2 * Math.Log2(raw)); // raw ≈ 2^(-step/2)
+        step = Math.Clamp(step, 0, 8);
+        return (float)Math.Pow(2, -step / 2.0);
+    }
+
+    /// <summary>
+    /// 這一串效果最粗可以算到多細（回傳容許的最小比例）。
+    ///
+    /// 幾何參數縮下去會被夾回滑桿下限：外框 5px 在 1/8 比例下是 0.6px，夾成 1px 再放大回來
+    /// 就是 8px 的框 —— 比原本粗了 60%，一眼看得出來。所以比例不能低於
+    /// 「最小的那個幾何參數還縮得動」的程度。
+    /// </summary>
+    public static float SafeScale(IReadOnlyList<LayerEffect> effects, float wanted)
+    {
+        var floor = MinScale;
+        foreach (var e in effects)
+        {
+            foreach (var def in e.Effect.Parameters)
+            {
+                if (def is not SliderParam { Geometric: true } s) continue;
+                var value = Math.Abs(s.Get(e.Effect));
+                if (value <= 0) continue;
+                // 可以是負值的參數（陰影位移）下限就是 1px，不是滑桿的 -50 ——
+                // 拿 |Min| 當下限會把整層判成不能縮
+                var min = s.Min > 0 ? Math.Max(s.Min, 1.0) : 1.0;
+                floor = Math.Max(floor, (float)(min / value));
+            }
+        }
+        return Math.Clamp(Math.Max(wanted, floor), MinScale, 1f);
     }
 
     /// <summary>這一串效果能不能整串在降解析度上算（有一個不行就整串不行）。</summary>
