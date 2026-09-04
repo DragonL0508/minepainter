@@ -1,4 +1,4 @@
-using MinePainter.Core.Compositing;
+﻿using MinePainter.Core.Compositing;
 using MinePainter.Core.Documents;
 using MinePainter.Core.History;
 using MinePainter.Core.Layers;
@@ -318,7 +318,8 @@ public sealed class TransformSession : IDisposable
     /// </summary>
     public sealed class GestureOverlay
     {
-        public required (SKImage Image, SKRectI SrcBounds)[] Items { get; init; }
+        /// <summary>每一項附上它屬於哪一層 —— GPU 路徑要照層序把它畫在對的位置。</summary>
+        public required (RasterLayer Layer, SKImage Image, SKRectI SrcBounds)[] Items { get; init; }
         public required SKMatrix Matrix { get; init; }
 
         /// <summary>彎曲模式：矩陣之後再套這張網格（WarpMesh.Draw）；null＝只有矩陣。</summary>
@@ -632,15 +633,21 @@ public sealed class TransformSession : IDisposable
     /// 把像素從合成結果拿掉一次，改由 render thread 每幀以目前矩陣直接畫。
     /// 條件不成立就維持逐步蓋章的合成器路徑（畫面正確優先於流暢）。
     /// </summary>
-    public void BeginGesturePreview()
+    public void BeginGesturePreview(bool live = false)
     {
         if (_disposed || _gestureOverlay) return;
 
-        lock (_doc.SyncRoot)
+        // 覆疊畫在所有圖層之上，所以舊路徑要求「這層上面沒有看得見的東西」，否則只好逐步蓋章
+        // —— 那就是大圖旋轉時「手勢中完全沒有畫面、放開才跳出來」的來源。
+        // 畫面端能照層序把覆疊畫在對的位置時（GPU 路徑），這個限制就不需要了。
+        if (!live)
         {
-            foreach (var item in _items)
+            lock (_doc.SyncRoot)
             {
-                if (!Selections.FloatingSelection.CanOverlay(item.Layer)) return;
+                foreach (var item in _items)
+                {
+                    if (!Selections.FloatingSelection.CanOverlay(item.Layer)) return;
+                }
             }
         }
 
@@ -689,7 +696,7 @@ public sealed class TransformSession : IDisposable
     private void PublishOverlay(bool handingOver)
     {
         var items = _items.Where(i => i.Pixels != null)
-            .Select(i => (i.Pixels!, i.SrcBounds)).ToArray();
+            .Select(i => (i.Layer, i.Pixels!, i.SrcBounds)).ToArray();
         if (items.Length == 0)
         {
             _overlay = null;

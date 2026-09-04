@@ -639,12 +639,7 @@ public sealed class EditorSession : IDisposable
     /// </summary>
     private bool CanDrawElementLive(RasterLayer layer)
     {
-        if (layer.HasActiveEffects && !Effects.GpuEffectFilters.CanTranslate(layer.Effects)) return false;
-        foreach (var node in Document.Descendants())
-        {
-            if (node is AdjustmentLayer) return false; // GPU 路徑還沒接調整圖層
-        }
-        return true;
+        return !layer.HasActiveEffects || Effects.GpuEffectFilters.CanTranslate(layer.Effects);
     }
 
     /// <summary>

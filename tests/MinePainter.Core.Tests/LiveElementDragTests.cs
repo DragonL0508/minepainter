@@ -77,12 +77,13 @@ public class LiveElementDragTests
     }
 
     [Fact]
-    public void 有調整圖層時要有快照()
+    public void 有調整圖層時照樣即時渲染()
     {
-        // GPU 路徑還沒接調整圖層，整份會退回舊路
+        // 調整圖層已經接進 GPU 路徑（每種調整都給得出 SKColorFilter），不必再退回舊路
         var (session, layer, element) = NewText(LayerEffect.Create(new ObjectOutlineEffect { Width = 6 }));
-        lock (session.Document.SyncRoot) session.Document.Root.Add(new AdjustmentLayer(new Adjustments.BrightnessContrastAdjustment(Brightness: 0.2f)) { Name = "調整" });
-        Assert.NotNull(BeginDrag(session, layer, element, live: true));
+        lock (session.Document.SyncRoot)
+            session.Document.Root.Add(new AdjustmentLayer(new Adjustments.BrightnessContrastAdjustment(Brightness: 0.2f)));
+        Assert.Null(BeginDrag(session, layer, element, live: true));
     }
 
     [Fact]

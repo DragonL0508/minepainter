@@ -1,4 +1,4 @@
-using MinePainter.Core.History;
+﻿using MinePainter.Core.History;
 using MinePainter.Core.Layers;
 using MinePainter.Core.Selections;
 using MinePainter.Core.Vectors;
@@ -679,7 +679,7 @@ public sealed class MoveTool : ITool
         var frame = transform.FrameRect;
         _rotateCenter = new SKPoint(frame.MidX, frame.MidY);
         _rotateAnchorDeg = AngleDeg(p, _rotateCenter);
-        transform.BeginGesturePreview(); // 拖曳期間 render thread 直接畫，不逐步蓋章
+        transform.BeginGesturePreview(session.LiveElementRendering); // 拖曳期間 render thread 直接畫，不逐步蓋章
         return true;
     }
 

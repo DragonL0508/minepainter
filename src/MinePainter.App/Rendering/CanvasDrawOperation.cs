@@ -211,7 +211,7 @@ public sealed class CanvasDrawOperation : ICustomDrawOperation
         }
 
         DrawFloatingOverlay(canvas, gpuDrew);
-        DrawTransformOverlay(canvas);
+        DrawTransformOverlay(canvas, gpuDrew);
         DrawPixelGrid(canvas);
         canvas.Restore();                       // 文件範圍 clip
 
@@ -231,16 +231,18 @@ public sealed class CanvasDrawOperation : ICustomDrawOperation
     /// 拖曳中一格 tile 都不重寫、不重合成，成本與步數無關。
     /// 手勢結束後殘影（HandingOver）會蓋在剛寫入的 High 蓋章上，等合成器追上才收。
     /// </summary>
-    private void DrawTransformOverlay(SKCanvas canvas)
+    private void DrawTransformOverlay(SKCanvas canvas, bool gpuDrew)
     {
         var overlay = _session.Transform?.Overlay;
         if (overlay == null) return;
+        // GPU 路徑已經照層序把手勢中的像素畫進去了（交接中的殘影仍由這裡補，那時層裡已是蓋章後的內容）
+        if (gpuDrew && !overlay.HandingOver) return;
 
         var m = overlay.Matrix;
         if (overlay.Warp is { } warp)
         {
             // 彎曲：矩陣之後再套貝茲網格（三角網格貼圖，拖曳中同樣只換網格不重合成）
-            foreach (var (image, src) in overlay.Items)
+            foreach (var (_, image, src) in overlay.Items)
                 warp.Draw(canvas, image, src, m, SKFilterQuality.Low);
             return;
         }
@@ -248,7 +250,7 @@ public sealed class CanvasDrawOperation : ICustomDrawOperation
         using var paint = new SKPaint { FilterQuality = SKFilterQuality.Low, IsAntialias = true };
         canvas.Save();
         canvas.Concat(ref m);
-        foreach (var (image, src) in overlay.Items)
+        foreach (var (_, image, src) in overlay.Items)
             canvas.DrawImage(image, src.Left, src.Top, paint);
         canvas.Restore();
     }

@@ -1,4 +1,4 @@
-using MinePainter.Core.History;
+﻿using MinePainter.Core.History;
 using MinePainter.Core.Layers;
 using MinePainter.Core.Selections;
 using MinePainter.Core.Vectors;
@@ -39,8 +39,8 @@ public sealed class HandleDragController
     private bool _freeCorner; // 透視模式按住 Shift：該角自由拖（PS 的「扭曲」）
 
     /// <summary>四角／彎曲模式下的把手命中與拖曳開始；沒命中回 false。</summary>
-    private bool BeginMeshDrag(TransformSession transform, SKPoint p, float tolerance, ToolModifiers modifiers,
-        int forcedIndex = -1)
+    private bool BeginMeshDrag(TransformSession transform, EditorSession session, SKPoint p, float tolerance,
+        ToolModifiers modifiers, int forcedIndex = -1)
     {
         _startQuad = null;
         _startWarp = null;
@@ -66,7 +66,7 @@ public sealed class HandleDragController
         _kind = TargetKind.Transform;
         _meshPress = p;
         _startRect = transform.FrameRect;
-        transform.BeginGesturePreview();
+        transform.BeginGesturePreview(session.LiveElementRendering);
         return true;
     }
 
@@ -235,7 +235,7 @@ public sealed class HandleDragController
         // 進行中的變形框（可能已旋轉：把指標反轉回未旋轉空間再測角）
         if (session.Transform is { } transform)
         {
-            if (transform.IsMeshMode) return BeginMeshDrag(transform, p, tolerance, modifiers);
+            if (transform.IsMeshMode) return BeginMeshDrag(transform, session, p, tolerance, modifiers);
 
             var local = MoveTool.RotatePoint(p,
                 new SKPoint(transform.TargetRect.MidX, transform.TargetRect.MidY),
@@ -248,12 +248,12 @@ public sealed class HandleDragController
             // 工具列切到透視／扭曲後才拖角：此時才進網格模式（同一個 session，不用先落地）
             if (session.Move.TransformMode != TransformMode.Free &&
                 session.EnterTransformMode(session.Move.TransformMode) is { IsMeshMode: true } entered)
-                return BeginMeshDrag(entered, p, tolerance, modifiers);
+                return BeginMeshDrag(entered, session, p, tolerance, modifiers);
 
             _kind = TargetKind.Transform;
             _corner = tCorner;
             _startRect = shownRect;
-            transform.BeginGesturePreview(); // 拖曳期間 render thread 直接畫，不逐步蓋章
+            transform.BeginGesturePreview(session.LiveElementRendering); // 拖曳期間 render thread 直接畫，不逐步蓋章
             return true;
         }
 
@@ -267,7 +267,7 @@ public sealed class HandleDragController
             else if (session.SelectionHandlesQuad is { } previewQuad) index = QuadGeometry.HitHandle(previewQuad, p, tolerance, includeEdges: false);
             if (index < 0) return false;
             if (session.EnterTransformMode(session.Move.TransformMode) is not { IsMeshMode: true } entered) return false;
-            return BeginMeshDrag(entered, p, tolerance, modifiers, index);
+            return BeginMeshDrag(entered, session, p, tolerance, modifiers, index);
         }
 
         // 浮動內容
@@ -314,14 +314,14 @@ public sealed class HandleDragController
             if (session.Move.TransformMode != TransformMode.Free)
             {
                 if (session.EnterTransformMode(session.Move.TransformMode) is not { } entered) return false;
-                if (entered.IsMeshMode) return BeginMeshDrag(entered, p, tolerance, modifiers);
+                if (entered.IsMeshMode) return BeginMeshDrag(entered, session, p, tolerance, modifiers);
             }
             if (session.BeginTransform() is not { } begun) return false;
             _kind = TargetKind.Transform;
             _corner = corner;
             _transformPad = EffectPad(begun.Target);
             _startRect = Inflated(begun.TargetRect, _transformPad);
-            begun.BeginGesturePreview();
+            begun.BeginGesturePreview(session.LiveElementRendering);
             return true;
         }
 

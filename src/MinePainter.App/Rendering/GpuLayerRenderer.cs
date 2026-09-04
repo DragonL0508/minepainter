@@ -36,6 +36,7 @@ public sealed class GpuLayerRenderer : IDisposable
 
     private readonly Dictionary<Guid, LayerImages> _images = new();
     private readonly Dictionary<Guid, (IReadOnlyList<LayerEffect> Effects, SKImageFilter? Filter)> _filters = new();
+    private readonly Dictionary<Guid, (Core.Adjustments.IAdjustment Adjustment, SKColorFilter Filter)> _adjustments = new();
 
     /// <summary>診斷：上一幀畫了幾格、用了幾個 GPU 濾鏡。</summary>
     public int LastTiles { get; private set; }
@@ -73,10 +74,6 @@ public sealed class GpuLayerRenderer : IDisposable
             return false;
         }
 
-        foreach (var node in session.Document.Descendants())
-        {
-            if (node is AdjustmentLayer) return false; // 調整圖層要拿「下方已累積的結果」，之後再接
-        }
         return true;
     }
 
@@ -101,9 +98,43 @@ public sealed class GpuLayerRenderer : IDisposable
     }
 
     private void DrawGroup(SKCanvas canvas, EditorSession session, GroupLayer group, SKRectI visibleDoc)
+        => DrawRange(canvas, session, group.Children, group.Children.Count, visibleDoc);
+
+    /// <summary>
+    /// 畫這個群組的前 <paramref name="count"/ > 個子層。
+    ///
+    /// 調整圖層作用在「同群組內、它下方的合成結果」上（與 CPU 合成器同語意）。GPU 這邊的做法是
+    /// 把下方那一段包進一個 SaveLayer、收起來的時候套色彩濾鏡 —— 收起來那一刻濾鏡吃到的正好是
+    /// 那一段的合成結果。由最上面那個調整圖層往下遞迴，巢狀的調整層自然就一層層套回去。
+    /// </summary>
+    private void DrawRange(SKCanvas canvas, EditorSession session, IReadOnlyList<LayerNode> children,
+        int count, SKRectI visibleDoc)
     {
-        foreach (var child in group.Children)
+        var at = -1;
+        for (var i = count - 1; i >= 0; i--)
         {
+            if (children[i] is AdjustmentLayer { IsVisible: true } a && a.Opacity > 0) { at = i; break; }
+        }
+
+        if (at >= 0)
+        {
+            var adjustment = (AdjustmentLayer)children[at];
+            var full = adjustment.Opacity >= 1f;
+            // 不透明度＜1 ＝ 調整強度：先畫一份沒套到的底，再把套過的疊上去
+            if (!full) DrawRange(canvas, session, children, at, visibleDoc);
+            using var paint = new SKPaint
+            {
+                ColorFilter = AdjustmentFilter(adjustment),
+                Color = SKColors.White.WithAlpha((byte)(adjustment.Opacity * 255)),
+            };
+            canvas.SaveLayer(paint);
+            DrawRange(canvas, session, children, at, visibleDoc);
+            canvas.Restore();
+        }
+
+        for (var i = at + 1; i < count; i++)
+        {
+            var child = children[i];
             if (!child.IsVisible || child.Opacity <= 0) continue;
             switch (child)
             {
@@ -115,6 +146,20 @@ public sealed class GpuLayerRenderer : IDisposable
                     break;
             }
         }
+    }
+
+    /// <summary>這個調整圖層的色彩濾鏡（參數沒換就沿用 —— 曲線／色階每次都要建 256 格表）。</summary>
+    private SKColorFilter AdjustmentFilter(AdjustmentLayer layer)
+    {
+        if (_adjustments.TryGetValue(layer.Id, out var cached) &&
+            ReferenceEquals(cached.Adjustment, layer.Adjustment))
+        {
+            return cached.Filter;
+        }
+        cached.Filter?.Dispose();
+        var filter = layer.Adjustment.CreateColorFilter();
+        _adjustments[layer.Id] = (layer.Adjustment, filter);
+        return filter;
     }
 
     private void DrawNestedGroup(SKCanvas canvas, EditorSession session, GroupLayer group, SKRectI visibleDoc)
@@ -145,7 +190,16 @@ public sealed class GpuLayerRenderer : IDisposable
             canvas.SaveLayer(paint);
         }
 
-        DrawTiles(canvas, raster, source, visibleDoc, isolate ? 1f : raster.Opacity);
+        if (GestureItem(session, raster) is { } item)
+        {
+            // 變形手勢中的這一層：像素已經拆下來了，改用手勢矩陣把那張圖畫在**這個層序位置**
+            // （舊路徑只能畫在所有圖層之上，所以上面一有東西就只好退回逐步蓋章）
+            DrawGesture(canvas, session.Transform!.Overlay!, item);
+        }
+        else
+        {
+            DrawTiles(canvas, raster, source, visibleDoc, isolate ? 1f : raster.Opacity);
+        }
         if (!elementsInSource)
         {
             var overlay = session.ElementOverlay;
@@ -168,6 +222,34 @@ public sealed class GpuLayerRenderer : IDisposable
         }
 
         if (isolate) canvas.Restore();
+    }
+
+    /// <summary>這一層現在是不是變形手勢的一員（交接中的殘影不算 —— 那時像素已經蓋回層裡了）。</summary>
+    private static (RasterLayer Layer, SKImage Image, SKRectI SrcBounds)? GestureItem(
+        EditorSession session, RasterLayer raster)
+    {
+        if (session.Transform?.Overlay is not { HandingOver: false } overlay) return null;
+        foreach (var item in overlay.Items)
+        {
+            if (ReferenceEquals(item.Layer, raster)) return item;
+        }
+        return null;
+    }
+
+    private static void DrawGesture(SKCanvas canvas, TransformSession.GestureOverlay overlay,
+        (RasterLayer Layer, SKImage Image, SKRectI SrcBounds) item)
+    {
+        var m = overlay.Matrix;
+        if (overlay.Warp is { } warp)
+        {
+            warp.Draw(canvas, item.Image, item.SrcBounds, m, SKFilterQuality.Low);
+            return;
+        }
+        using var paint = new SKPaint { FilterQuality = SKFilterQuality.Low, IsAntialias = true };
+        canvas.Save();
+        canvas.Concat(ref m);
+        canvas.DrawImage(item.Image, item.SrcBounds.Left, item.SrcBounds.Top, paint);
+        canvas.Restore();
     }
 
     private SKPaint LayerPaint(LayerNode node, SKImageFilter? filter) => new()
@@ -250,5 +332,7 @@ public sealed class GpuLayerRenderer : IDisposable
         _images.Clear();
         foreach (var (_, filter) in _filters.Values) filter?.Dispose();
         _filters.Clear();
+        foreach (var (_, filter) in _adjustments.Values) filter.Dispose();
+        _adjustments.Clear();
     }
 }
