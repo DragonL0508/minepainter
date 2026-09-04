@@ -211,9 +211,6 @@ public partial class MainWindow : Window
             var debugTextFx = Environment.GetEnvironmentVariable("MINEPAINTER_DEBUG_TEXTFX");
             if (debugTextFx is "1" or "2" or "5") SeedDebugText();
 
-            // TEMP-CMP：開一份專案、用指定路徑渲染整張畫布存檔，兩條路徑對拍用
-            if (Environment.GetEnvironmentVariable("MINEPAINTER_DEBUG_CMP") is { Length: > 0 } cmp)
-                _ = DebugCompareAsync(cmp);
 
 
             // MINEPAINTER_DEBUG_PRESETS=1 或 =<資料夾>：啟動即打開預設集面板（搭配 MINEPAINTER_PRESETS_DIR 指到測試用的庫）；
@@ -680,52 +677,6 @@ public partial class MainWindow : Window
     }
 
     /// <summary>開發驗證用：放一段有多層外框／陰影、旋轉過的文字並選取（見 Opened 裡的說明）。</summary>
-    // TEMP-CMP begin
-    private async System.Threading.Tasks.Task DebugCompareAsync(string spec)
-    {
-        var parts = spec.Split('|');
-        var path = parts[0];
-        var gpu = parts.Length > 1 && parts[1] == "gpu";
-        var outPath = parts.Length > 2 ? parts[2] : System.IO.Path.Combine(System.IO.Path.GetTempPath(), "cmp.png");
-        Services.AppSettings.Instance.GpuLayerRendering = gpu;
-        Canvas.SetGpuRendering(gpu);
-        OpenFile(path);
-        // 等到真的換成那份文件（開檔是非同步的，太早畫到的是預設空白文件）
-        for (var i = 0; i < 60 && (Canvas.Session?.Document.Width ?? 0) != 3840; i++)
-            await System.Threading.Tasks.Task.Delay(500);
-        await System.Threading.Tasks.Task.Delay(3000);
-        var session = Canvas.Session;
-        if (session == null) return;
-        var doc = session.Document;
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-        using (var surface = SKSurface.Create(new SKImageInfo(doc.Width, doc.Height,
-                   SKColorType.Bgra8888, SKAlphaType.Premul)))
-        {
-            lock (doc.SyncRoot)
-            {
-                surface.Canvas.Clear(SKColors.Transparent);
-                if (gpu)
-                {
-                    var r = new Rendering.GpuLayerRenderer();
-                    r.TryDraw(surface.Canvas, session, new SKRectI(0, 0, doc.Width, doc.Height));
-                    r.Dispose();
-                }
-                else
-                {
-                    using var composite = Core.Compositing.Compositor.RenderComposite(doc);
-                    surface.Canvas.DrawImage(composite, 0, 0);
-                }
-            }
-            surface.Canvas.Flush();
-            using var img = surface.Snapshot();
-            using var data = img.Encode(SKEncodedImageFormat.Png, 90);
-            await using var fs = File.Create(outPath);
-            data.SaveTo(fs);
-        }
-        File.WriteAllText(outPath + ".txt", $"gpu={gpu} doc={doc.Width}x{doc.Height} layers={doc.Descendants().Count()} render={sw.Elapsed.TotalMilliseconds:F0}ms");
-    }
-    // TEMP-CMP end
-
     private void SeedDebugText()
     {
         var session = Canvas.Session;
