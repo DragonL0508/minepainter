@@ -211,7 +211,10 @@ public sealed class CanvasView : Control
         if (_viewport != _targetViewport) return true;
         if (_fadeDurationMs > 0 && Environment.TickCount64 - _fadeStartMs < _fadeDurationMs + 50) return true;
         if (!_glide.IsIdle || _glide.AnyHeld) return true;
-        if (_panning || _toolActive) return true;
+        // 手勢進行中一律每幀重畫。畫布是「有變才畫」的，而把手拖曳／旋轉這幾種手勢
+        // 以前不在這張清單上 —— 只有指標事件會把它標髒，畫面更新率就等於指標事件的到達率
+        // （量到的畫面成本只有 0.6 ms／幀，卻只跑到 30fps，就是卡在這裡）。
+        if (_panning || _toolActive || _handleDragging || _transformRotating || _elementRotating) return true;
         if (_stats.PendingTiles > 0) return true;
         var session = _session;
         if (session == null) return false;
