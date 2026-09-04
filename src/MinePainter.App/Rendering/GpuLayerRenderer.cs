@@ -2,6 +2,7 @@
 using MinePainter.Core.Layers;
 using MinePainter.Core.Tiles;
 using MinePainter.Core.Tools;
+using MinePainter.Core.Vectors;
 using SkiaSharp;
 
 namespace MinePainter.App.Rendering;
@@ -36,6 +37,7 @@ public sealed unsafe class GpuLayerRenderer : IDisposable
     }
 
     private readonly Dictionary<Guid, LayerImages> _images = new();
+    private readonly RotatedTextCache _rotatedText = new();
     private readonly Dictionary<Guid, (Core.Adjustments.IAdjustment Adjustment, SKColorFilter Filter)> _adjustments = new();
 
     /// <summary>診斷：上一幀畫了幾格。</summary>
@@ -71,6 +73,7 @@ public sealed unsafe class GpuLayerRenderer : IDisposable
     {
         var rect = overlay.CurrentRect; // 只讀一次：UI thread 正在改它
         var rotation = overlay.Rotation;
+        var pivot = overlay.Pivot;      // 物件真正的旋轉軸心，不是這張圖的中心
         var image = overlay.Image!;
         var transformed = rotation != 0 || image.Width != overlay.Bounds.Width ||
                           rect.Width != overlay.Bounds.Width || rect.Height != overlay.Bounds.Height;
@@ -82,7 +85,7 @@ public sealed unsafe class GpuLayerRenderer : IDisposable
         if (rotation != 0)
         {
             canvas.Save();
-            canvas.RotateDegrees(rotation, rect.MidX, rect.MidY);
+            canvas.RotateDegrees(rotation, pivot.X, pivot.Y);
         }
         canvas.DrawImage(image, rect, paint);
         if (rotation != 0) canvas.Restore();
@@ -212,9 +215,13 @@ public sealed unsafe class GpuLayerRenderer : IDisposable
 
         if (!elementsInSource)
         {
+            // 變形手勢進行中：文字物件每幀都被換成新角度的實例（TransformSession.UpdateElements），
+            // 每幀因此都要重排版、重描邊、重模糊一次 —— 走快照那條路（見 RotatedTextCache）。
+            var gesture = session.Transform?.Overlay is { HandingOver: false };
             foreach (var element in raster.Elements)
             {
                 if (element.Id == raster.HiddenElementId) continue;
+                if (gesture && element is TextElement text && _rotatedText.TryDraw(canvas, text)) continue;
                 element.Render(canvas);
             }
         }
@@ -350,5 +357,153 @@ public sealed unsafe class GpuLayerRenderer : IDisposable
         _images.Clear();
         foreach (var (_, filter) in _adjustments.Values) filter.Dispose();
         _adjustments.Clear();
+        _rotatedText.Dispose();
+    }
+}
+
+/// <summary>
+/// 手勢中「轉起來的文字」的快照快取。
+///
+/// 旋轉手勢每一幀都是一個新角度，而 Skia 的字形遮罩是按矩陣快取的 —— 換個角度就等於整份
+/// 重新點陣化一次，帶外光暈的字還要多描粗一圈再模糊。實測 120px、帶光暈／陰影／兩層外框的
+/// 一行字：角度每幀都變是 12.7 ms/幀，角度不變只要 2.1 ms/幀，差的那 10 ms 全是重做遮罩。
+///
+/// 這裡把「同一個字、只是還沒轉」的那一份點陣化起來，之後每幀只是換個角度貼同一張圖。
+/// 幾何是完全等價的：<see cref="TextElement.Render"/> 的外層變換就是
+/// 位移(Position) → 旋轉(Rotation) → 其餘，所以「未旋轉、擺在原點的那份圖」
+/// 繞 Position 轉 Rotation 度，就是原本會畫出來的東西（差別只在多了一次重取樣）。
+///
+/// 只在手勢中用：放開之後照舊走 <see cref="TextElement.Render"/> 精算，匯出與合成器更完全碰不到。
+/// 只有 render thread 會碰它。
+/// </summary>
+public sealed class RotatedTextCache : IDisposable
+{
+    /// <summary>一個文字物件的快照（key＝「未旋轉、擺在原點」的樣子）。</summary>
+    private sealed class Entry
+    {
+        // 連續兩幀看到同一份「未旋轉的樣子」才值得點陣化：旋轉手勢每幀都一樣（只有角度與
+        // 位置在變，兩者都不在 key 裡），縮放手勢則每幀都不一樣 —— 後者點陣化只是白做一次工。
+        public TextElement? Pending;
+        public float PendingScale;
+
+        public TextElement? Key;
+        public float Scale;
+        public SKImage? Image;
+        public SKRectI Bounds;
+        public long Used;
+
+        public void Drop()
+        {
+            Image?.Dispose();
+            Image = null;
+            Key = null;
+        }
+    }
+
+    /// <summary>同時最多留幾份（一層有好幾個文字物件一起被變形時，彼此不要互相把對方擠掉）。</summary>
+    private const int Capacity = 4;
+
+    /// <summary>單張快照的像素上限（超過就不快取，照舊每幀精算）。</summary>
+    private const long MaxPixels = 24L * 1024 * 1024;
+
+    private readonly Dictionary<Guid, Entry> _entries = new();
+    private long _clock;
+
+    public bool TryDraw(SKCanvas canvas, TextElement text)
+    {
+        if (Math.Abs(text.Rotation) < 0.01f) return false;       // 沒轉就沒有這個問題
+        if (text.Deform is { IsIdentity: false }) return false;  // 透視／彎曲自己有一份快取
+        if (string.IsNullOrEmpty(text.Text)) return false;
+
+        var scale = DeviceScale(canvas);
+        if (scale <= 0f) return false;
+
+        // key＝「這個字未旋轉、擺在原點」的樣子：旋轉手勢中它逐幀不變（位置與角度都不在裡面）
+        var flat = text with { Rotation = 0f, Position = SKPoint.Empty };
+        var entry = EntryFor(text.Id);
+
+        if (entry.Image == null || entry.Key != flat || entry.Scale != scale)
+        {
+            if (entry.Pending != flat || entry.PendingScale != scale)
+            {
+                entry.Pending = flat;
+                entry.PendingScale = scale;
+                return false; // 這一幀先照舊畫；下一幀還是同一份才點陣化
+            }
+            if (!Rasterize(entry, flat, scale)) return false;
+        }
+
+        entry.Used = ++_clock;
+        using var paint = new SKPaint { FilterQuality = SKFilterQuality.Low, IsAntialias = true };
+        canvas.Save();
+        canvas.Translate(text.Position.X, text.Position.Y);
+        canvas.RotateDegrees(text.Rotation);
+        canvas.Scale(1f / entry.Scale, 1f / entry.Scale);
+        canvas.DrawImage(entry.Image, entry.Bounds.Left * entry.Scale, entry.Bounds.Top * entry.Scale, paint);
+        canvas.Restore();
+        return true;
+    }
+
+    private Entry EntryFor(Guid id)
+    {
+        if (_entries.TryGetValue(id, out var entry)) return entry;
+        if (_entries.Count >= Capacity)
+        {
+            // 最久沒用到的那份讓位（同一層一次轉一堆文字時才會用到）
+            var oldest = Guid.Empty;
+            var oldestUsed = long.MaxValue;
+            foreach (var (key, e) in _entries)
+            {
+                if (e.Used >= oldestUsed) continue;
+                oldestUsed = e.Used;
+                oldest = key;
+            }
+            _entries[oldest].Drop();
+            _entries.Remove(oldest);
+        }
+        entry = new Entry();
+        _entries[id] = entry;
+        return entry;
+    }
+
+    /// <summary>畫布目前的縮放（忽略旋轉），量化成 1/8 —— 縮放值抖一點不要害 key 一直失效。</summary>
+    private static float DeviceScale(SKCanvas canvas)
+    {
+        var m = canvas.TotalMatrix;
+        var det = Math.Abs(m.ScaleX * m.ScaleY - m.SkewX * m.SkewY);
+        if (det <= 0f || !float.IsFinite(det)) return 0f;
+        var scale = MathF.Sqrt(det);
+        if (scale < 1f / 16f || scale > 8f) return 0f; // 太小沒必要、太大快照會爆
+        return MathF.Round(scale * 8f) / 8f;
+    }
+
+    private static bool Rasterize(Entry entry, TextElement flat, float scale)
+    {
+        var bounds = flat.Bounds; // 未旋轉、擺在原點時的 doc 外框（含效果外擴）
+        var w = (int)MathF.Ceiling(bounds.Width * scale);
+        var h = (int)MathF.Ceiling(bounds.Height * scale);
+        if (w <= 0 || h <= 0 || (long)w * h > MaxPixels) return false;
+
+        using var surface = SKSurface.Create(new SKImageInfo(w, h, SKColorType.Bgra8888, SKAlphaType.Premul));
+        if (surface == null) return false;
+        var c = surface.Canvas;
+        c.Clear(SKColors.Transparent);
+        c.Scale(scale);
+        c.Translate(-bounds.Left, -bounds.Top);
+        flat.Render(c);
+        c.Flush();
+
+        entry.Image?.Dispose();
+        entry.Image = surface.Snapshot();
+        entry.Key = flat;
+        entry.Scale = scale;
+        entry.Bounds = bounds;
+        return true;
+    }
+
+    public void Dispose()
+    {
+        foreach (var entry in _entries.Values) entry.Drop();
+        _entries.Clear();
     }
 }

@@ -161,7 +161,7 @@ public sealed class ElementDragHelper
         // 覆疊中：只轉那張圖，原件放開才改（見 End）
         if (session.ElementOverlay is { } overlay && overlay.ElementId == original.Id)
         {
-            session.RotateElementOverlay(delta);
+            session.RotateElementOverlay(delta, _rotateCenter);
             return;
         }
 

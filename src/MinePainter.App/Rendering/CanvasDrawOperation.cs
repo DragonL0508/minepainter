@@ -310,7 +310,7 @@ public sealed class CanvasDrawOperation : ICustomDrawOperation
             if (ghost.Rotation != 0)
             {
                 canvas.Save();
-                canvas.RotateDegrees(ghost.Rotation, ghost.Rect.MidX, ghost.Rect.MidY);
+                canvas.RotateDegrees(ghost.Rotation, ghost.Pivot.X, ghost.Pivot.Y);
             }
             canvas.DrawImage(ghost.Image, ghost.Rect, paint);
             if (ghost.Rotation != 0) canvas.Restore();
@@ -338,7 +338,8 @@ public sealed class CanvasDrawOperation : ICustomDrawOperation
             if (rotation != 0)
             {
                 canvas.Save();
-                canvas.RotateDegrees(rotation, elementRect.MidX, elementRect.MidY);
+                var pivot = element.Pivot; // 物件真正的旋轉軸心，不是這張圖的中心
+                canvas.RotateDegrees(rotation, pivot.X, pivot.Y);
             }
             canvas.DrawImage(element.Image!, elementRect, paint);
             if (rotation != 0) canvas.Restore();

@@ -512,8 +512,11 @@ public sealed record TextElement : VectorElement
         var lineThickness = Math.Max(1f,
             metrics.UnderlineThickness ?? metrics.StrikeoutThickness ?? FontSize / 18f);
 
-        // 同一份排版要重畫好幾次（陰影／外框／字身），只換 paint
-        void DrawPass(SKPaint paint)
+        // 同一份排版要重畫好幾次（光暈／陰影／外框／字身，最多八趟），只換 paint。
+        // 分段、挑字面、量寬、建 glyph 全都只做一次，之後每趟只是把同一批 blob 換個 paint 再畫一遍
+        // —— 旋轉中的帶效果文字每幀都在重跑這幾趟，逐趟重新排版就是那裡掉的幀。
+        var blobs = new List<SKTextBlob>();
+        var rules = new List<SKRect>(); // 底線／刪除線
         {
             var baseline = firstBaseline;
             for (var i = 0; i < lines.Length; i++)
@@ -524,95 +527,109 @@ public sealed record TextElement : VectorElement
                     TextAlign.Right => maxWidth - widths[i],
                     _ => 0f,
                 };
-                shaper.DrawLine(canvas, lines[i], x, baseline, paint);
+                shaper.BuildLine(lines[i], x, baseline, blobs);
                 if (widths[i] > 0)
                 {
                     if (Underline)
-                        canvas.DrawRect(x, baseline + underlineY, widths[i], lineThickness, paint);
+                        rules.Add(SKRect.Create(x, baseline + underlineY, widths[i], lineThickness));
                     if (Strikethrough)
-                        canvas.DrawRect(x, baseline + strikeY, widths[i], lineThickness, paint);
+                        rules.Add(SKRect.Create(x, baseline + strikeY, widths[i], lineThickness));
                 }
                 baseline += LineHeight;
             }
         }
 
-        canvas.Save();
-        canvas.Translate(Position.X, Position.Y);
-        if (Math.Abs(Rotation) > 0.01f) canvas.RotateDegrees(Rotation);
-        if (Math.Abs(ScaleX - 1f) > 0.001f) canvas.Scale(ScaleX, 1f);
-
-        // 漸層的座標空間就是這裡（已套旋轉/ScaleX）—— 漸層因此跟著文字一起轉、一起拉
-        var block = SKRect.Create(0, 0, Math.Max(1f, maxWidth), Math.Max(1f, lines.Length * LineHeight));
-
-        // 光暈 → 陰影 → 外框 → 字身。外框以「兩倍寬描邊」畫在字身之下，內側那一半被字身蓋掉，
-        // 效果等同 PS 的「位置：外部」（真正的外側描邊要取字型輪廓做布林運算，代價高很多）。
-        // 多層外框：每層包在前一層外面 —— 由外而內、以「累積寬度 × 2」依序描邊，
-        // 內層蓋住外層的內側，看起來就是一圈圈往外疊。
-        var strokeLayers = Stroke?.Layers().Where(s => s.Width > 0.01f).ToList() ?? [];
-        var strokeWidth = 0f;
-        foreach (var s in strokeLayers) strokeWidth += s.Width;
-
-        // 陰影／光暈都是「把整個可見輪廓（字身＋外框）描粗再模糊」，只差位移與參數
-        void DrawSilhouette(SKColor color, float blurRadius, float grow, float dx, float dy)
+        void DrawPass(SKPaint paint)
         {
-            using var blur = blurRadius > 0.01f
-                ? SKMaskFilter.CreateBlur(SKBlurStyle.Normal, blurRadius / 2f)
-                : null;
-            using var paint = new SKPaint
-            {
-                Color = color,
-                IsAntialias = true,
-                MaskFilter = blur,
-                StrokeJoin = SKStrokeJoin.Round,
-                StrokeCap = SKStrokeCap.Round,
-            };
+            foreach (var blob in blobs) canvas.DrawText(blob, 0, 0, paint);
+            foreach (var rule in rules) canvas.DrawRect(rule, paint);
+        }
+
+        try
+        {
             canvas.Save();
-            if (dx != 0 || dy != 0) canvas.Translate(dx, dy);
-            var outline = strokeWidth + Math.Max(0f, grow);
-            if (outline > 0.01f)
+            canvas.Translate(Position.X, Position.Y);
+            if (Math.Abs(Rotation) > 0.01f) canvas.RotateDegrees(Rotation);
+            if (Math.Abs(ScaleX - 1f) > 0.001f) canvas.Scale(ScaleX, 1f);
+
+            // 漸層的座標空間就是這裡（已套旋轉/ScaleX）—— 漸層因此跟著文字一起轉、一起拉
+            var block = SKRect.Create(0, 0, Math.Max(1f, maxWidth), Math.Max(1f, lines.Length * LineHeight));
+
+            // 光暈 → 陰影 → 外框 → 字身。外框以「兩倍寬描邊」畫在字身之下，內側那一半被字身蓋掉，
+            // 效果等同 PS 的「位置：外部」（真正的外側描邊要取字型輪廓做布林運算，代價高很多）。
+            // 多層外框：每層包在前一層外面 —— 由外而內、以「累積寬度 × 2」依序描邊，
+            // 內層蓋住外層的內側，看起來就是一圈圈往外疊。
+            var strokeLayers = Stroke?.Layers().Where(s => s.Width > 0.01f).ToList() ?? [];
+            var strokeWidth = 0f;
+            foreach (var s in strokeLayers) strokeWidth += s.Width;
+
+            // 陰影／光暈都是「把整個可見輪廓（字身＋外框）描粗再模糊」，只差位移與參數
+            void DrawSilhouette(SKColor color, float blurRadius, float grow, float dx, float dy)
             {
-                paint.Style = SKPaintStyle.Stroke;
-                paint.StrokeWidth = outline * 2;
+                using var blur = blurRadius > 0.01f
+                    ? SKMaskFilter.CreateBlur(SKBlurStyle.Normal, blurRadius / 2f)
+                    : null;
+                using var paint = new SKPaint
+                {
+                    Color = color,
+                    IsAntialias = true,
+                    MaskFilter = blur,
+                    StrokeJoin = SKStrokeJoin.Round,
+                    StrokeCap = SKStrokeCap.Round,
+                };
+                canvas.Save();
+                if (dx != 0 || dy != 0) canvas.Translate(dx, dy);
+                var outline = strokeWidth + Math.Max(0f, grow);
+                if (outline > 0.01f)
+                {
+                    // 描粗與實心一起畫（StrokeAndFill）：兩者是同一個顏色，分兩趟只是把同一塊
+                    // 模糊了兩次再疊起來 —— 重疊處因此比真正的「輪廓聯集模糊一次」更濃，
+                    // 而且整整多跑一趟最貴的模糊。合成一趟同時更快也更接近 PS。
+                    paint.Style = SKPaintStyle.StrokeAndFill;
+                    paint.StrokeWidth = outline * 2;
+                }
                 DrawPass(paint);
-                paint.Style = SKPaintStyle.Fill;
+                canvas.Restore();
             }
-            DrawPass(paint);
+
+            if (Glow is { } glow && (glow.Size > 0.01f || glow.Spread > 0.01f))
+                DrawSilhouette(glow.Color, glow.Size, glow.Spread, 0, 0);
+
+            if (Shadow is { } shadow)
+            {
+                var rad = shadow.Angle * MathF.PI / 180f;
+                DrawSilhouette(shadow.Color, shadow.Blur, shadow.Spread,
+                    MathF.Cos(rad) * shadow.Distance, MathF.Sin(rad) * shadow.Distance);
+            }
+
+            var cumulative = strokeWidth;
+            for (var i = strokeLayers.Count - 1; i >= 0; i--)
+            {
+                var layer = strokeLayers[i];
+                using var strokeShader = layer.Gradient?.CreateShader(block);
+                using var strokePaint = new SKPaint
+                {
+                    Color = layer.Color,
+                    Shader = strokeShader,
+                    IsAntialias = true,
+                    Style = SKPaintStyle.Stroke,
+                    StrokeWidth = cumulative * 2,
+                    StrokeJoin = SKStrokeJoin.Round,
+                    StrokeCap = SKStrokeCap.Round,
+                };
+                DrawPass(strokePaint);
+                cumulative -= layer.Width;
+            }
+
+            using var fillShader = Gradient?.CreateShader(block);
+            using var fillPaint = new SKPaint { Color = Color, Shader = fillShader, IsAntialias = true };
+            DrawPass(fillPaint);
             canvas.Restore();
         }
-
-        if (Glow is { } glow && (glow.Size > 0.01f || glow.Spread > 0.01f))
-            DrawSilhouette(glow.Color, glow.Size, glow.Spread, 0, 0);
-
-        if (Shadow is { } shadow)
+        finally
         {
-            var rad = shadow.Angle * MathF.PI / 180f;
-            DrawSilhouette(shadow.Color, shadow.Blur, shadow.Spread,
-                MathF.Cos(rad) * shadow.Distance, MathF.Sin(rad) * shadow.Distance);
+            foreach (var blob in blobs) blob.Dispose();
         }
-
-        var cumulative = strokeWidth;
-        for (var i = strokeLayers.Count - 1; i >= 0; i--)
-        {
-            var layer = strokeLayers[i];
-            using var strokeShader = layer.Gradient?.CreateShader(block);
-            using var strokePaint = new SKPaint
-            {
-                Color = layer.Color,
-                Shader = strokeShader,
-                IsAntialias = true,
-                Style = SKPaintStyle.Stroke,
-                StrokeWidth = cumulative * 2,
-                StrokeJoin = SKStrokeJoin.Round,
-                StrokeCap = SKStrokeCap.Round,
-            };
-            DrawPass(strokePaint);
-            cumulative -= layer.Width;
-        }
-
-        using var fillShader = Gradient?.CreateShader(block);
-        using var fillPaint = new SKPaint { Color = Color, Shader = fillShader, IsAntialias = true };
-        DrawPass(fillPaint);
-        canvas.Restore();
     }
 
     public override VectorElement Translated(float dx, float dy) =>
@@ -707,6 +724,8 @@ public sealed record TextElement : VectorElement
         private readonly float _letterSpacing;
         private readonly Dictionary<int, SKTypeface?> _fallbackByCodepoint = new();
         private readonly List<SKTypeface> _owned = new();
+        private readonly Dictionary<SKTypeface, SKFont> _fonts = new();
+        private readonly Dictionary<SKTypeface, SKPaint> _measurePaints = new();
         private SKFont? _primaryFont;
 
         public TextShaper(string family, SKFontStyle style, float size, bool bold, bool italic,
@@ -739,15 +758,20 @@ public sealed record TextElement : VectorElement
             return width;
         }
 
-        public void DrawLine(SKCanvas canvas, string line, float x, float baseline, SKPaint paint)
+        /// <summary>
+        /// 把一行排好、產出可重複使用的 <see cref="SKTextBlob"/>（字面分段、glyph 對應與位置都已定案）。
+        /// 一個文字物件最多要畫八趟（光暈的描粗＋實心、陰影的兩趟、每層外框、字身），
+        /// 每趟重跑一次分段與量測是白工 —— 排一次、八趟共用同一批 blob。
+        /// </summary>
+        public void BuildLine(string line, float x, float baseline, List<SKTextBlob> into)
         {
             var spaced = Math.Abs(_letterSpacing) > 0.0001f;
             foreach (var (typeface, segment) in Runs(line))
             {
-                using var font = CreateFont(typeface);
+                var font = FontFor(typeface);
                 if (!spaced)
                 {
-                    canvas.DrawText(segment, x, baseline, font, paint);
+                    if (SKTextBlob.Create(segment, font, new SKPoint(x, baseline)) is { } blob) into.Add(blob);
                     x += Measure(typeface, segment);
                     continue;
                 }
@@ -755,7 +779,7 @@ public sealed record TextElement : VectorElement
                 foreach (var rune in segment.EnumerateRunes())
                 {
                     var glyph = rune.ToString();
-                    canvas.DrawText(glyph, x, baseline, font, paint);
+                    if (SKTextBlob.Create(glyph, font, new SKPoint(x, baseline)) is { } blob) into.Add(blob);
                     x += Measure(typeface, glyph) + _letterSpacing;
                 }
             }
@@ -780,7 +804,7 @@ public sealed record TextElement : VectorElement
 
             foreach (var (typeface, segment) in Runs(line))
             {
-                using var measure = CreateMeasurePaint(typeface);
+                var measure = MeasurePaintFor(typeface);
                 if (!spaced)
                 {
                     var ink = SKRect.Empty;
@@ -857,11 +881,25 @@ public sealed record TextElement : VectorElement
             return font;
         }
 
-        private float Measure(SKTypeface typeface, string segment)
+        /// <summary>這個字面的 font／量測 paint（每段、每趟都要用，建一次就留著）。</summary>
+        private SKFont FontFor(SKTypeface typeface)
         {
-            using var measure = CreateMeasurePaint(typeface);
-            return measure.MeasureText(segment);
+            if (_fonts.TryGetValue(typeface, out var font)) return font;
+            font = CreateFont(typeface);
+            _fonts[typeface] = font;
+            return font;
         }
+
+        private SKPaint MeasurePaintFor(SKTypeface typeface)
+        {
+            if (_measurePaints.TryGetValue(typeface, out var paint)) return paint;
+            paint = CreateMeasurePaint(typeface);
+            _measurePaints[typeface] = paint;
+            return paint;
+        }
+
+        private float Measure(SKTypeface typeface, string segment) =>
+            MeasurePaintFor(typeface).MeasureText(segment);
 
         /// <summary>與繪製同設定的量測 paint（2.88 的 SKFont.MeasureText 不吃 string）。</summary>
         private SKPaint CreateMeasurePaint(SKTypeface typeface) => new()
@@ -875,6 +913,8 @@ public sealed record TextElement : VectorElement
         public void Dispose()
         {
             _primaryFont?.Dispose();
+            foreach (var font in _fonts.Values) font.Dispose();
+            foreach (var paint in _measurePaints.Values) paint.Dispose();
             foreach (var typeface in _owned) typeface.Dispose();
             _style.Dispose();
         }

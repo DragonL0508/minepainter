@@ -569,7 +569,8 @@ public sealed class EditorSession : IDisposable
     /// 覆疊路徑下，快取裡的舊 tile 本來就不含浮動內容，少了這層畫面會閃一下
     /// 「東西不見了」再跳出來。合成器追上（<see cref="Compositor.IsRegionClean"/>）就收掉。
     /// </summary>
-    public sealed class OverlayGhost(SKImage image, SKRect rect, SKRectI region, float rotation = 0f)
+    public sealed class OverlayGhost(SKImage image, SKRect rect, SKRectI region, float rotation = 0f,
+        SKPoint? pivot = null)
     {
         public SKImage Image { get; } = image;
 
@@ -584,9 +585,12 @@ public sealed class EditorSession : IDisposable
         /// <summary>等這塊合成完就可以收掉。</summary>
         public SKRectI Region { get; } = region;
 
-        /// <summary>以 <see cref="Rect"/> 中心為軸的角度：旋轉手勢的殘影要跟覆疊圖同一個姿態，
+        /// <summary>以 <see cref="Pivot"/> 為軸的角度：旋轉手勢的殘影要跟覆疊圖同一個姿態，
         /// 否則放開的瞬間會閃一下轉回原角度。</summary>
         public float Rotation { get; } = rotation;
+
+        /// <summary>旋轉軸心（doc 座標）＝覆疊圖用的那一個，不是 <see cref="Rect"/> 的中心。</summary>
+        public SKPoint Pivot { get; } = pivot ?? new SKPoint(rect.MidX, rect.MidY);
     }
 
     private volatile OverlayGhost? _ghost;
@@ -640,28 +644,41 @@ public sealed class EditorSession : IDisposable
         /// <summary>物件原本的（含效果外擴的）外框，doc 座標。</summary>
         public SKRectI Bounds { get; } = bounds;
 
-        // 目前的目標框與角度（render thread 讀、UI thread 寫；float 讀寫是原子的，
+        // 目前的目標框、角度與旋轉軸心（render thread 讀、UI thread 寫；float 讀寫是原子的，
         // 中間狀態最多讓某一幀的框差一點點，下一幀就對上了）
         private volatile float _left = bounds.Left;
         private volatile float _top = bounds.Top;
         private volatile float _width = bounds.Width;
         private volatile float _height = bounds.Height;
         private volatile float _rotation;
+        private volatile float _pivotX = bounds.MidX;
+        private volatile float _pivotY = bounds.MidY;
 
         /// <summary>覆疊圖現在要畫在哪（doc 座標）。</summary>
         public SKRect CurrentRect => new(_left, _top, _left + _width, _top + _height);
 
-        /// <summary>以 <see cref="CurrentRect"/> 中心為軸的角度（度）。</summary>
+        /// <summary>以 <see cref="Pivot"/> 為軸的角度（度）。</summary>
         public float Rotation => _rotation;
 
-        /// <summary>設定目標框與角度（UI thread）。</summary>
-        public void SetTarget(SKRect rect, float rotationDeg)
+        /// <summary>
+        /// 旋轉軸心（doc 座標）。**不是覆疊圖的中心** —— 覆疊圖的框是「含效果外擴」的框，
+        /// 而物件真正繞著轉的是「使用者看到的框」（著墨範圍）的中心，兩者差了排版框與著墨框的落差
+        /// （120px 的字實測差 7–11 px，字級愈大差愈多）。用覆疊圖的中心當軸，手勢中的字就會
+        /// 繞錯圓心跑、跟選取框對不起來，放開又跳回正確位置 —— 使用者說的「旋轉時位置會亂跳」。
+        /// </summary>
+        public SKPoint Pivot => new(_pivotX, _pivotY);
+
+        /// <summary>設定目標框、角度與旋轉軸心（UI thread）；軸心省略＝框的中心。</summary>
+        public void SetTarget(SKRect rect, float rotationDeg, SKPoint? pivot = null)
         {
             _left = rect.Left;
             _top = rect.Top;
             _width = rect.Width;
             _height = rect.Height;
             _rotation = rotationDeg;
+            var p = pivot ?? new SKPoint(rect.MidX, rect.MidY);
+            _pivotX = p.X;
+            _pivotY = p.Y;
         }
 
         /// <summary>
@@ -823,12 +840,15 @@ public sealed class EditorSession : IDisposable
         RefreshSelectionHandles();
     }
 
-    /// <summary>手勢中的旋轉預覽：只轉覆疊圖（以框中心為軸），原件放開才改。</summary>
-    public void RotateElementOverlay(float degrees)
+    /// <summary>
+    /// 手勢中的旋轉預覽：只轉覆疊圖，原件放開才改。
+    /// <paramref name="pivot"/> 要與原件真正的旋轉軸心是同一點（見 <see cref="ElementDragOverlay.Pivot"/>）。
+    /// </summary>
+    public void RotateElementOverlay(float degrees, SKPoint pivot)
     {
         var overlay = _elementOverlay;
         if (overlay == null) return;
-        overlay.SetTarget(overlay.CurrentRect, degrees);
+        overlay.SetTarget(overlay.CurrentRect, degrees, pivot);
         RefreshSelectionHandles();
     }
 
@@ -843,11 +863,14 @@ public sealed class EditorSession : IDisposable
         var sx = newFrame.Width / oldFrame.Width;
         var sy = newFrame.Height / oldFrame.Height;
         var b = overlay.Bounds;
+        var pivot = overlay.Pivot;
         overlay.SetTarget(new SKRect(
             newFrame.Left + (b.Left - oldFrame.Left) * sx,
             newFrame.Top + (b.Top - oldFrame.Top) * sy,
             newFrame.Left + (b.Right - oldFrame.Left) * sx,
-            newFrame.Top + (b.Bottom - oldFrame.Top) * sy), overlay.Rotation);
+            newFrame.Top + (b.Bottom - oldFrame.Top) * sy), overlay.Rotation,
+            new SKPoint(newFrame.Left + (pivot.X - oldFrame.Left) * sx,
+                newFrame.Top + (pivot.Y - oldFrame.Top) * sy));
         RefreshSelectionHandles();
     }
 
@@ -869,10 +892,12 @@ public sealed class EditorSession : IDisposable
             return;
         }
         var final = overlay.CurrentRect;
+        var pivot = overlay.Pivot;
         // 旋轉中的殘影範圍要用轉過之後的外接框，不然合成器判斷「這塊乾淨了」會少算一塊
-        var region = SKRectI.Union(overlay.Bounds, SKRectI.Ceiling(RotatedBounds(final, overlay.Rotation)));
+        var region = SKRectI.Union(overlay.Bounds,
+            SKRectI.Ceiling(RotatedBounds(final, overlay.Rotation, pivot)));
         var old = _ghost;
-        _ghost = new OverlayGhost(overlay.Image, final, region, overlay.Rotation)
+        _ghost = new OverlayGhost(overlay.Image, final, region, overlay.Rotation, pivot)
         {
             Layer = overlay.Layer,
             ElementId = overlay.ElementId,
@@ -880,11 +905,12 @@ public sealed class EditorSession : IDisposable
         if (old != null) Compositor.Retire(old.Image);
     }
 
-    /// <summary>矩形繞中心旋轉後的外接框。</summary>
-    private static SKRect RotatedBounds(SKRect rect, float degrees)
+    /// <summary>矩形繞 <paramref name="pivot"/>（省略＝自己的中心）旋轉後的外接框。</summary>
+    private static SKRect RotatedBounds(SKRect rect, float degrees, SKPoint? pivot = null)
     {
         if (degrees == 0f) return rect;
-        var m = SKMatrix.CreateRotationDegrees(degrees, rect.MidX, rect.MidY);
+        var c = pivot ?? new SKPoint(rect.MidX, rect.MidY);
+        var m = SKMatrix.CreateRotationDegrees(degrees, c.X, c.Y);
         Span<SKPoint> pts =
         [
             m.MapPoint(rect.Left, rect.Top), m.MapPoint(rect.Right, rect.Top),

@@ -1,4 +1,4 @@
-using Avalonia;
+﻿using Avalonia;
 using Avalonia.Media;
 using Avalonia.Media.Fonts;
 
@@ -25,6 +25,12 @@ internal static class Program
 
         // 第一件事就是秀啟動畫面（純 Win32、自己的執行緒），Avalonia 初始化在它後面跑
         Platform.NativeSplash.Show();
+
+        // Skia 的字形遮罩快取預設只有 2 MB —— 一個 120px、帶外光暈／外框的字，光是它自己一幀
+        // （光暈、陰影、每層外框、字身，最多八趟）就把 2 MB 塞爆，於是同一幀裡後面幾趟得把
+        // 剛做好的遮罩再做一次。實測拉大之後，帶陰影／光暈的字旋轉一幀省下一成多
+        // （陰影 2.7→2.3 ms、光暈 4.3→3.7 ms）。上限是「用到才佔」，閒著不吃記憶體。
+        SkiaSharp.SKGraphics.SetFontCacheLimit(64 * 1024 * 1024);
         Services.StartupSounds.SplashShown();
         BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
     }
