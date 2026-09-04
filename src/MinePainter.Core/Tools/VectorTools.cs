@@ -16,6 +16,13 @@ public abstract class VectorToolBase : ITool
     private readonly ElementDragHelper _drag = new();
     private bool _creating;
 
+    /// <summary>
+    /// 把手的命中範圍（doc 座標）。畫布會依縮放比設定它（＝螢幕上固定的一圈），
+    /// 與移動工具、與畫布上「指到把手就換游標」用的是同一個值 ——
+    /// 三者不一致的話，游標變了卻拉不動（或反過來）。
+    /// </summary>
+    public float HandleTolerance { get; set; } = 10f;
+
     protected SKPoint DragStart;
 
     public void OnPointerDown(ToolPointerEvent e, EditorSession session)
@@ -23,7 +30,7 @@ public abstract class VectorToolBase : ITool
         var doc = session.Document;
 
         // 1) 已選元素的把手/內部
-        if (_drag.TryBegin(session, e.DocPosition, handleTolerance: 10f, allowInsideMove: true))
+        if (_drag.TryBegin(session, e.DocPosition, HandleTolerance, allowInsideMove: true))
             return;
 
         // 2) 點中任何可見文字元素 → 選取 + 移動

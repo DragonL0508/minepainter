@@ -590,7 +590,8 @@ public sealed class CanvasView : Control
         {
             // 讓工具能以螢幕距離判定「算不算拖曳」，手感不受縮放影響
             _session.Move.ViewScale = _viewport.Scale;
-            _session.Move.HandleTolerance = (float)(HandleHitRadius / Math.Max(0.01, _viewport.Scale));
+            _session.Move.HandleTolerance = DocHandleTolerance;
+            if (_session.ActiveTool is Core.Tools.VectorToolBase vector) vector.HandleTolerance = DocHandleTolerance;
             _session.SnapTolerance = (float)(8 / Math.Max(0.01, _viewport.Scale)); // 對齊吸附 ≈ 螢幕 8px
         }
         var point = e.GetCurrentPoint(this);
@@ -862,8 +863,9 @@ public sealed class CanvasView : Control
             _elementRotating || _transformRotating) return -1;
 
         var tool = session.ActiveTool;
+        // 文字工具（VectorToolBase）也拉得動選著的物件的把手，游標一樣要跟著變
         if (tool != session.Move && tool != session.RectSelect && tool != session.EllipseSelect &&
-            tool != session.Lasso && tool != session.Wand) return -1;
+            tool != session.Lasso && tool != session.Wand && tool is not Core.Tools.VectorToolBase) return -1;
 
         var view = _viewport.ViewToDoc(_hoverView);
         var p = new SKPoint((float)view.X, (float)view.Y);

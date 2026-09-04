@@ -1,4 +1,4 @@
-using MinePainter.Core.Compositing;
+﻿using MinePainter.Core.Compositing;
 using MinePainter.Core.History;
 using MinePainter.Core.IO;
 using MinePainter.Core.Layers;
@@ -128,6 +128,45 @@ public class LayerElementTests
     }
 
     /// <summary>模擬使用者單擊（paint.net 式：點下去就開始輸入）。</summary>
+    /// <summary>
+    /// 文字工具的把手命中範圍要跟著畫布給的值走（畫布會依縮放比設定，
+    /// 這樣「指到把手會換游標」的範圍與「按下去真的抓得到」才是同一圈）。
+    /// </summary>
+    [Fact]
+    public void TextTool_HandleToleranceIsConfigurable()
+    {
+        using var session = new EditorSession(ImageCodec.CreateBlankDocument(512, 512, SKColors.White));
+        var doc = session.Document;
+        session.Foreground = SKColors.Black;
+        session.ActiveTool = session.Text;
+        ClickText(session, new SKPoint(100, 100));
+
+        var layer = Assert.IsType<RasterLayer>(doc.ActiveLayer);
+        var created = Assert.IsType<TextElement>(layer.Elements[0]);
+        VectorCommands.CommitNewElement(doc, session.History, layer,
+            created with { Text = "文字文字", FontSize = 48 }, "新增文字");
+        var text = Assert.IsType<TextElement>(layer.Elements[0]);
+        ElementDragHelper.SetSelected(session, layer, text);
+        session.RefreshSelectionHandles();
+
+        var frame = Assert.NotNull(session.SelectionHandles);
+        var justOutside = new SKPoint(frame.Left - 20, frame.Top - 20); // 離左上角 28px
+
+        // 預設的 10px：抓不到把手（那一下會變成「點空白處」）
+        session.Text.HandleTolerance = 10f;
+        session.Text.OnPointerDown(new ToolPointerEvent(justOutside, 1f), session);
+        session.Text.OnPointerUp(new ToolPointerEvent(justOutside, 1f), session);
+        Assert.Null(session.ElementOverlay);
+
+        // 畫布縮小時會把範圍放大（螢幕上永遠是同一圈）：這時同一點就抓得到
+        ElementDragHelper.SetSelected(session, layer, text);
+        session.RefreshSelectionHandles();
+        session.Text.HandleTolerance = 40f;
+        session.Text.OnPointerDown(new ToolPointerEvent(justOutside, 1f), session);
+        Assert.NotNull(session.ElementOverlay); // 開始縮放 → 物件改由覆疊代表
+        session.Text.OnPointerUp(new ToolPointerEvent(justOutside, 1f), session);
+    }
+
     private static void ClickText(EditorSession session, SKPoint p)
     {
         var tool = session.Text;

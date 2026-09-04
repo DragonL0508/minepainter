@@ -449,6 +449,14 @@ public sealed record SkewEffect : IEffect
     public float Vertical { get; init; }           // -80..80（度）
     public int Pivot { get; init; }                // 0=中心 1=上緣 2=下緣
 
+    /// <summary>
+    /// 傾斜的方向以「物件自己的方向」為準（預設）：文字轉了 45°，倒的方向也跟著轉 45° ——
+    /// 那才叫「把這個物件斜體化」。關掉就是以畫布為準（水平永遠是螢幕的水平）。
+    /// 與漸層的同名選項是同一個概念（見 ObjectGradientEffect.RelativeToObject）。
+    /// 只有「整層剛好就是一個文字物件」時知道角度，其他情況兩者相同。
+    /// </summary>
+    public bool RelativeToObject { get; init; } = true;
+
     public string Name => "傾斜";
     public string Category => "扭曲";
     public int SourceMargin => EffectContext.WholeLayer;
@@ -467,6 +475,8 @@ public sealed record SkewEffect : IEffect
             (o, v) => ((SkewEffect)o) with { Vertical = (float)v }, "°", 1),
         new ChoiceParam("pivot", "基準", ["物件中心", "物件上緣", "物件下緣"],
             o => ((SkewEffect)o).Pivot, (o, v) => ((SkewEffect)o) with { Pivot = v }),
+        new BoolParam("relative", "角度跟著物件轉", o => ((SkewEffect)o).RelativeToObject,
+            (o, v) => ((SkewEffect)o) with { RelativeToObject = v }),
     ];
     public IReadOnlyList<ParamDef> Parameters => Params;
 
@@ -476,6 +486,46 @@ public sealed record SkewEffect : IEffect
         var shy = MathF.Tan(Math.Clamp(Vertical, -80f, 80f) * MathF.PI / 180f);
         if (shx == 0f && shy == 0f) { ctx.CopySrcToDst(); return; }
 
+        var rotation = RelativeToObject ? ctx.ContentRotation : 0f;
+        if (Math.Abs(rotation) < 0.01f)
+        {
+            RenderAxisAligned(ctx, shx, shy);
+            return;
+        }
+
+        // 物件是轉過的：把切變放進「物件自己的座標系」做 —— 進去（轉 -θ）、切變、再轉回來。
+        // 基準線也要在物件座標裡找，不然轉了 45° 的字會以螢幕的水平線當基準，倒得莫名其妙。
+        var rad = rotation * MathF.PI / 180f;
+        var cos = MathF.Cos(rad);
+        var sin = MathF.Sin(rad);
+        var (cx, cy) = ContentCentre(ctx);
+        var (pivotU, pivotV) = RotatedPivot(ctx, cx, cy, cos, sin, Pivot);
+
+        ctx.ForRows(y =>
+        {
+            for (var x = 0; x < ctx.Width; x++)
+            {
+                var px = x + 0.5f - cx;
+                var py = y + 0.5f - cy;
+
+                // 轉進物件座標（R(-θ)）
+                var u = px * cos + py * sin;
+                var v = -px * sin + py * cos;
+
+                // 在物件座標裡做與軸對齊版本相同的反向映射
+                var su = u + shx * (v - pivotV);
+                var sv = v - shy * (u - pivotU);
+
+                // 轉回畫布座標（R(θ)）
+                var sx = su * cos - sv * sin + cx;
+                var sy = su * sin + sv * cos + cy;
+                ctx.Dst[y * ctx.Width + x] = ctx.SrcBilinear(sx, sy);
+            }
+        });
+    }
+
+    private void RenderAxisAligned(EffectContext ctx, float shx, float shy)
+    {
         var (left, top, right, bottom) = ContentBounds(ctx);
         var pivotY = Pivot switch { 1 => top, 2 => bottom, _ => (top + bottom) / 2f };
         var pivotX = (left + right) / 2f;
@@ -492,6 +542,46 @@ public sealed record SkewEffect : IEffect
                 ctx.Dst[y * ctx.Width + x] = ctx.SrcBilinear(sx, sy);
             }
         });
+    }
+
+    /// <summary>內容外框的中心（目標座標）＝物件座標系的原點。</summary>
+    private static (float X, float Y) ContentCentre(EffectContext ctx)
+    {
+        var (left, top, right, bottom) = ContentBounds(ctx);
+        return ((left + right) / 2f, (top + bottom) / 2f);
+    }
+
+    /// <summary>
+    /// 物件座標系裡的基準點：把有顏色的像素轉進物件座標後取外框，
+    /// 再依「中心／上緣／下緣」挑一條線。轉過的字，它的「下緣」是斜的那一條，不是畫面的水平線。
+    /// </summary>
+    private static (float U, float V) RotatedPivot(EffectContext ctx, float cx, float cy,
+        float cos, float sin, int pivot)
+    {
+        var minU = float.MaxValue;
+        var maxU = float.MinValue;
+        var minV = float.MaxValue;
+        var maxV = float.MinValue;
+
+        for (var y = 0; y < ctx.Height; y++)
+        {
+            for (var x = 0; x < ctx.Width; x++)
+            {
+                if (A(ctx.SrcOrTransparent(x, y)) == 0) continue;
+                var px = x + 0.5f - cx;
+                var py = y + 0.5f - cy;
+                var u = px * cos + py * sin;
+                var v = -px * sin + py * cos;
+                if (u < minU) minU = u;
+                if (u > maxU) maxU = u;
+                if (v < minV) minV = v;
+                if (v > maxV) maxV = v;
+            }
+        }
+
+        if (minU > maxU) return (0f, 0f); // 整片透明：倒哪裡都一樣
+        var pivotV = pivot switch { 1 => minV, 2 => maxV, _ => (minV + maxV) / 2f };
+        return ((minU + maxU) / 2f, pivotV);
     }
 
     /// <summary>
