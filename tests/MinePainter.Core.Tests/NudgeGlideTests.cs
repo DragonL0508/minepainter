@@ -1,4 +1,4 @@
-using MinePainter.Core.Tools;
+﻿using MinePainter.Core.Tools;
 using Xunit;
 
 namespace MinePainter.Core.Tests;
@@ -118,4 +118,34 @@ public class NudgeGlideTests
         Assert.True(x > 10);
         Assert.True(y < -10);
     }
+    [Fact]
+    public void LostKeyUp_StopsGlidingInsteadOfRunningForever()
+    {
+        var glide = new NudgeGlide { LostKeyUpTimeout = 0.5 };
+        Assert.True(glide.Press(1, 0, 1));
+
+        // 放開事件掉了：沒有任何按鍵重複進來，超過門檻就當成已放開
+        for (var i = 0; i < 40; i++) glide.Step(0.02);
+        Assert.False(glide.AnyHeld);
+        Assert.Equal((0, 0), glide.Step(0.02));
+    }
+
+    [Fact]
+    public void KeyRepeat_KeepsGlidingAlive()
+    {
+        var glide = new NudgeGlide { LostKeyUpTimeout = 0.5 };
+        Assert.True(glide.Press(1, 0, 1));
+
+        // OS 的按鍵重複每 0.1 秒進來一次 → 一直算「還按著」
+        for (var i = 0; i < 40; i++)
+        {
+            glide.Step(0.02);
+            if (i % 5 == 4) Assert.False(glide.Press(1, 0, 1)); // 重複事件回 false
+        }
+        Assert.True(glide.AnyHeld);
+
+        glide.Release(1, 0);
+        Assert.False(glide.AnyHeld);
+    }
+
 }

@@ -314,6 +314,13 @@ public sealed class CanvasView : Control
     /// <summary>滑行期間壓進歷史的步數起算點（放開時併回一步）。</summary>
     private int _nudgeUndoBase = -1;
 
+    /// <summary>
+    /// 滑行期間擋住 History.Changed。每幀壓一步、每步都讓圖層面板與歷史面板整份重建清單的話，
+    /// UI 執行緒會被自己排的重建塞爆 —— 連放開按鍵的事件都排不進去，看起來就是當掉、
+    /// 而且物件停不下來。放開時併回一步，那時才發一次事件。
+    /// </summary>
+    private IDisposable? _nudgeHistoryHold;
+
     private static (int X, int Y) NudgeDirection(Key key) => key switch
     {
         Key.Left => (-1, 0),
@@ -329,7 +336,11 @@ public sealed class CanvasView : Control
         var (dirX, dirY) = NudgeDirection(key);
         _glide.Shift = shift;
         if (!_glide.Press(dirX, dirY, shift ? 10 : 1)) return; // 按鍵重複：滑行已經在動了
-        if (_nudgeUndoBase < 0) _nudgeUndoBase = session.History.UndoStack.Count;
+        if (_nudgeUndoBase < 0)
+        {
+            _nudgeUndoBase = session.History.UndoStack.Count;
+            _nudgeHistoryHold ??= session.History.SuspendNotifications();
+        }
     }
 
     private void EndNudge(Key key)
@@ -348,6 +359,10 @@ public sealed class CanvasView : Control
         }
         _nudgeUndoBase = -1;
         _glide.Reset();
+        // 併回一步之後才解除，面板只會重建一次（順序不能反，否則中間那幾百步會先送出去）
+        var hold = _nudgeHistoryHold;
+        _nudgeHistoryHold = null;
+        hold?.Dispose();
     }
 
     /// <summary>畫布不再是焦點／目標消失：滑行停掉並收尾。</summary>

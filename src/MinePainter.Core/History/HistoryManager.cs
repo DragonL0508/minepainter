@@ -29,6 +29,54 @@ public sealed class HistoryManager : IDisposable
 
     private static readonly List<HistoryManager> Live = new();
 
+    private int _suspendDepth;
+    private bool _changedPending;
+
+    /// <summary>
+    /// 暫時不發 <see cref="Changed"/>，解除時若期間有變動就補發一次。
+    ///
+    /// 給「一個手勢連續壓很多步」用（方向鍵按住滑行是每幀一步）：圖層面板與歷史面板
+    /// 收到 Changed 就整份重建清單，每幀發一次會讓 UI 執行緒被自己排的重建塞爆 ——
+    /// 連放開按鍵的事件都排不進去，看起來就是當掉而且東西停不下來。
+    /// </summary>
+    public IDisposable SuspendNotifications()
+    {
+        lock (_gate) _suspendDepth++;
+        return new Suspension(this);
+    }
+
+    private void RaiseChanged()
+    {
+        lock (_gate)
+        {
+            if (_suspendDepth > 0)
+            {
+                _changedPending = true;
+                return;
+            }
+        }
+        Changed?.Invoke();
+    }
+
+    private sealed class Suspension(HistoryManager owner) : IDisposable
+    {
+        private bool _done;
+
+        public void Dispose()
+        {
+            if (_done) return;
+            _done = true;
+            bool fire;
+            lock (owner._gate)
+            {
+                owner._suspendDepth--;
+                fire = owner._suspendDepth == 0 && owner._changedPending;
+                if (fire) owner._changedPending = false;
+            }
+            if (fire) owner.Changed?.Invoke();
+        }
+    }
+
     private static long _globalMemoryLimit = DefaultGlobalLimit();
 
     /// <summary>
@@ -131,7 +179,7 @@ public sealed class HistoryManager : IDisposable
             _undo.Add(entry);
             EvictLocked();
         }
-        Changed?.Invoke();
+        RaiseChanged();
     }
 
     /// <summary>
@@ -156,7 +204,7 @@ public sealed class HistoryManager : IDisposable
             _undo.RemoveRange(_undo.Count - count, count);
             _undo.Add(new CompositeHistoryEntry(label ?? steps[^1].Label, steps.ToArray()));
         }
-        Changed?.Invoke();
+        RaiseChanged();
     }
 
     internal bool Undo()
@@ -174,7 +222,7 @@ public sealed class HistoryManager : IDisposable
 
             _redo.Add(entry);
         }
-        Changed?.Invoke();
+        RaiseChanged();
         return true;
     }
 
@@ -194,7 +242,7 @@ public sealed class HistoryManager : IDisposable
 
             _undo.Add(entry);
         }
-        Changed?.Invoke();
+        RaiseChanged();
         return true;
     }
 

@@ -1,4 +1,4 @@
-namespace MinePainter.Core.Tools;
+﻿namespace MinePainter.Core.Tools;
 
 /// <summary>
 /// 方向鍵微調的節奏：按一下走一格，按住則等速滑行（由慢漸快）。
@@ -30,7 +30,16 @@ public sealed class NudgeGlide
     /// <summary>Shift 現在有沒有按著（隨時可改：先按方向鍵、之後才按 Shift 也算）。</summary>
     public bool Shift { get; set; }
 
-    private readonly HashSet<(int X, int Y)> _held = new();
+    /// <summary>
+    /// 按著的方向 → 距離最後一次收到那個鍵的按下事件過了多久（秒）。
+    /// OS 的按鍵重複會一直刷新它；超過 <see cref="LostKeyUpTimeout"/> 還沒動靜就是
+    /// 那顆鍵的放開事件掉了（視窗被搶走、輸入被別的東西吃掉），當成已放開 ——
+    /// 不然畫面上的東西會一直滑下去停不了。
+    /// </summary>
+    private readonly Dictionary<(int X, int Y), double> _held = new();
+
+    /// <summary>多久沒有按鍵重複就視為放開（秒）。Windows 的重複延遲最長約 1 秒，留足餘裕。</summary>
+    public double LostKeyUpTimeout { get; init; } = 1.5;
     private double _heldSeconds;
     private double _pendingX, _pendingY; // 單次按鍵的位移（補間送出）
     private double _glideX, _glideY;     // 滑行的小數累積
@@ -48,7 +57,13 @@ public sealed class NudgeGlide
     public bool Press(int dirX, int dirY, int step)
     {
         if (dirX == 0 && dirY == 0) return false;
-        if (!_held.Add((dirX, dirY))) return false;
+        var key = (dirX, dirY);
+        if (_held.ContainsKey(key))
+        {
+            _held[key] = 0; // OS 的按鍵重複：只當成「還按著」的心跳
+            return false;
+        }
+        _held[key] = 0;
         _heldSeconds = 0;
         _pendingX += dirX * step;
         _pendingY += dirY * step;
@@ -77,6 +92,7 @@ public sealed class NudgeGlide
     /// <summary>推進一幀，回傳這一幀要走的整數像素（0 = 這幀不動）。</summary>
     public (int Dx, int Dy) Step(double dt)
     {
+        DropLostKeys(dt);
         if (_held.Count > 0)
         {
             _heldSeconds += dt;
@@ -87,7 +103,7 @@ public sealed class NudgeGlide
                 var speed = (SlowSpeed + (FastSpeed - SlowSpeed) * t * t) * (Shift ? ShiftFactor : 1);
                 var dirX = 0;
                 var dirY = 0;
-                foreach (var (x, y) in _held)
+                foreach (var (x, y) in _held.Keys)
                 {
                     dirX += x;
                     dirY += y;
@@ -99,6 +115,21 @@ public sealed class NudgeGlide
 
         return (Advance(ref _pendingX) + TakeWhole(ref _glideX),
                 Advance(ref _pendingY) + TakeWhole(ref _glideY));
+    }
+
+    /// <summary>放開事件掉了的方向：當成已放開（見 <see cref="LostKeyUpTimeout"/>）。</summary>
+    private void DropLostKeys(double dt)
+    {
+        if (_held.Count == 0) return;
+        List<(int X, int Y)>? lost = null;
+        foreach (var key in _held.Keys.ToList())
+        {
+            var since = _held[key] + dt;
+            _held[key] = since;
+            if (since > LostKeyUpTimeout) (lost ??= new()).Add(key);
+        }
+        if (lost == null) return;
+        foreach (var key in lost) Release(key.X, key.Y);
     }
 
     /// <summary>單次按鍵的補間：每幀走剩餘的三成（至少 1px，否則永遠到不了）。</summary>

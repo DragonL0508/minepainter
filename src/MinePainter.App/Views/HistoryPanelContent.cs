@@ -1,4 +1,4 @@
-using Avalonia.Controls;
+﻿using Avalonia.Controls;
 using Avalonia.Media;
 using Avalonia.Threading;
 using MinePainter.Core.Tools;
@@ -35,7 +35,22 @@ public sealed class HistoryPanelContent : UserControl
         Refresh();
     }
 
-    private void OnHistoryChanged() => Dispatcher.UIThread.Post(Refresh);
+    private bool _refreshQueued;
+
+    /// <summary>
+    /// 同 LayersPanel：Post 不去重，連續壓步時佇列會積滿整份清單重建。
+    /// 這裡更貴 —— 清單長度就是步數本身，愈積愈慢。
+    /// </summary>
+    private void OnHistoryChanged()
+    {
+        if (_refreshQueued) return;
+        _refreshQueued = true;
+        Dispatcher.UIThread.Post(() =>
+        {
+            _refreshQueued = false;
+            Refresh();
+        });
+    }
 
     public void Refresh()
     {

@@ -100,7 +100,22 @@ public partial class LayersPanel : UserControl
         Refresh();
     }
 
-    private void OnHistoryChanged() => Avalonia.Threading.Dispatcher.UIThread.Post(Refresh);
+    private bool _refreshQueued;
+
+    /// <summary>
+    /// 歷史一動就重建清單，但同一輪只排一次 —— Post 本身不會去重，
+    /// 連續壓步（按住方向鍵滑行、連續繪畫）會讓佇列裡積滿重建工作，UI 執行緒直接被塞死。
+    /// </summary>
+    private void OnHistoryChanged()
+    {
+        if (_refreshQueued) return;
+        _refreshQueued = true;
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            _refreshQueued = false;
+            Refresh();
+        });
+    }
 
     private readonly HashSet<LayerNode> _thumbDirty = new();
     private readonly Avalonia.Threading.DispatcherTimer _thumbTimer = new() { Interval = TimeSpan.FromMilliseconds(120) };
