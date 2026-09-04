@@ -30,6 +30,25 @@ public class MemoryFootprintTests
     }
 
     [Fact]
+    public void CompositeCache_EvictsBeyondBudget()
+    {
+        using var doc = ImageCodec.CreateBlankDocument(2048, 2048, SKColors.White); // 8×8 = 64 格
+        using var compositor = new Compositor(doc) { CacheBudgetBytes = 8L * Tile.BytesPerTile };
+
+        var deadline = Environment.TickCount64 + 5000;
+        // 不用 TryGetTile 等（那會把淘汰掉的格又排回去）：看 worker 自己的計數
+        while (compositor.TilesRendered < 64 || compositor.DirtyCount > 0)
+        {
+            if (Environment.TickCount64 > deadline) throw new TimeoutException("合成逾時");
+            Thread.Sleep(10);
+        }
+
+        Assert.True(compositor.EvictedTiles > 0, "超出預算應該要淘汰");
+        Assert.True(compositor.CachedBytes <= 8L * Tile.BytesPerTile,
+            $"快取 {compositor.CachedBytes} bytes 超出預算");
+    }
+
+    [Fact]
     public void Suspend_DropsCompositeCache_AndResumeRebuildsIt()
     {
         using var doc = ImageCodec.CreateBlankDocument(512, 512, SKColors.White);

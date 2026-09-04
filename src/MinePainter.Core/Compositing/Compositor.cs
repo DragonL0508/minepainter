@@ -34,6 +34,11 @@ public sealed class Compositor : IDisposable
     private readonly HashSet<TileIndex> _dirty = new();
 
     private readonly ConcurrentDictionary<TileIndex, SKImage?> _cache = new();
+
+    /// <summary>每格最後被用到的時間戳（LRU 淘汰用；全透明的格不計，它們不佔像素記憶體）。</summary>
+    private readonly ConcurrentDictionary<TileIndex, long> _touch = new();
+    private long _touchClock;
+
     private readonly ConcurrentQueue<(long Gen, SKImage Image)> _retired = new();
     private long _collectGen;
 
@@ -54,6 +59,41 @@ public sealed class Compositor : IDisposable
 
     /// <summary>診斷：目前快取著的 tile 數（含全透明格 —— 那些不佔像素記憶體）。</summary>
     public int CachedTileCount => _cache.Count;
+
+    /// <summary>診斷：合成快取實際佔的像素記憶體（bytes）。</summary>
+    public long CachedBytes => (long)_imageTiles * Tile.BytesPerTile;
+
+    private int _imageTiles; // 非透明（＝真的佔記憶體）的格數
+
+    /// <summary>診斷：累計因為超出預算被淘汰的格數。</summary>
+    public long EvictedTiles => Interlocked.Read(ref _evicted);
+
+    private long _evicted;
+
+    /// <summary>
+    /// 合成快取的記憶體預算（bytes）。GEGL 的 tile-cache 預設吃一半的 RAM 並在超出時淘汰／落盤；
+    /// 我們的快取是純加速結構（丟了就重算），所以只淘汰、不落盤。
+    /// 超出時從「看不到的格」裡挑最久沒用到的丟（可見範圍永遠留著，否則畫面會自己閃）。
+    /// </summary>
+    public long CacheBudgetBytes { get; set; } = DefaultBudgetBytes;
+
+    /// <summary>預設預算：實體記憶體的 1/8，夾在 64 MB ~ 512 MB 之間。</summary>
+    public static long DefaultBudgetBytes { get; } = ComputeDefaultBudget();
+
+    private static long ComputeDefaultBudget()
+    {
+        long total;
+        try
+        {
+            total = GC.GetGCMemoryInfo().TotalAvailableMemoryBytes;
+        }
+        catch
+        {
+            total = 0;
+        }
+        if (total <= 0) total = 8L * 1024 * 1024 * 1024;
+        return Math.Clamp(total / 8, 64L * 1024 * 1024, 512L * 1024 * 1024);
+    }
 
     /// <summary>診斷：還在排隊等合成的 tile 數（＝畫面落後多少）。</summary>
     public int DirtyCount
@@ -124,6 +164,7 @@ public sealed class Compositor : IDisposable
     {
         if (_cache.TryGetValue(idx, out image))
         {
+            if (image != null) _touch[idx] = Interlocked.Increment(ref _touchClock);
             lock (_dirtyGate)
             {
                 if (!_dirty.Contains(idx)) return true;
@@ -145,8 +186,12 @@ public sealed class Compositor : IDisposable
         foreach (var key in _cache.Keys)
         {
             if (_cache.TryRemove(key, out var img) && img != null)
+            {
+                Interlocked.Decrement(ref _imageTiles);
                 _retired.Enqueue((Volatile.Read(ref _collectGen), img));
+            }
         }
+        _touch.Clear();
         lock (_dirtyGate) _dirty.Clear();
         MarkDirty(_document.Bounds);
     }
@@ -156,6 +201,10 @@ public sealed class Compositor : IDisposable
         var any = false;
         lock (_dirtyGate)
         {
+            // 已經整份都髒了就不必再走一遍格子（效果堆疊每寫回一次就會標一次整層，
+            // 一秒好幾百次，每次都列舉整張網格是白做的）
+            if (_dirty.Count >= TileCols * TileRows) return;
+
             foreach (var idx in TileIndex.CoveringRect(docRect))
             {
                 if (idx.X < 0 || idx.Y < 0 || idx.X >= TileCols || idx.Y >= TileRows) continue;
@@ -222,8 +271,13 @@ public sealed class Compositor : IDisposable
 
         foreach (var key in _cache.Keys)
         {
-            if (_cache.TryRemove(key, out var img) && img != null) RetireGlobal(img);
+            if (_cache.TryRemove(key, out var img) && img != null)
+            {
+                Interlocked.Decrement(ref _imageTiles);
+                RetireGlobal(img);
+            }
         }
+        _touch.Clear();
         while (_retired.TryDequeue(out var entry)) RetireGlobal(entry.Image);
 
         lock (_document.SyncRoot)
@@ -274,9 +328,17 @@ public sealed class Compositor : IDisposable
                     rendered++;
 
                     // 每完成一小批就通知一次，讓 viewport 邊合成邊顯示
-                    if (rendered % 16 == 0) TilesReady?.Invoke();
+                    if (rendered % 16 == 0)
+                    {
+                        TrimCache();
+                        TilesReady?.Invoke();
+                    }
                 }
-                if (rendered > 0) TilesReady?.Invoke();
+                if (rendered > 0)
+                {
+                    TrimCache();
+                    TilesReady?.Invoke();
+                }
             }
         }
         catch (OperationCanceledException)
@@ -323,6 +385,42 @@ public sealed class Compositor : IDisposable
     }
 
     /// <summary>
+    /// 超出預算就淘汰：從「這一刻看不到的格」裡挑最久沒被用到的丟掉，直到回到預算內。
+    /// 可見範圍一律留著 —— 丟了它畫面下一幀就會缺格。
+    /// 丟掉的格只是加速結構，之後有人要就重新排隊合成。
+    /// </summary>
+    private void TrimCache()
+    {
+        var budget = CacheBudgetBytes;
+        if (budget <= 0 || CachedBytes <= budget) return;
+
+        var visible = _visibleTiles;
+        var target = (long)(budget * 0.9); // 一次多丟一點，免得每合成一格就淘汰一次
+
+        var candidates = new List<(long Touch, TileIndex Idx)>();
+        foreach (var (idx, img) in _cache)
+        {
+            if (img == null) continue;
+            if (idx.X >= visible.Left && idx.X <= visible.Right &&
+                idx.Y >= visible.Top && idx.Y <= visible.Bottom) continue;
+            candidates.Add((_touch.TryGetValue(idx, out var t) ? t : 0, idx));
+        }
+        if (candidates.Count == 0) return;
+
+        candidates.Sort(static (a, b) => a.Touch.CompareTo(b.Touch));
+        foreach (var (_, idx) in candidates)
+        {
+            if (CachedBytes <= target) break;
+            if (!_cache.TryRemove(idx, out var img)) continue;
+            _touch.TryRemove(idx, out _);
+            if (img == null) continue;
+            Interlocked.Decrement(ref _imageTiles);
+            Interlocked.Increment(ref _evicted);
+            _retired.Enqueue((Volatile.Read(ref _collectGen), img));
+        }
+    }
+
+    /// <summary>
     /// 合成結果影像的像素緩衝來自 <see cref="TilePool"/>，由 SKImage 的 release callback 歸還。
     /// （SKSurface.Create(info) 會自己 malloc 一塊 256KB 再被 Clear 清一次 ——
     /// 拖曳大片內容時每秒有數千格走這條路，配置與重複清零都是實打實的成本。）
@@ -359,8 +457,20 @@ public sealed class Compositor : IDisposable
             }
 
             if (_cache.TryGetValue(idx, out var old) && old != null)
+            {
+                Interlocked.Decrement(ref _imageTiles);
                 _retired.Enqueue((Volatile.Read(ref _collectGen), old));
+            }
             _cache[idx] = image;
+            if (image != null)
+            {
+                Interlocked.Increment(ref _imageTiles);
+                _touch[idx] = Interlocked.Increment(ref _touchClock);
+            }
+            else
+            {
+                _touch.TryRemove(idx, out _);
+            }
         }
         finally
         {
@@ -748,6 +858,8 @@ public sealed class Compositor : IDisposable
 
         foreach (var img in _cache.Values) img?.Dispose();
         _cache.Clear();
+        _touch.Clear();
+        Interlocked.Exchange(ref _imageTiles, 0);
         while (_retired.TryDequeue(out var entry)) entry.Image.Dispose();
         _cts.Dispose();
         _signal.Dispose();
