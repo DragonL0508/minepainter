@@ -487,6 +487,11 @@ public sealed class EditorSession : IDisposable
     {
         public SKImage Image { get; } = image;
 
+        /// <summary>這張殘影是哪個物件的（沒有＝浮動內容的殘影）。收掉的時機與再利用都要看它。</summary>
+        public RasterLayer? Layer { get; init; }
+
+        public Guid? ElementId { get; init; }
+
         /// <summary>殘影該出現的位置（落地＝新位置，取消＝原位置）。</summary>
         public SKRect Rect { get; } = rect;
 
@@ -507,7 +512,10 @@ public sealed class EditorSession : IDisposable
     public void CollectOverlayGhost()
     {
         var ghost = _ghost;
-        if (ghost != null && Compositor.IsRegionClean(ghost.Region))
+        // 合成器「畫完了」不等於「畫對了」：效果堆疊還在背景重算時，合成結果裡的物件是沒有效果的，
+        // 這時收掉殘影，畫面就會閃一下（外框／陰影消失再出現）——放開的瞬間閃爍就是這個。
+        var effectsBehind = ghost?.Layer is { HasActiveEffects: true, EffectsRendered: false };
+        if (ghost != null && !effectsBehind && Compositor.IsRegionClean(ghost.Region))
         {
             _ghost = null;
             Compositor.Retire(ghost.Image); // render thread 這一幀可能還在畫它，不能就地 Dispose
@@ -616,6 +624,19 @@ public sealed class EditorSession : IDisposable
         {
             _elementOverlay = new ElementDragOverlay(layer, element.Id, null, bounds);
             layer.HiddenElementId = element.Id;
+            return;
+        }
+
+        // 上一趟手勢剛落地、效果還在背景重算（那扇窗大約 0.2–0.3 秒）：這時再按下去，
+        // 效果快取不是最新的，本來就得整個物件重算一遍 —— 使用者感受到的就是「頭幾次不順、
+        // 多做幾次才變順」。而剛落地的那張殘影，畫的正好就是這個物件現在的樣子，直接接手來用。
+        if (_ghost is { Rotation: 0f } ghost && ghost.ElementId == element.Id &&
+            ReferenceEquals(ghost.Layer, layer) && SKRectI.Round(ghost.Rect) == bounds)
+        {
+            _ghost = null; // 影像的擁有權轉給覆疊
+            _elementOverlay = new ElementDragOverlay(layer, element.Id, ghost.Image, bounds);
+            layer.HiddenElementId = element.Id;
+            OverlayReusedCache = true;
             return;
         }
 
@@ -784,7 +805,11 @@ public sealed class EditorSession : IDisposable
         // 旋轉中的殘影範圍要用轉過之後的外接框，不然合成器判斷「這塊乾淨了」會少算一塊
         var region = SKRectI.Union(overlay.Bounds, SKRectI.Ceiling(RotatedBounds(final, overlay.Rotation)));
         var old = _ghost;
-        _ghost = new OverlayGhost(overlay.Image, final, region, overlay.Rotation);
+        _ghost = new OverlayGhost(overlay.Image, final, region, overlay.Rotation)
+        {
+            Layer = overlay.Layer,
+            ElementId = overlay.ElementId,
+        };
         if (old != null) Compositor.Retire(old.Image);
     }
 

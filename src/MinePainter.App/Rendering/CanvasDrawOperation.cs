@@ -297,8 +297,10 @@ public sealed class CanvasDrawOperation : ICustomDrawOperation
         // 縮放取樣與 tile 同調（見 QualityFor）
         var quality = QualityFor(_viewport.Scale);
 
-        // GPU 路徑畫的就是當下的真實狀態，不需要殘影去蓋合成器的延遲
-        if (!gpuDrew && _session.Ghost is { } ghost)
+        // 殘影仍然要畫：效果翻不成 GPU 濾鏡的圖層，畫面上那份效果還是 CPU 快取算的，
+        // 落地後到重算完之間有個空窗，少了殘影就會閃一下（物件先變成沒有效果的樣子）。
+        // 效果整串都交給 GPU 的那條路根本不會產生殘影（沒有快照），所以不會重疊。
+        if (_session.Ghost is { } ghost)
         {
             using var paint = new SKPaint
             {
