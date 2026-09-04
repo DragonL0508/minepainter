@@ -71,6 +71,7 @@ public sealed class RectangleSelectTool : ITool
         _anchor = e.DocPosition;
         _dragging = true;
         session.Preview = null;
+        session.SelectionGestureActive = true; // 拖曳中不顯示把手框，放開才出現
 
         // 沒按修飾鍵 = Replace 模式：按下瞬間就清掉畫面上的舊選取（螞蟻線與把手一起；
         // undo 由放開時的 entry 還原）
@@ -97,6 +98,7 @@ public sealed class RectangleSelectTool : ITool
         if (!_dragging) return;
         _dragging = false;
         session.Preview = null;
+        session.SelectionGestureActive = false; // 選取區確定，把手可以出現了
         var original = _original;
         _original = null;
 
@@ -151,6 +153,7 @@ public sealed class EllipseSelectTool : ITool
         _anchor = e.DocPosition;
         _dragging = true;
         session.Preview = null;
+        session.SelectionGestureActive = true; // 拖曳中不顯示把手框，放開才出現
 
         // 沒按修飾鍵 = Replace 模式：按下瞬間就清掉畫面上的舊選取（與矩形選取一致）
         _original = session.Selection;
@@ -169,6 +172,7 @@ public sealed class EllipseSelectTool : ITool
         if (!_dragging) return;
         _dragging = false;
         session.Preview = null;
+        session.SelectionGestureActive = false; // 選取區確定，把手可以出現了
         var original = _original;
         _original = null;
 
@@ -226,6 +230,7 @@ public sealed class LassoSelectTool : ITool
         _points.Clear();
         _points.Add(e.DocPosition);
         _dragging = true;
+        session.SelectionGestureActive = true; // 拖曳中不顯示把手框，放開才出現
 
         // Replace 模式：按下瞬間清掉畫面上的舊選取（螞蟻線與把手一起）
         _original = session.Selection;
@@ -249,6 +254,7 @@ public sealed class LassoSelectTool : ITool
         if (!_dragging) return;
         _dragging = false;
         session.Preview = null;
+        session.SelectionGestureActive = false; // 選取區確定，把手可以出現了
         var original = _original;
         _original = null;
 

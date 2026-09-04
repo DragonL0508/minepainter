@@ -145,6 +145,24 @@ public sealed class EditorSession : IDisposable
         }
     }
 
+    private bool _selectionGestureActive;
+
+    /// <summary>
+    /// 選取工具正在拖曳中。拖的時候畫面上只該有「正在框出來的那條線」（工具預覽），
+    /// 把手框一律收掉 —— 加選／減選時舊選取的把手還留著會讓人以為那是可以拖的東西。
+    /// 放開＝選取區確定，把手才出現。
+    /// </summary>
+    public bool SelectionGestureActive
+    {
+        get => _selectionGestureActive;
+        set
+        {
+            if (_selectionGestureActive == value) return;
+            _selectionGestureActive = value;
+            RefreshSelectionHandles();
+        }
+    }
+
     /// <summary>
     /// 依模式開始（或切換）變形：Free＝一般變形框；Perspective＝四角模式；Warp＝彎曲模式。
     /// 目標含文字物件時先自動「圖層文字平面化」再框（PS 也是先柵格化；Esc 取消會連平面化一起還原）。
@@ -1595,6 +1613,8 @@ public sealed class EditorSession : IDisposable
         {
             var changed = !ReferenceEquals(_activeTool, value);
             _activeTool = value;
+            // 手勢旗標不跨工具（拖到一半被切走時放開事件收不到，框會永遠藏著）
+            if (changed) _selectionGestureActive = false;
             // 切到移動工具＝明示「我要動這層的東西」，圖層內容框重新框一次
             // （上一輪點空白處把它收掉的狀態不留到這一輪）
             if (changed && ReferenceEquals(value, Move)) _layerFrameDismissed = false;

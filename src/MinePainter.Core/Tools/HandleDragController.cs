@@ -121,6 +121,10 @@ public sealed class HandleDragController
     /// <summary>目前畫布上「被框住的東西」的外框；null = 沒有。</summary>
     public static SKRect? GetFrame(EditorSession session)
     {
+        // 選取工具拖曳中：畫面上只留正在框出來的那條線，把手框全部收掉，
+        // 放開（選取區確定）才讓把手出現。
+        if (session.SelectionGestureActive) return null;
+
         // 變形框：TargetRect 是被變形的像素框，使用者看到的框要再包住效果外擴
         if (session.Transform is { } transform)
         {
