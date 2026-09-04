@@ -1751,6 +1751,22 @@ public sealed class EditorSession : IDisposable
     }
 
     /// <summary>
+    /// 換作用中圖層（UI thread，鎖外呼叫）：先把上一層還浮著的東西落地，再切過去。
+    ///
+    /// 變形框與浮動內容都綁在原本那一層。留著不落地的話，把手框會一直優先顯示那個舊的變形框
+    /// （見 <see cref="HandleDragController.GetFrame"/> 的優先序），新圖層的內容框就長不出來
+    /// —— 使用者回報的「縮放過之後再點到另一個圖層，不會自動框住那層的東西」就是這個。
+    /// 切走工具時本來就會落地（MainWindow.SelectTool），換圖層是同一件事。
+    /// </summary>
+    public void SetActiveLayer(LayerNode node)
+    {
+        if (ReferenceEquals(Document.ActiveLayer, node)) return;
+        if (Transform != null && !ReferenceEquals(Transform.Target, node)) CommitTransform();
+        CommitFloating();
+        lock (Document.SyncRoot) Document.ActiveLayer = node;
+    }
+
+    /// <summary>
     /// 換作用中圖層：放掉文字圖層上的像素選取，並讓圖層內容框重新自動出現一次
     /// （「點進圖層時永遠先框一次」；上一層被點掉的狀態不帶到新圖層）。
     /// </summary>

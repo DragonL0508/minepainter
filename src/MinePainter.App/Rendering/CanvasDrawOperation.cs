@@ -238,21 +238,25 @@ public sealed class CanvasDrawOperation : ICustomDrawOperation
         // GPU 路徑已經照層序把手勢中的像素畫進去了（交接中的殘影仍由這裡補，那時層裡已是蓋章後的內容）
         if (gpuDrew && !overlay.HandingOver) return;
 
-        var m = overlay.Matrix;
         if (overlay.Warp is { } warp)
         {
             // 彎曲：矩陣之後再套貝茲網格（三角網格貼圖，拖曳中同樣只換網格不重合成）
-            foreach (var (_, image, src) in overlay.Items)
-                warp.Draw(canvas, image, src, m, SKFilterQuality.Low);
+            var wm = overlay.Matrix;
+            foreach (var (_, image, src, _) in overlay.Items)
+                warp.Draw(canvas, image, src, wm, SKFilterQuality.Low);
             return;
         }
 
         using var paint = new SKPaint { FilterQuality = SKFilterQuality.Low, IsAntialias = true };
-        canvas.Save();
-        canvas.Concat(ref m);
-        foreach (var (_, image, src) in overlay.Items)
+        // 逐項的矩陣：像素與物件快照的基準時間不同（見 TransformSession.GestureOverlay.Items）
+        foreach (var (_, image, src, itemMatrix) in overlay.Items)
+        {
+            var m = itemMatrix;
+            canvas.Save();
+            canvas.Concat(ref m);
             canvas.DrawImage(image, src.Left, src.Top, paint);
-        canvas.Restore();
+            canvas.Restore();
+        }
     }
 
     /// <summary>

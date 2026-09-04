@@ -111,6 +111,18 @@ public sealed class HandleDragController
         return r;
     }
 
+    /// <summary>
+    /// 把手抓的是「含效果外擴的顯示框」上的一點，換算成它對應到「內容框」上的那一點 ——
+    /// 顯示框的那個角往內縮 <paramref name="pad"/> 就是內容框的同一個角（只算把手會動的那幾軸）。
+    /// </summary>
+    private static SKPoint ToInnerHandle(SKPoint p, int corner, float pad)
+    {
+        if (pad <= 0) return p;
+        var dx = corner switch { 0 or 3 or 7 => pad, 1 or 2 or 5 => -pad, _ => 0f };
+        var dy = corner switch { 0 or 1 or 4 => pad, 2 or 3 or 6 => -pad, _ => 0f };
+        return new SKPoint(p.X + dx, p.Y + dy);
+    }
+
     /// <summary>使用者看到的物件框 = 排版框往外加效果外擴量。</summary>
     public static SKRect ElementFrame(RasterLayer layer, VectorElement element)
     {
@@ -478,9 +490,14 @@ public sealed class HandleDragController
                 // Shift＝回到內容最原始的比例（ResetSize 是這輪／續接前的原始尺寸）
                 var originalAspect = transform.ResetSize.Height > 0
                     ? transform.ResetSize.Width / transform.ResetSize.Height : (float?)null;
-                // 在含外擴的框上算縮放，再扣掉外擴才是像素框
-                var target = SelectionMask.SnapToPixels(Deflated(
-                    MoveTool.ResizeRect(_startRect, _corner, local, keepAspect, originalAspect), _transformPad));
+                // 縮放要在**內容框**上算，不是在含效果外擴的顯示框上：外擴是固定寬度、不跟著縮，
+                // 兩個框的長寬比因此不一樣。在顯示框上套內容的比例、算完再扣掉外擴，出來的
+                // 就不是原始比例了 —— 文字加了外光暈之後按住 Shift 縮放會歪掉就是這個
+                // （外擴 0 的一般圖層維持原本的行為，下面兩行都等於沒做事）。
+                var innerStart = Deflated(_startRect, _transformPad);
+                var innerPoint = ToInnerHandle(local, _corner, _transformPad);
+                var target = SelectionMask.SnapToPixels(
+                    MoveTool.ResizeRect(innerStart, _corner, innerPoint, keepAspect, originalAspect));
                 if (target.Width < 1 || target.Height < 1 || target == transform.TargetRect) break;
                 transform.TargetRect = target;
                 transform.Apply(preview: true);

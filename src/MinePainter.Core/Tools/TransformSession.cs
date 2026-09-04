@@ -57,6 +57,9 @@ public sealed class TransformSession : IDisposable
 
         /// <summary>這一層的物件是本 session 藏起來的（放回來時只放自己藏的那些）。</summary>
         public bool ElementsWereHidden;
+
+        /// <summary>拍下物件快照那一刻的手勢矩陣的反矩陣：畫的時候要把「已經含在快照裡」的那段扣掉。</summary>
+        public SKMatrix PreviewInverse = SKMatrix.Identity;
     }
 
     /// <summary>
@@ -336,8 +339,17 @@ public sealed class TransformSession : IDisposable
     /// </summary>
     public sealed class GestureOverlay
     {
-        /// <summary>每一項附上它屬於哪一層 —— GPU 路徑要照層序把它畫在對的位置。</summary>
-        public required (RasterLayer Layer, SKImage Image, SKRectI SrcBounds)[] Items { get; init; }
+        /// <summary>
+        /// 每一項附上它屬於哪一層（GPU 路徑要照層序把它畫在對的位置）與**它自己的矩陣**。
+        ///
+        /// 矩陣是逐項的，因為兩種快照的基準時間不同：像素是 session 開始時提起來的（矩陣＝
+        /// 從 SourceRect 一路映射到現在），物件快照則是**這一次手勢開始時**才拍的（此刻的
+        /// 樣子已經含了本 session 先前的位移／縮放）。共用同一個矩陣的話，先拖過再轉的文字
+        /// 會被那段位移套第二次 —— 畫面上就是「一按下去文字瞬間跳到奇怪的位置，放開又回來」。
+        /// </summary>
+        public required (RasterLayer Layer, SKImage Image, SKRectI SrcBounds, SKMatrix Matrix)[] Items { get; init; }
+
+        /// <summary>像素快照用的矩陣（彎曲網格貼圖仍以它為基準）。</summary>
         public required SKMatrix Matrix { get; init; }
 
         /// <summary>彎曲模式：矩陣之後再套這張網格（WarpMesh.Draw）；null＝只有矩陣。</summary>
@@ -744,8 +756,16 @@ public sealed class TransformSession : IDisposable
     /// </summary>
     private void CaptureElementPreviews()
     {
+        // 網格／四角模式的位移是套在網格上的，物件走的是另一條路（TransformedElement），
+        // 這裡不接手 —— 照舊每幀重算，慢但不會畫錯。
+        if (_quad != null || _warp != null) return;
+
         var withElements = _items.Where(i => i.Pixels == null && i.Layer.HasElements).ToList();
         if (withElements.Count == 0) return;
+
+        // 快照拍的是「此刻的樣子」，而此刻已經含了本 session 先前的位移／縮放 ——
+        // 畫的時候要把那一段扣掉，否則會被套第二次（見 GestureOverlay.Items）
+        if (!Matrix.TryInvert(out var inverse)) return;
 
         foreach (var item in withElements)
         {
@@ -762,6 +782,7 @@ public sealed class TransformSession : IDisposable
             {
                 item.Layer.ElementsHidden = true;
                 item.ElementsWereHidden = true;
+                item.PreviewInverse = inverse;
             }
         }
         _elementsFrozen = true;
@@ -861,6 +882,7 @@ public sealed class TransformSession : IDisposable
                 item.ElementPreview = null;
             }
             item.ElementPreviewBounds = SKRectI.Empty;
+            item.PreviewInverse = SKMatrix.Identity;
         }
     }
 
@@ -911,9 +933,8 @@ public sealed class TransformSession : IDisposable
         {
             if (item.ElementPreview == null) continue;
             var src = item.ElementPreviewBounds;
-            var mapped = _warp != null
-                ? SKRectI.Ceiling(_warp.Bounds)
-                : SKRectI.Ceiling(Matrix.MapRect(new SKRect(src.Left, src.Top, src.Right, src.Bottom)));
+            var m = SKMatrix.Concat(Matrix, item.PreviewInverse);
+            var mapped = SKRectI.Ceiling(m.MapRect(new SKRect(src.Left, src.Top, src.Right, src.Bottom)));
             mapped.Inflate(2, 2);
             var both = SKRectI.Union(src, mapped);
             region = region.IsEmpty ? both : SKRectI.Union(region, both);
@@ -924,11 +945,14 @@ public sealed class TransformSession : IDisposable
     private void PublishOverlay(bool handingOver, SKRectI elementRegion = default)
     {
         // 只有文字的圖層沒有像素，代表它的是手勢開始時拍的那張物件快照（見 CaptureElementPreviews）
+        var pixelMatrix = PixelMatrix;
+        var elementMatrix = Matrix;
         var items = _items
             .Select(i => (i.Layer, Image: i.Pixels ?? i.ElementPreview,
-                Bounds: i.Pixels != null ? i.SrcBounds : i.ElementPreviewBounds))
+                Bounds: i.Pixels != null ? i.SrcBounds : i.ElementPreviewBounds,
+                Matrix: i.Pixels != null ? pixelMatrix : SKMatrix.Concat(elementMatrix, i.PreviewInverse)))
             .Where(t => t.Image != null)
-            .Select(t => (t.Layer, t.Image!, t.Bounds))
+            .Select(t => (t.Layer, t.Image!, t.Bounds, t.Matrix))
             .ToArray();
         if (items.Length == 0)
         {

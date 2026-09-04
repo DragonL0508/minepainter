@@ -521,10 +521,7 @@ public partial class LayersPanel : UserControl
         var node = SelectedNode;
         if (node != null)
         {
-            lock (_session.Document.SyncRoot)
-            {
-                _session.Document.ActiveLayer = node;
-            }
+            _session.SetActiveLayer(node); // 上一層的變形框／浮動內容先落地（框才會跟著換層）
             _lastActiveNode = node;
             // 物件屬於圖層：換圖層就放掉前一層的物件選取（把手框會自動跟上）
             _session.SelectedElement = null;

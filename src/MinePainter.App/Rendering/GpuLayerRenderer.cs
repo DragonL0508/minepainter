@@ -238,7 +238,7 @@ public sealed unsafe class GpuLayerRenderer : IDisposable
     }
 
     /// <summary>這一層現在是不是變形手勢的一員（交接中的殘影不算 —— 那時像素已經蓋回層裡了）。</summary>
-    private static (RasterLayer Layer, SKImage Image, SKRectI SrcBounds)? GestureItem(
+    private static (RasterLayer Layer, SKImage Image, SKRectI SrcBounds, SKMatrix Matrix)? GestureItem(
         EditorSession session, RasterLayer raster)
     {
         if (session.Transform?.Overlay is not { HandingOver: false } overlay) return null;
@@ -250,9 +250,9 @@ public sealed unsafe class GpuLayerRenderer : IDisposable
     }
 
     private static void DrawGesture(SKCanvas canvas, TransformSession.GestureOverlay overlay,
-        (RasterLayer Layer, SKImage Image, SKRectI SrcBounds) item)
+        (RasterLayer Layer, SKImage Image, SKRectI SrcBounds, SKMatrix Matrix) item)
     {
-        var m = overlay.Matrix;
+        var m = item.Matrix; // 逐項的矩陣：像素與物件快照的基準時間不同（見 GestureOverlay.Items）
         if (overlay.Warp is { } warp)
         {
             warp.Draw(canvas, item.Image, item.SrcBounds, m, SKFilterQuality.Low);

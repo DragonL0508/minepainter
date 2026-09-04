@@ -98,6 +98,50 @@ public class TransformTextGestureTests
     }
 
     [Fact]
+    public void 先移動再開始手勢_快照不會被同一段位移套第二次()
+    {
+        var (doc, layer, _) = NewTextDoc(withGlow: true);
+        using (doc)
+        using (var transform = TransformSession.Begin(doc, layer, out _)!)
+        {
+            // 先拖著移動一段（同一個 session 裡，這在移動工具下很常見）
+            transform.TargetRect = SKRect.Create(
+                transform.SourceRect.Left + 100, transform.SourceRect.Top + 60,
+                transform.SourceRect.Width, transform.SourceRect.Height);
+            transform.Apply(preview: true);
+
+            // 再開始旋轉手勢：快照是「此刻」拍的，已經含了上面那段位移
+            transform.BeginGesturePreview(live: true);
+            var item = transform.Overlay!.Items[0];
+            var drawn = item.Matrix.MapRect(new SKRect(
+                item.SrcBounds.Left, item.SrcBounds.Top, item.SrcBounds.Right, item.SrcBounds.Bottom));
+
+            // 手勢還沒動 → 畫出來的位置就該是快照原本的位置。
+            // 以前這裡會多跑一次 (100, 60)：畫面上就是「一按下去文字瞬間跳走，放開又回來」。
+            Assert.Equal(item.SrcBounds.Left, drawn.Left, 1);
+            Assert.Equal(item.SrcBounds.Top, drawn.Top, 1);
+
+            // 手勢中轉一個角度：快照要繞著框中心轉，位置不該再多一段位移
+            transform.RotationDeg = 90f;
+            transform.Apply(preview: true);
+            var rotated = transform.Overlay!.Items[0];
+            var after = rotated.Matrix.MapRect(new SKRect(
+                rotated.SrcBounds.Left, rotated.SrcBounds.Top, rotated.SrcBounds.Right, rotated.SrcBounds.Bottom));
+            var srcMid = new SKPoint(
+                (rotated.SrcBounds.Left + rotated.SrcBounds.Right) / 2f,
+                (rotated.SrcBounds.Top + rotated.SrcBounds.Bottom) / 2f);
+            // 唯一該被套上的就是這次手勢的旋轉（繞變形框中心），先前那段位移不能再來一次
+            var expected = SKMatrix
+                .CreateRotationDegrees(90f, transform.TargetRect.MidX, transform.TargetRect.MidY)
+                .MapPoint(srcMid);
+            Assert.Equal(expected.X, after.MidX, 1);
+            Assert.Equal(expected.Y, after.MidY, 1);
+
+            transform.EndGesture();
+        }
+    }
+
+    [Fact]
     public void 純平移文字圖層不必重算效果堆疊()
     {
         var (doc, layer, text) = NewTextDoc(withGlow: true);
