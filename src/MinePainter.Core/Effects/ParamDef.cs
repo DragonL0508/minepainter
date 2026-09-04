@@ -1,4 +1,4 @@
-﻿namespace MinePainter.Core.Effects;
+namespace MinePainter.Core.Effects;
 
 /// <summary>
 /// 參數描述：讓 UI 不必認識每一種調整／效果就能長出對話框。
@@ -26,12 +26,6 @@ public sealed record SliderParam(
 {
     public SliderTrack Track { get; init; } = SliderTrack.None;
     public bool IsSeed { get; init; }
-
-    /// <summary>
-    /// 這個值是「像素長度」（外框寬度、模糊半徑、陰影距離…）。
-    /// 降解析度算預覽時要跟著縮，不然半解析度算出來的外框會變兩倍粗。
-    /// </summary>
-    public bool Geometric { get; init; }
 }
 
 /// <summary>角度（度）：UI 用轉盤 + 數值。</summary>

@@ -55,7 +55,7 @@ public static class BackgroundRemovalCommand
 
         // ---- 1. 平面化（鎖內）----
         // 效果快取要先是最新的；RenderLayerNow 會等 worker 正在算的工作
-        if (layer.HasActiveEffects) LayerEffectRenderer.RenderLayerNow(doc, layer, exact: true);
+        if (layer.HasActiveEffects) LayerEffectRenderer.RenderLayerNow(doc, layer);
 
         TileSnapshot before;
         var effectsBefore = layer.Effects;

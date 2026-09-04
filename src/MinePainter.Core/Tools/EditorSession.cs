@@ -1516,7 +1516,7 @@ public sealed class EditorSession : IDisposable
         if (Document.ActiveLayer is not { CanHaveEffects: true } node) return null;
 
         // 效果快取要先是最新的（複製是使用者按下去才發生的一次性動作，等得起）
-        if (node.HasActiveEffects) LayerEffectRenderer.RenderLayerNow(Document, node, exact: true);
+        if (node.HasActiveEffects) LayerEffectRenderer.RenderLayerNow(Document, node);
 
         var selection = Selection is { IsEmpty: false } s ? s : null;
         var bounds = selection != null

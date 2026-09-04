@@ -277,10 +277,6 @@ public sealed record ObjectOutlineEffect : IEffect
         init => GradientStops = GradientStops.WithEnd(value);
     }
 
-    /// <summary>幾何參數都會跟著縮，結果也不看絕對座標 —— 可以在降解析度上算預覽。</summary>
-
-    public bool SupportsPreviewScale => true;
-
 
     public string Name => "外框";
     public string Category => "物件";
@@ -300,11 +296,11 @@ public sealed record ObjectOutlineEffect : IEffect
     private static readonly ParamDef[] Params =
     [
         new SliderParam("width", "寬度", 1, 60, o => ((ObjectOutlineEffect)o).Width,
-            (o, v) => ((ObjectOutlineEffect)o) with { Width = (int)v }) { Geometric = true },
+            (o, v) => ((ObjectOutlineEffect)o) with { Width = (int)v }),
         new SliderParam("softness", "柔邊", 0, 100, o => ((ObjectOutlineEffect)o).Softness,
             (o, v) => ((ObjectOutlineEffect)o) with { Softness = (int)v }),
         new SliderParam("smooth", "平滑", 0, 20, o => ((ObjectOutlineEffect)o).Smooth,
-            (o, v) => ((ObjectOutlineEffect)o) with { Smooth = (int)v }) { Geometric = true },
+            (o, v) => ((ObjectOutlineEffect)o) with { Smooth = (int)v }),
         new ColorParam("color", "顏色", o => ((ObjectOutlineEffect)o).Color,
             (o, v) => ((ObjectOutlineEffect)o) with { Color = v }) { UsePrimaryByDefault = true },
         new BoolParam("gradient", "漸層外框", o => ((ObjectOutlineEffect)o).Gradient,
@@ -427,10 +423,6 @@ public sealed record ObjectShadowEffect : IEffect
     public int Opacity { get; init; } = 60;    // 0..100
     public SKColor Color { get; init; } = SKColors.Black;
 
-    /// <summary>幾何參數都會跟著縮，結果也不看絕對座標 —— 可以在降解析度上算預覽。</summary>
-
-    public bool SupportsPreviewScale => true;
-
 
     public string Name => "陰影";
     public string Category => "物件";
@@ -439,13 +431,13 @@ public sealed record ObjectShadowEffect : IEffect
     private static readonly ParamDef[] Params =
     [
         new SliderParam("ox", "位移 X", -50, 50, o => ((ObjectShadowEffect)o).OffsetX,
-            (o, v) => ((ObjectShadowEffect)o) with { OffsetX = (int)v }) { Geometric = true },
+            (o, v) => ((ObjectShadowEffect)o) with { OffsetX = (int)v }),
         new SliderParam("oy", "位移 Y", -50, 50, o => ((ObjectShadowEffect)o).OffsetY,
-            (o, v) => ((ObjectShadowEffect)o) with { OffsetY = (int)v }) { Geometric = true },
+            (o, v) => ((ObjectShadowEffect)o) with { OffsetY = (int)v }),
         new SliderParam("thickness", "厚度", 0, 50, o => ((ObjectShadowEffect)o).Thickness,
-            (o, v) => ((ObjectShadowEffect)o) with { Thickness = (int)v }) { Geometric = true },
+            (o, v) => ((ObjectShadowEffect)o) with { Thickness = (int)v }),
         new SliderParam("blur", "模糊", 0, 50, o => ((ObjectShadowEffect)o).Blur,
-            (o, v) => ((ObjectShadowEffect)o) with { Blur = (int)v }) { Geometric = true },
+            (o, v) => ((ObjectShadowEffect)o) with { Blur = (int)v }),
         new SliderParam("opacity", "不透明度", 0, 100, o => ((ObjectShadowEffect)o).Opacity,
             (o, v) => ((ObjectShadowEffect)o) with { Opacity = (int)v }, "%"),
         new ColorParam("color", "顏色", o => ((ObjectShadowEffect)o).Color,
@@ -559,10 +551,6 @@ public sealed record ObjectGlowEffect : IEffect
     public int Opacity { get; init; } = 85;  // 0..100
     public SKColor Color { get; init; } = new(0xFF, 0xD3, 0x4A);
 
-    /// <summary>幾何參數都會跟著縮，結果也不看絕對座標 —— 可以在降解析度上算預覽。</summary>
-
-    public bool SupportsPreviewScale => true;
-
 
     public string Name => "光暈";
     public string Category => "物件";
@@ -571,9 +559,9 @@ public sealed record ObjectGlowEffect : IEffect
     private static readonly ParamDef[] Params =
     [
         new SliderParam("size", "大小", 1, 50, o => ((ObjectGlowEffect)o).Size,
-            (o, v) => ((ObjectGlowEffect)o) with { Size = (int)v }) { Geometric = true },
+            (o, v) => ((ObjectGlowEffect)o) with { Size = (int)v }),
         new SliderParam("spread", "擴散", 0, 30, o => ((ObjectGlowEffect)o).Spread,
-            (o, v) => ((ObjectGlowEffect)o) with { Spread = (int)v }) { Geometric = true },
+            (o, v) => ((ObjectGlowEffect)o) with { Spread = (int)v }),
         new SliderParam("opacity", "不透明度", 0, 100, o => ((ObjectGlowEffect)o).Opacity,
             (o, v) => ((ObjectGlowEffect)o) with { Opacity = (int)v }, "%"),
         new ColorParam("color", "顏色", o => ((ObjectGlowEffect)o).Color,
@@ -607,10 +595,6 @@ public sealed record ObjectFillEffect : IEffect
 
     /// <summary>0..100：塗上去的濃度（不是整層透明度，是這片顏色蓋過原色的程度）。</summary>
     public int Opacity { get; init; } = 100;
-
-    /// <summary>幾何參數都會跟著縮，結果也不看絕對座標 —— 可以在降解析度上算預覽。</summary>
-
-    public bool SupportsPreviewScale => true;
 
 
     public string Name => "塗色";
@@ -692,11 +676,6 @@ public sealed record ObjectGradientEffect : IEffect
         get => Stops.Last;
         init => Stops = Stops.WithEnd(value);
     }
-
-    /// <summary>漸層以內容外接框為準、參數只有角度與節點顏色 —— 縮小算完再放大是一樣的。</summary>
-
-    public bool SupportsPreviewScale => true;
-
 
     public string Name => "漸層";
     public string Category => "物件";
@@ -808,10 +787,6 @@ public sealed record ObjectFeatherEffect : IEffect
     /// <summary>畫布邊界也視為物件邊（貼齊畫布邊的物件是否也羽化）。</summary>
     public bool FeatherCanvasEdge { get; init; }
 
-    /// <summary>幾何參數都會跟著縮，結果也不看絕對座標 —— 可以在降解析度上算預覽。</summary>
-
-    public bool SupportsPreviewScale => true;
-
 
     public string Name => "羽化";
     public string Category => "物件";
@@ -820,7 +795,7 @@ public sealed record ObjectFeatherEffect : IEffect
     private static readonly ParamDef[] Params =
     [
         new SliderParam("radius", "半徑", 1, 50, o => ((ObjectFeatherEffect)o).Radius,
-            (o, v) => ((ObjectFeatherEffect)o) with { Radius = (int)v }, "px") { Geometric = true },
+            (o, v) => ((ObjectFeatherEffect)o) with { Radius = (int)v }, "px"),
         new SliderParam("strength", "強度", 0, 100, o => ((ObjectFeatherEffect)o).Strength,
             (o, v) => ((ObjectFeatherEffect)o) with { Strength = (int)v }, "%"),
         new BoolParam("canvasEdge", "畫布邊緣也羽化", o => ((ObjectFeatherEffect)o).FeatherCanvasEdge,
@@ -887,10 +862,6 @@ public sealed record InnerGlowEffect : IEffect
     /// <summary>畫布邊界也算物件邊（貼齊畫布邊的物件那一側要不要也發光）。</summary>
     public bool GlowCanvasEdge { get; init; }
 
-    /// <summary>幾何參數都會跟著縮，結果也不看絕對座標 —— 可以在降解析度上算預覽。</summary>
-
-    public bool SupportsPreviewScale => true;
-
 
     public string Name => "內光暈";
     public string Category => "物件";
@@ -907,9 +878,9 @@ public sealed record InnerGlowEffect : IEffect
     private static readonly ParamDef[] Common =
     [
         new SliderParam("size", "大小", 1, 50, o => ((InnerGlowEffect)o).Size,
-            (o, v) => ((InnerGlowEffect)o) with { Size = (int)v }, "px") { Geometric = true },
+            (o, v) => ((InnerGlowEffect)o) with { Size = (int)v }, "px"),
         new SliderParam("spread", "擴散", 0, 30, o => ((InnerGlowEffect)o).Spread,
-            (o, v) => ((InnerGlowEffect)o) with { Spread = (int)v }, "px") { Geometric = true },
+            (o, v) => ((InnerGlowEffect)o) with { Spread = (int)v }, "px"),
         new SliderParam("opacity", "不透明度", 0, 100, o => ((InnerGlowEffect)o).Opacity,
             (o, v) => ((InnerGlowEffect)o) with { Opacity = (int)v }, "%"),
         new ColorParam("color", "顏色", o => ((InnerGlowEffect)o).Color,

@@ -1,4 +1,4 @@
-﻿using MinePainter.Core.Adjustments;
+using MinePainter.Core.Adjustments;
 using SkiaSharp;
 
 namespace MinePainter.Core.Effects;
@@ -12,9 +12,6 @@ public sealed record AdjustmentEffect(IAdjustment Adjustment) : IEffect
     public string Name => Adjustment.DisplayName;
     public string Category => "調整";
     public int SourceMargin => 0;
-
-    /// <summary>調整是逐像素的色彩運算，沒有任何長度參數 —— 降解析度算出來的顏色一模一樣。</summary>
-    public bool SupportsPreviewScale => true;
     public IReadOnlyList<ParamDef> Parameters => Adjustment.Parameters
         .Select(Wrap)
         .ToList();

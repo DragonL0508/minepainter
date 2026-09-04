@@ -1,4 +1,4 @@
-﻿using static MinePainter.Core.Effects.EffectMath;
+using static MinePainter.Core.Effects.EffectMath;
 
 namespace MinePainter.Core.Effects;
 
@@ -74,11 +74,6 @@ public sealed record GaussianBlurEffect : IEffect
 {
     public int Radius { get; init; } = 2; // 0..200
 
-    /// <summary>幾何參數都會跟著縮，結果也不看絕對座標 —— 可以在降解析度上算預覽。</summary>
-
-    public bool SupportsPreviewScale => true;
-
-
     public string Name => "高斯模糊";
     public string Category => "模糊";
     public int SourceMargin => GaussianMargin(Radius);
@@ -86,7 +81,7 @@ public sealed record GaussianBlurEffect : IEffect
     private static readonly ParamDef[] Params =
     [
         new SliderParam("radius", "半徑", 0, 200, o => ((GaussianBlurEffect)o).Radius,
-            (o, v) => ((GaussianBlurEffect)o) with { Radius = (int)v }) { Geometric = true },
+            (o, v) => ((GaussianBlurEffect)o) with { Radius = (int)v }),
     ];
     public IReadOnlyList<ParamDef> Parameters => Params;
 
@@ -102,11 +97,6 @@ public sealed record UnfocusEffect : IEffect
 {
     public int Radius { get; init; } = 4; // 1..200
 
-    /// <summary>幾何參數都會跟著縮，結果也不看絕對座標 —— 可以在降解析度上算預覽。</summary>
-
-    public bool SupportsPreviewScale => true;
-
-
     public string Name => "失焦";
     public string Category => "模糊";
     public int SourceMargin => Radius + 1;
@@ -114,7 +104,7 @@ public sealed record UnfocusEffect : IEffect
     private static readonly ParamDef[] Params =
     [
         new SliderParam("radius", "半徑", 1, 200, o => ((UnfocusEffect)o).Radius,
-            (o, v) => ((UnfocusEffect)o) with { Radius = (int)v }) { Geometric = true },
+            (o, v) => ((UnfocusEffect)o) with { Radius = (int)v }),
     ];
     public IReadOnlyList<ParamDef> Parameters => Params;
 
@@ -131,11 +121,6 @@ public sealed record BokehEffect : IEffect
     public int Radius { get; init; } = 8;   // 1..200
     public float Gamma { get; init; } = 3f; // 1..10（高光強度）
 
-    /// <summary>幾何參數都會跟著縮，結果也不看絕對座標 —— 可以在降解析度上算預覽。</summary>
-
-    public bool SupportsPreviewScale => true;
-
-
     public string Name => "散景";
     public string Category => "模糊";
     public int SourceMargin => Radius + 1;
@@ -143,7 +128,7 @@ public sealed record BokehEffect : IEffect
     private static readonly ParamDef[] Params =
     [
         new SliderParam("radius", "半徑", 1, 200, o => ((BokehEffect)o).Radius,
-            (o, v) => ((BokehEffect)o) with { Radius = (int)v }) { Geometric = true },
+            (o, v) => ((BokehEffect)o) with { Radius = (int)v }),
         new SliderParam("gamma", "高光", 1, 10, o => ((BokehEffect)o).Gamma,
             (o, v) => ((BokehEffect)o) with { Gamma = (float)v }, "", 1),
     ];
@@ -184,11 +169,6 @@ public sealed record MotionBlurEffect : IEffect
     public int Distance { get; init; } = 10;   // 1..200
     public bool Centered { get; init; } = true;
 
-    /// <summary>幾何參數都會跟著縮，結果也不看絕對座標 —— 可以在降解析度上算預覽。</summary>
-
-    public bool SupportsPreviewScale => true;
-
-
     public string Name => "動態模糊";
     public string Category => "模糊";
     public int SourceMargin => Distance + 1;
@@ -198,7 +178,7 @@ public sealed record MotionBlurEffect : IEffect
         new AngleParam("angle", "角度", 0, 360, o => ((MotionBlurEffect)o).Angle,
             (o, v) => ((MotionBlurEffect)o) with { Angle = (float)v }),
         new SliderParam("distance", "距離", 1, 200, o => ((MotionBlurEffect)o).Distance,
-            (o, v) => ((MotionBlurEffect)o) with { Distance = (int)v }) { Geometric = true },
+            (o, v) => ((MotionBlurEffect)o) with { Distance = (int)v }),
         new BoolParam("centered", "置中", o => ((MotionBlurEffect)o).Centered,
             (o, v) => ((MotionBlurEffect)o) with { Centered = v }),
     ];
@@ -367,11 +347,6 @@ public sealed record SurfaceBlurEffect : IEffect
     public int Radius { get; init; } = 6;      // 1..100
     public int Threshold { get; init; } = 15;  // 1..100
 
-    /// <summary>幾何參數都會跟著縮，結果也不看絕對座標 —— 可以在降解析度上算預覽。</summary>
-
-    public bool SupportsPreviewScale => true;
-
-
     public string Name => "表面模糊";
     public string Category => "模糊";
     public int SourceMargin => Radius + 1;
@@ -379,7 +354,7 @@ public sealed record SurfaceBlurEffect : IEffect
     private static readonly ParamDef[] Params =
     [
         new SliderParam("radius", "半徑", 1, 100, o => ((SurfaceBlurEffect)o).Radius,
-            (o, v) => ((SurfaceBlurEffect)o) with { Radius = (int)v }) { Geometric = true },
+            (o, v) => ((SurfaceBlurEffect)o) with { Radius = (int)v }),
         new SliderParam("threshold", "門檻", 1, 100, o => ((SurfaceBlurEffect)o).Threshold,
             (o, v) => ((SurfaceBlurEffect)o) with { Threshold = (int)v }),
     ];

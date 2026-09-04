@@ -31,15 +31,6 @@ public interface IEffect : IParameterized
     /// </summary>
     bool IsPositionIndependent => true;
 
-    /// <summary>
-    /// 這個效果可不可以「在縮小的來源上算、再放大回去」當預覽。
-    ///
-    /// 條件有兩個：像素長度的參數都標了 <see cref="SliderParam.Geometric"/>（縮的時候會一起縮），
-    /// 而且結果不看絕對座標（<see cref="IsPositionIndependent"/>）。
-    /// 預設 false —— 沒被檢查過的效果一律照全解析度算，寧可慢也不要畫錯。
-    /// </summary>
-    bool SupportsPreviewScale => false;
-
     void Render(EffectContext ctx);
 }
 
