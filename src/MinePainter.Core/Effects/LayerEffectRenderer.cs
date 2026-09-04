@@ -317,6 +317,9 @@ public static class LayerEffectRenderer
 
             if (!cache.HasPending) continue;
 
+            // 同一層一次只給一條 worker 算：兩份工作同時飛，寫回順序反過來就會留下舊像素
+            if (cache.InFlight > 0) continue;
+
             (pending ??= []).Add(layer);
         }
 

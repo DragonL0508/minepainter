@@ -26,9 +26,8 @@ public sealed class Compositor : IDisposable
     /// <summary>拖曳中、已從合成結果拆下來改由畫面覆疊呈現的圖層（見 EditorSession.LayerOverlay）。</summary>
     private readonly Func<(Guid? Id, bool IncludesElements)>? _detachedProvider;
 
-    private readonly Thread _worker;
+    private readonly Thread[] _workers;
     private readonly CancellationTokenSource _cts = new();
-    private readonly SemaphoreSlim _signal = new(0);
 
     private readonly object _dirtyGate = new();
     private readonly HashSet<TileIndex> _dirty = new();
@@ -144,13 +143,22 @@ public sealed class Compositor : IDisposable
         // 初始全域 dirty：所有涵蓋文件的 tile
         MarkDirty(document.Bounds);
 
-        _worker = new Thread(WorkerLoop)
+        // 多條 worker：貴的是效果堆疊的計算（在鎖外、算在私有緩衝上），那部分可以真的同時跑；
+        // tile 合成仍舊各自取一次 Document.SyncRoot，彼此序列化。
+        _workers = new Thread[WorkerCount];
+        for (var i = 0; i < _workers.Length; i++)
         {
-            Name = "MinePainter.Compositor",
-            IsBackground = true,
-        };
-        _worker.Start();
+            _workers[i] = new Thread(WorkerLoop)
+            {
+                Name = $"MinePainter.Compositor.{i}",
+                IsBackground = true,
+            };
+            _workers[i].Start();
+        }
     }
+
+    /// <summary>worker 條數：效果堆疊能同時算幾層。太多沒有用（單一效果內部本來就吃滿核心）。</summary>
+    private static readonly int WorkerCount = Math.Clamp(Environment.ProcessorCount / 2, 1, 4);
 
     public int TileCols => (_document.Width + Tile.Size - 1) / Tile.Size;
     public int TileRows => (_document.Height + Tile.Size - 1) / Tile.Size;
@@ -188,7 +196,7 @@ public sealed class Compositor : IDisposable
 
         lock (_dirtyGate)
         {
-            if (_dirty.Add(idx)) _signal.Release();
+            if (_dirty.Add(idx)) Monitor.PulseAll(_dirtyGate);
         }
         image = null;
         return false;
@@ -225,7 +233,10 @@ public sealed class Compositor : IDisposable
                 any |= _dirty.Add(idx);
             }
         }
-        if (any) _signal.Release();
+        if (any)
+        {
+            lock (_dirtyGate) Monitor.PulseAll(_dirtyGate);
+        }
     }
 
     /// <summary>
@@ -319,7 +330,13 @@ public sealed class Compositor : IDisposable
         {
             while (!token.IsCancellationRequested)
             {
-                _signal.Wait(token);
+                lock (_dirtyGate)
+                {
+                    // 沒事做就睡著（逾時再醒一次，收拾取消與偶發的漏叫）
+                    while (_dirty.Count == 0 && !token.IsCancellationRequested)
+                        Monitor.Wait(_dirtyGate, 100);
+                }
+                if (token.IsCancellationRequested) break;
 
                 var rendered = 0;
                 var batch = new List<TileIndex>(BatchSize);
@@ -422,6 +439,7 @@ public sealed class Compositor : IDisposable
             }
         }
         Interlocked.Add(ref _renderTicks, System.Diagnostics.Stopwatch.GetTimestamp() - start);
+        TrimCache(); // 每批都看一眼（沒超出預算時只是比一個數字）
         Interlocked.Add(ref _tilesRendered, batch.Count);
     }
 
@@ -921,10 +939,13 @@ public sealed class Compositor : IDisposable
         _document.Changed -= MarkDirty;
         _document.SizeChanged -= OnDocumentSizeChanged;
         _cts.Cancel();
-        _signal.Release();
-        if (!_worker.Join(TimeSpan.FromSeconds(2)))
+        lock (_dirtyGate) Monitor.PulseAll(_dirtyGate);
+        foreach (var worker in _workers)
         {
-            // background thread，程序結束時自然回收
+            if (!worker.Join(TimeSpan.FromSeconds(2)))
+            {
+                // background thread，程序結束時自然回收
+            }
         }
     }
 
@@ -938,6 +959,5 @@ public sealed class Compositor : IDisposable
         Interlocked.Exchange(ref _imageTiles, 0);
         while (_retired.TryDequeue(out var entry)) entry.Image.Dispose();
         _cts.Dispose();
-        _signal.Dispose();
     }
 }

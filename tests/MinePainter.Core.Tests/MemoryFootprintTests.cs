@@ -43,6 +43,14 @@ public class MemoryFootprintTests
             Thread.Sleep(10);
         }
 
+        // 淘汰是 worker 合成完一批之後才做的，等它收斂
+        deadline = Environment.TickCount64 + 3000;
+        while (compositor.CachedBytes > 8L * Tile.BytesPerTile)
+        {
+            if (Environment.TickCount64 > deadline) break;
+            Thread.Sleep(10);
+        }
+
         Assert.True(compositor.EvictedTiles > 0, "超出預算應該要淘汰");
         Assert.True(compositor.CachedBytes <= 8L * Tile.BytesPerTile,
             $"快取 {compositor.CachedBytes} bytes 超出預算");
