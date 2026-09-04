@@ -607,7 +607,7 @@ public sealed class EditorSession : IDisposable
         // 「算過」不等於「算的是現在這份」：物件搬走之後快取仍舊 Rendered，畫的卻是舊位置
         // （拖曳中原件是藏起來的，那份快取甚至是空的）。這裡要的是「已經是最新的」。
         var effectsBehind = ghost?.Layer is { HasActiveEffects: true } gl && !gl.FxCache.UpToDate;
-        if (ghost != null && !effectsBehind && Compositor.IsRegionClean(ghost.Region))
+        if (ghost != null && !effectsBehind && CompositeCaughtUp(ghost.Region))
         {
             _ghost = null;
             Compositor.Retire(ghost.Image); // render thread 這一幀可能還在畫它，不能就地 Dispose
@@ -615,14 +615,25 @@ public sealed class EditorSession : IDisposable
 
         if (_layerOverlay is { HandingOver: true } overlay &&
             !(overlay.Layer is { HasActiveEffects: true } ol && !ol.FxCache.UpToDate) &&
-            Compositor.IsRegionClean(overlay.Region))
+            CompositeCaughtUp(overlay.Region))
         {
             _layerOverlay = null;
             overlay.Retire(Compositor);
         }
 
-        Transform?.CollectOverlay(Compositor); // 變形手勢覆疊的殘影：合成器追上就收
+        Transform?.CollectOverlay(Compositor, LiveElementRendering); // 變形手勢覆疊的殘影
     }
+
+    /// <summary>
+    /// 這塊區域可以交還給「畫面自己畫」了嗎。
+    ///
+    /// GPU 路徑（<see cref="LiveElementRendering"/>）每幀直接走圖層樹，畫面根本不看合成結果 ——
+    /// 還要等合成器追上的話，殘影／覆疊會在畫面上多留幾百毫秒到幾秒（4K、一堆效果的檔案），
+    /// 那期間圖層自己也已經畫得出來，看起來就是同一個東西疊了兩份或「卡在舊的樣子」。
+    /// 走 tile 路徑時畫面吃的就是合成結果，那就非等不可。
+    /// </summary>
+    private bool CompositeCaughtUp(SKRectI region) =>
+        LiveElementRendering || Compositor.IsRegionClean(region);
 
     /// <summary>
     /// 手勢中的文字物件覆疊：手勢開始時把物件（含效果）渲染成一張圖、隱藏原件，

@@ -983,7 +983,7 @@ public sealed class TransformSession : IDisposable
     }
 
     /// <summary>UI thread 每幀：合成器把蓋章區域畫完了，就收掉手勢覆疊的殘影。</summary>
-    internal void CollectOverlay(Compositor compositor)
+    internal void CollectOverlay(Compositor compositor, bool liveRendering = false)
     {
         var state = _overlay;
         // 效果快取還不是最新的就先別交還：合成結果裡的效果還在舊位置（或還沒套上），
@@ -993,8 +993,10 @@ public sealed class TransformSession : IDisposable
             if (item.Layer.HasActiveEffects && !item.Layer.FxCache.UpToDate) return;
         }
 
+        // GPU 路徑不看合成結果，圖層自己畫得出來就可以收（見 EditorSession.CompositeCaughtUp）
         if (state is { HandingOver: true } &&
-            (state.HandoverRegion.IsEmpty || compositor.IsRegionClean(state.HandoverRegion)))
+            (liveRendering || state.HandoverRegion.IsEmpty ||
+             compositor.IsRegionClean(state.HandoverRegion)))
         {
             _overlay = null;
             ReleaseElementPreviews(compositor);
