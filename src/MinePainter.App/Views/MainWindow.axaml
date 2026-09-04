@@ -336,7 +336,7 @@
         <!-- 畫布內文字編輯的宿主（透明、不擋點擊；編輯框本身可互動） -->
         <Canvas x:Name="EditHost" Background="{x:Null}" />
       </Grid>
-      <!-- 右下角提示訊息 -->
+      <!-- 畫面正下方的提示訊息 -->
       <controls:ToastHost x:Name="Toasts" />
     </Grid>
   </DockPanel>
