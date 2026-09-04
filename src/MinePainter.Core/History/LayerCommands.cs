@@ -1,4 +1,4 @@
-using MinePainter.Core.Documents;
+﻿using MinePainter.Core.Documents;
 using MinePainter.Core.Layers;
 using MinePainter.Core.Tiles;
 using MinePainter.Core.Vectors;
@@ -230,6 +230,10 @@ public static class LayerCommands
             }
             foreach (var element in source.Elements)
                 copy.AddElement(element with { Id = Guid.NewGuid() });
+
+            // 非破壞性效果堆疊也跟著複製（LayerEffect 與 IEffect 都是不可變的，遮罩共用同一份即可）
+            if (source.HasEffects)
+                copy.SetEffects([.. source.Effects.Select(fx => fx with { Id = Guid.NewGuid() })]);
         }
 
         var index = parent.IndexOf(source) + 1;

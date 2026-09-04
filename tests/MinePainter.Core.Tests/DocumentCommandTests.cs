@@ -1,3 +1,4 @@
+﻿using MinePainter.Core.Effects;
 using MinePainter.Core.History;
 using MinePainter.Core.IO;
 using MinePainter.Core.Layers;
@@ -191,6 +192,24 @@ public class DocumentCommandTests
 
         session.History.Undo();
         Assert.Single(session.Document.Root.Children);
+    }
+
+    [Fact]
+    public void DuplicateLayer_CopiesEffectStack()
+    {
+        using var session = new EditorSession(ImageCodec.CreateBlankDocument(100, 100, SKColors.White));
+        var source = (RasterLayer)session.Document.ActiveLayer!;
+        var fx = LayerEffect.Create(new GaussianBlurEffect());
+        source.SetEffects([fx]);
+
+        var copy = LayerCommands.DuplicateLayer(session.Document, session.History, source);
+
+        Assert.NotNull(copy);
+        Assert.Single(copy!.Effects);
+        Assert.Same(fx.Effect, copy.Effects[0].Effect);
+        Assert.True(copy.Effects[0].Enabled);
+        Assert.NotEqual(fx.Id, copy.Effects[0].Id); // 兩層各有各的堆疊條目
+        Assert.Single(source.Effects); // 來源沒被動到
     }
 
     [Fact]
