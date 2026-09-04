@@ -1682,7 +1682,8 @@ public partial class MainWindow : Window
             }
             else
             {
-                SetDocument(ImageCodec.LoadAsDocument(path), importedName: Path.GetFileName(path));
+                var image = await AskFastModeOnOpen(ImageCodec.LoadAsDocument(path), "這張圖");
+                SetDocument(image, importedName: Path.GetFileName(path));
             }
         }
         catch (Exception ex)
@@ -1692,25 +1693,50 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// 開啟快速模式專案時問一次要用哪種模式。選「完整解析度」就當場把整份放大
-    /// （文字／形狀／效果重畫、像素重新取樣），之後就是一般專案。
+    /// 開檔時問一次要用哪種解析度模式（兩個方向都問）：
+    /// 　• 已經是快速模式的專案 → 繼續用代理畫布，或這次以完整解析度開啟
+    /// 　• 一般的大專案／大圖 → 照常開，或改用快速模式（畫布縮到 1080p、輸出仍是原尺寸）
+    /// 回傳實際要用的文件（換掉的話舊的會被釋放）。
     /// </summary>
-    private async Task<Core.Documents.Document> AskFastModeOnOpen(Core.Documents.Document doc)
+    private async Task<Core.Documents.Document> AskFastModeOnOpen(Core.Documents.Document doc, string what = "這份專案")
     {
-        if (!doc.IsFastMode) return doc;
+        if (doc.IsFastMode)
+        {
+            var dialog = FastModeOpenDialog.ForFastProject(doc.Width, doc.Height, doc.OutputWidth, doc.OutputHeight);
+            await dialog.ShowDialog(this);
+            if (dialog.Result == FastModeOpenDialog.Choice.Fast) return doc;
 
-        var dialog = new FastModeOpenDialog(doc.Width, doc.Height, doc.OutputWidth, doc.OutputHeight);
-        await dialog.ShowDialog(this);
-        if (dialog.Result == FastModeOpenDialog.Choice.Fast) return doc;
+            var width = doc.OutputWidth;
+            var height = doc.OutputHeight;
+            var full = await ScaleDocumentAsync(doc, width, height, 0, 0, "轉成完整解析度");
+            Toasts.Show($"已以完整解析度開啟（{width} × {height}）");
+            return full;
+        }
 
-        var width = doc.OutputWidth;
-        var height = doc.OutputHeight;
-        Core.Documents.Document? full = null;
-        await ProgressDialog.RunAsync(this, "轉成完整解析度",
-            _ => full = Core.Documents.OutputRender.CloneScaled(doc, width, height));
+        if (!Core.Documents.FastMode.ShouldOffer(doc.Width, doc.Height)) return doc;
+
+        var (proxyW, proxyH) = Core.Documents.FastMode.ProxySize(doc.Width, doc.Height);
+        var ask = FastModeOpenDialog.ForLargeDocument(what, doc.Width, doc.Height, proxyW, proxyH);
+        await ask.ShowDialog(this);
+        if (ask.Result != FastModeOpenDialog.Choice.Fast) return doc;
+
+        var outW = doc.Width;
+        var outH = doc.Height;
+        var proxy = await ScaleDocumentAsync(doc, proxyW, proxyH, outW, outH, "轉成快速模式");
+        Toasts.Show($"快速模式：畫布 {proxyW} × {proxyH}，輸出 {outW} × {outH}（存檔前記得另存新檔）");
+        return proxy;
+    }
+
+    /// <summary>把整份文件縮放成另一個尺寸（新文件；舊的釋放）。開檔時的模式切換用。</summary>
+    private async Task<Core.Documents.Document> ScaleDocumentAsync(Core.Documents.Document doc,
+        int width, int height, int outputWidth, int outputHeight, string title)
+    {
+        Core.Documents.Document? result = null;
+        await ProgressDialog.RunAsync(this, title,
+            _ => result = Core.Documents.OutputRender.CloneScaled(doc, width, height));
+        result!.SetOutputSize(outputWidth, outputHeight);
         doc.Dispose();
-        Toasts.Show($"已以完整解析度開啟（{width} × {height}）");
-        return full!;
+        return result;
     }
 
     // ---- 最近使用的檔案 ----
@@ -2397,15 +2423,55 @@ public partial class MainWindow : Window
         {
             await ProgressDialog.RunAsync(this, "轉成完整解析度",
                 _ => ImageCommands.ResizeImage(session, w, h, "轉成完整解析度"));
-            lock (doc.SyncRoot) doc.SetOutputSize(0, 0);
             _layersContent.Refresh();
             RefreshUiState();
+            DocSizeLabel.Text = DocSizeText(doc);
             Toasts.Show($"已轉成完整解析度（{w} × {h}）");
         }
         catch (Exception ex)
         {
             Toasts.Show($"轉換失敗：{ex.Message}");
             LogError("轉成完整解析度", ex);
+        }
+    }
+
+    /// <summary>
+    /// 一般模式 → 快速模式：畫布縮到 1080p 級，輸出解析度記成現在的尺寸。
+    /// 畫過的像素會變成代理解析度（可復原；存檔前建議另存新檔）。
+    /// </summary>
+    private async void OnToFastModeClicked(object? sender, RoutedEventArgs e)
+    {
+        var session = CommitPending();
+        if (session == null) return;
+        var doc = session.Document;
+        if (doc.IsFastMode)
+        {
+            Toasts.Show("這份專案已經是快速模式");
+            return;
+        }
+        if (!Core.Documents.FastMode.ShouldOffer(doc.Width, doc.Height))
+        {
+            Toasts.Show("這份專案沒有比 Full HD 大，不需要快速模式");
+            return;
+        }
+
+        var outW = doc.Width;
+        var outH = doc.Height;
+        var (proxyW, proxyH) = Core.Documents.FastMode.ProxySize(outW, outH);
+        try
+        {
+            await ProgressDialog.RunAsync(this, "轉成快速模式",
+                _ => ImageCommands.ResizeImage(session, proxyW, proxyH, "轉成快速模式",
+                    outputWidth: outW, outputHeight: outH));
+            _layersContent.Refresh();
+            RefreshUiState();
+            DocSizeLabel.Text = DocSizeText(doc);
+            Toasts.Show($"快速模式：畫布 {proxyW} × {proxyH}，輸出 {outW} × {outH}（存檔前記得另存新檔）");
+        }
+        catch (Exception ex)
+        {
+            Toasts.Show($"轉換失敗：{ex.Message}");
+            LogError("轉成快速模式", ex);
         }
     }
 
@@ -4323,6 +4389,8 @@ public partial class MainWindow : Window
         if (session == null) return;
 
         ToFullResolutionMenuItem.IsEnabled = session.Document.IsFastMode;
+        ToFastModeMenuItem.IsEnabled = !session.Document.IsFastMode &&
+            Core.Documents.FastMode.ShouldOffer(session.Document.Width, session.Document.Height);
 
         _paletteContent.SetColor(session.Foreground);
 

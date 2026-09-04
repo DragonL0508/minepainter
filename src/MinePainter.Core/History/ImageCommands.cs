@@ -27,8 +27,12 @@ public static class ImageCommands
     // ---- 調整影像大小 ----
 
     /// <summary>所有點陣圖層以高品質重新取樣到新尺寸；文字物件等比縮放；選取範圍丟棄。</summary>
+    /// <param name="outputWidth">
+    /// 完成後的輸出解析度（快速模式用；0 = 跟著畫布）。與畫布尺寸一起進 undo，
+    /// 「轉成快速模式／轉成完整解析度」因此是一步可復原的操作。
+    /// </param>
     public static void ResizeImage(EditorSession session, int width, int height, string label = "調整影像大小",
-        ResampleMode resample = ResampleMode.Bicubic)
+        ResampleMode resample = ResampleMode.Bicubic, int outputWidth = 0, int outputHeight = 0)
     {
         var doc = session.Document;
         var oldW = doc.Width;
@@ -49,6 +53,7 @@ public static class ImageCommands
                 ScaleLayerCore(layer, sx, sy, resample);
             }
             doc.SetSize(width, height);
+            doc.SetOutputSize(outputWidth, outputHeight);
         }
 
         var oldSelection = session.Selection;
@@ -79,6 +84,7 @@ public static class ImageCommands
                 {
                     foreach (var (layer, _, _, _, _) in states) ScaleLayerCore(layer, sx, sy, resample);
                     d.SetSize(width, height);
+                    d.SetOutputSize(outputWidth, outputHeight);
                 }
                 session.ApplySelection(null);
                 InvalidateAll(d);

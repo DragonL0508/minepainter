@@ -217,6 +217,34 @@ public class FastModeOutputTests
         Assert.Equal(6, ((ObjectOutlineEffect)layer.Effects[0].Effect).Width);
     }
 
+    /// <summary>
+    /// 既有的大專案改用快速模式：畫布縮成代理、輸出解析度記成原本的尺寸，而且可以復原。
+    /// </summary>
+    [Fact]
+    public void 一般專案可以轉成快速模式_也能復原()
+    {
+        using var session = new Tools.EditorSession(ImageCodec.CreateBlankDocument(3840, 2160, SKColors.White));
+        var doc = session.Document;
+        Assert.False(doc.IsFastMode);
+
+        var (proxyW, proxyH) = FastMode.ProxySize(doc.Width, doc.Height);
+        History.ImageCommands.ResizeImage(session, proxyW, proxyH, "轉成快速模式",
+            outputWidth: 3840, outputHeight: 2160);
+
+        Assert.Equal(1920, doc.Width);
+        Assert.True(doc.IsFastMode);
+        Assert.Equal(3840, doc.OutputWidth);
+
+        session.History.Undo();
+        Assert.Equal(3840, doc.Width);
+        Assert.False(doc.IsFastMode);
+
+        session.History.Redo();
+        Assert.Equal(1920, doc.Width);
+        Assert.True(doc.IsFastMode);
+        Assert.Equal(3840, doc.OutputWidth);
+    }
+
     [Fact]
     public void 複製出來的文件與原文件互不影響()
     {
