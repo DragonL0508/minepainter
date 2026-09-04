@@ -55,6 +55,20 @@ public sealed class Document : IDisposable
 
     public object SyncRoot { get; } = new();
 
+    private float _previewScale = 1f;
+
+    /// <summary>
+    /// 畫面現在把這份文件縮到多小（1 = 100%，0.25 = 25%）。畫布每幀寫進來。
+    ///
+    /// 效果堆疊會拿它決定「算多細就夠」：25% 檢視下算全解析度，有 15/16 的計算量最後是被
+    /// 縮掉的。輸出／複製／烙印一律重算全解析度（見 LayerEffectRenderer 的 exact）。
+    /// </summary>
+    public float PreviewScale
+    {
+        get => Volatile.Read(ref _previewScale);
+        set => Volatile.Write(ref _previewScale, Math.Clamp(value, 0.01f, 1f));
+    }
+
     /// <summary>文件某範圍已變更、需要重新合成。</summary>
     public event Action<SKRectI>? Changed;
 

@@ -691,7 +691,8 @@ public sealed class Compositor : IDisposable
     public static SKImage RenderComposite(Document doc)
     {
         // 效果堆疊要先是最新的（含 worker 正在算的）；群組效果的來源不含進行中的預覽
-        Effects.LayerEffectRenderer.RenderAllNow(doc, StaticGroupSourceLocked);
+        // 匯出／拼合／縮圖走這裡：一律全解析度重算（畫面上的可能是降解析度的預覽）
+        Effects.LayerEffectRenderer.RenderAllNow(doc, StaticGroupSourceLocked, exact: true);
         var info = new SKImageInfo(doc.Width, doc.Height, SKColorType.Bgra8888, SKAlphaType.Premul);
         using var full = SKSurface.Create(info);
         full.Canvas.Clear(SKColors.Transparent);

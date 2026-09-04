@@ -81,7 +81,7 @@ public static class LayerEffectCommands
         var doc = session.Document;
         if (!layer.HasActiveEffects && layer.Effects.Count == 0) return false;
 
-        LayerEffectRenderer.RenderLayerNow(doc, layer);
+        LayerEffectRenderer.RenderLayerNow(doc, layer, exact: true); // 烙印寫進像素，不能用預覽
 
         TileDeltaEntry? pixels = null;
         var before = layer.Effects;

@@ -22,6 +22,12 @@ public sealed class LayerEffectCache : IDisposable
     /// <summary>已至少完整算過一次（合成器才會拿快取而不是基底像素）。</summary>
     public bool Rendered { get; internal set; }
 
+    /// <summary>
+    /// 快取內容是用什麼比例算的（1 = 全解析度）。小於 1 代表這是降解析度的預覽
+    /// （見 <see cref="EffectPreviewScale"/>）：畫面夠用，但輸出／複製／烙印前要重算。
+    /// </summary>
+    public float PreviewScale { get; internal set; } = 1f;
+
     internal bool DirtyAll = true;
     internal SKRectI Dirty = SKRectI.Empty;      // 圖層座標（原始髒區，不含效果外擴；外擴在取工作時依當時的堆疊算）
     internal SKRectI LastRegion = SKRectI.Empty; // 上次計算的範圍（圖層座標）
@@ -166,6 +172,7 @@ public static class LayerEffectRenderer
         public required List<byte[]?> Masks; // 每個效果在 Compute 範圍內的遮罩（null = 整層）
         public required SKSizeI DocSize;
         public float ContentRotation;        // 這層唯一的文字物件的角度（見 EffectContext.ContentRotation）
+        public float Scale = 1f;             // 1 = 全解析度；小於 1 = 降解析度預覽（見 EffectPreviewScale）
     }
 
     /// <summary>
@@ -218,7 +225,8 @@ public static class LayerEffectRenderer
     /// 同步把某一層算到最新（烙印／匯出／拖曳快照前用）。
     /// 合成器 worker 可能已經取走這層的工作、正在鎖外計算 —— 那就等它寫回，不然會拿到舊快取。
     /// </summary>
-    public static void RenderLayerNow(Document doc, LayerNode layer, GroupPixelReader? groupReader = null)
+    public static void RenderLayerNow(Document doc, LayerNode layer, GroupPixelReader? groupReader = null,
+        bool exact = false)
     {
         while (true)
         {
@@ -226,7 +234,9 @@ public static class LayerEffectRenderer
             lock (doc.SyncRoot)
             {
                 if (!layer.HasActiveEffects || layer.Document != doc) return;
-                job = TakeJobLocked(doc, layer, groupReader);
+                // 輸出／複製／烙印要的是全解析度：快取若是降解析度的預覽就整層重算
+                if (exact && layer.FxCache.PreviewScale < 1f) layer.FxCache.MarkAllDirty();
+                job = TakeJobLocked(doc, layer, groupReader, exact: exact);
                 if (job == null)
                 {
                     if (layer.FxCache.InFlight <= 0) return;
@@ -256,12 +266,12 @@ public static class LayerEffectRenderer
     /// 與 <see cref="RenderPending"/> 的差別：合成器 worker 已取走、正在鎖外算的工作也會等它寫回，
     /// 否則 RenderComposite 會拿到「效果尚未套用」的基底像素（偶發）。
     /// </summary>
-    public static void RenderAllNow(Document doc, GroupPixelReader? groupReader = null)
+    public static void RenderAllNow(Document doc, GroupPixelReader? groupReader = null, bool exact = false)
     {
         List<LayerNode> layers;
         // 由內而外：群組效果的來源是「這一組合成起來的樣子」，子層要先算完
         lock (doc.SyncRoot) layers = EffectOrder(doc).Where(l => l.HasActiveEffects).ToList();
-        foreach (var layer in layers) RenderLayerNow(doc, layer, groupReader);
+        foreach (var layer in layers) RenderLayerNow(doc, layer, groupReader, exact);
     }
 
     /// <summary>
@@ -331,7 +341,7 @@ public static class LayerEffectRenderer
     /// 失效範圍照算，但看得到的那塊先排。
     /// </summary>
     private static Job? TakeJobLocked(Document doc, LayerNode? only = null, GroupPixelReader? groupReader = null,
-        SKRectI priority = default)
+        SKRectI priority = default, bool exact = false)
     {
         // 第一輪：每層的簿記（沒有效果就丟快取、Offset 變了標髒物件範圍、畫布相關的重算判斷）
         // 一律照做，然後把「有待處理」的層依後序收起來。
@@ -383,6 +393,10 @@ public static class LayerEffectRenderer
             if ((canvasDependent || cache.LastClipped) && canvasInLayer != cache.LastCanvas) cache.MarkAllDirty();
             cache.LastCanvas = canvasInLayer;
 
+            // 快取是用比現在需要的更粗的比例算的（使用者放大了、或這次要輸出）→ 整層重算
+            var wanted = exact ? 1f : EffectPreviewScale.Quantize(doc.PreviewScale);
+            if (cache.PreviewScale < wanted - 0.001f) cache.MarkAllDirty();
+
             if (!cache.HasPending) continue;
 
             // 同一層一次只給一條 worker 算：兩份工作同時飛，寫回順序反過來就會留下舊像素
@@ -410,10 +424,26 @@ public static class LayerEffectRenderer
 
         foreach (var layer in pending)
         {
-            var job = BuildJobLocked(doc, layer, groupReader);
+            var job = BuildJobLocked(doc, layer, groupReader, exact);
             if (job != null) return job;
         }
         return null;
+    }
+
+    /// <summary>
+    /// 小於這個面積就不必降解析度：省下來的時間不夠付縮放的成本，
+    /// 而且小東西（一般的短標題）本來就算得很快。
+    /// </summary>
+    private const long PreviewAreaThreshold = 1 << 20; // 1 MPx
+
+    /// <summary>這一份工作要用什麼比例算（1 = 全解析度）。</summary>
+    private static float PreviewScaleFor(Document doc, List<LayerEffect> effects, SKRectI compute, bool exact)
+    {
+        if (exact || compute.IsEmpty) return 1f;
+        var want = EffectPreviewScale.Quantize(doc.PreviewScale);
+        if (want >= 1f) return 1f;
+        if ((long)compute.Width * compute.Height < PreviewAreaThreshold) return 1f;
+        return EffectPreviewScale.CanScale(effects) ? want : 1f;
     }
 
     /// <summary>這層（含效果外擴）在 doc 座標上碰不碰得到優先範圍。</summary>
@@ -439,7 +469,7 @@ public static class LayerEffectRenderer
     }
 
     /// <summary>把這一層的待處理範圍打包成一份工作（範圍算完就從快取的髒區扣掉）。null＝這層沒事可做。</summary>
-    private static Job? BuildJobLocked(Document doc, LayerNode layer, GroupPixelReader? groupReader)
+    private static Job? BuildJobLocked(Document doc, LayerNode layer, GroupPixelReader? groupReader, bool exact)
     {
         var cache = layer.FxCache;
         var effects = layer.Effects.Where(e => e.Enabled).ToList();
@@ -529,6 +559,7 @@ public static class LayerEffectRenderer
 
             return new Job
             {
+                Scale = PreviewScaleFor(doc, effects, compute, exact),
                 Layer = layer,
                 Region = region,
                 Compute = compute,
@@ -577,15 +608,63 @@ public static class LayerEffectRenderer
 
     private static uint[] Compute(Job job, CancellationToken ct)
     {
+        if (job.Compute.IsEmpty) return job.Pixels;
+        return job.Scale < 1f ? ComputeScaled(job, ct) : ComputeAt(job, job.Compute, job.Pixels, job.Effects, ct);
+    }
+
+    /// <summary>
+    /// 降解析度預覽：來源縮小 → 用「參數也縮過」的效果算 → 放大回原尺寸。
+    /// 使用者在 25% 檢視下看到的本來就是被縮過的畫面，這裡只是不再把那 15/16 的計算做完再丟掉。
+    /// 遮罩仍舊在全解析度套用（遮罩是使用者畫的，不能糊）。
+    /// </summary>
+    private static uint[] ComputeScaled(Job job, CancellationToken ct)
+    {
         var w = job.Compute.Width;
         var h = job.Compute.Height;
-        var current = job.Pixels;
-        if (job.Compute.IsEmpty) return current;
-        for (var i = 0; i < job.Effects.Count; i++)
+        var sw = Math.Max(1, (int)MathF.Round(w * job.Scale));
+        var sh = Math.Max(1, (int)MathF.Round(h * job.Scale));
+
+        var small = EffectPreviewScale.Downscale(job.Pixels, w, h, sw, sh);
+        var scaled = new List<LayerEffect>(job.Effects.Count);
+        foreach (var e in job.Effects)
+            scaled.Add(e with { Effect = EffectPreviewScale.Scale(e.Effect, job.Scale) });
+
+        var rect = SKRectI.Create(
+            (int)MathF.Round(job.Compute.Left * job.Scale),
+            (int)MathF.Round(job.Compute.Top * job.Scale), sw, sh);
+        var docSize = new SKSizeI(
+            Math.Max(1, (int)MathF.Round(job.DocSize.Width * job.Scale)),
+            Math.Max(1, (int)MathF.Round(job.DocSize.Height * job.Scale)));
+
+        var previewJob = new Job
+        {
+            Layer = job.Layer,
+            Region = job.Region,
+            Compute = rect,
+            Write = job.Write,
+            Full = job.Full,
+            Pixels = small,
+            Effects = scaled,
+            Masks = job.Masks.Select(_ => (byte[]?)null).ToList(), // 有遮罩的效果不會走到這條路（CanScale）
+            DocSize = docSize,
+            ContentRotation = job.ContentRotation,
+        };
+
+        var result = ComputeAt(previewJob, rect, small, scaled, ct);
+        return EffectPreviewScale.Upscale(result, sw, sh, w, h);
+    }
+
+    private static uint[] ComputeAt(Job job, SKRectI rect, uint[] source, List<LayerEffect> effects,
+        CancellationToken ct)
+    {
+        var w = rect.Width;
+        var h = rect.Height;
+        var current = source;
+        for (var i = 0; i < effects.Count; i++)
         {
             ct.ThrowIfCancellationRequested();
-            var entry = job.Effects[i];
-            var ctx = new EffectContext(job.Compute, job.Compute, current, job.DocSize)
+            var entry = effects[i];
+            var ctx = new EffectContext(rect, rect, current, job.DocSize)
             {
                 PrimaryColor = entry.Color,
                 Cancellation = ct,
@@ -663,6 +742,8 @@ public static class LayerEffectRenderer
         }
 
         cache.Rendered = true;
+        if (job.Full) cache.PreviewScale = job.Scale;
+        else if (job.Scale < cache.PreviewScale) cache.PreviewScale = job.Scale; // 局部重算把整份拉到較粗的那一邊
         var off = layer.EffectOffset;
         var docRect = new SKRectI(
             write.Left + off.X, write.Top + off.Y,

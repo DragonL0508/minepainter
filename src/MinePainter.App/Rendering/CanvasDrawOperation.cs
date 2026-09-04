@@ -150,12 +150,18 @@ public sealed class CanvasDrawOperation : ICustomDrawOperation
 
         // GPU 路徑：直接走圖層樹，效果交給 Skia 濾鏡。處理不了就 false，照舊走下面的 tile。
         var gpuDrew = false;
+        var deviceScale = DeviceScale(canvas);
+
+        // 效果堆疊要算多細，看的就是「一個文件像素現在等於幾個螢幕像素」：
+        // 25% 檢視下算全解析度，有 15/16 的計算量最後是被縮掉的（見 EffectPreviewScale）。
+        _session.Document.PreviewScale = (float)deviceScale;
+
         if (docR > docL && docB > docT)
         {
             var visible = new SKRectI((int)docL, (int)docT, (int)Math.Ceiling(docR), (int)Math.Ceiling(docB));
             lock (_session.Document.SyncRoot)
             {
-                gpuDrew = _gpuRenderer.TryDraw(canvas, _session, visible, DeviceScale(canvas), lease.GrContext);
+                gpuDrew = _gpuRenderer.TryDraw(canvas, _session, visible, deviceScale, lease.GrContext);
             }
         }
 

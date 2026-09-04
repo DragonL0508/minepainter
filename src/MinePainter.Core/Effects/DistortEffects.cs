@@ -1,4 +1,4 @@
-using static MinePainter.Core.Effects.EffectMath;
+﻿using static MinePainter.Core.Effects.EffectMath;
 
 namespace MinePainter.Core.Effects;
 
@@ -452,6 +452,9 @@ public sealed record SkewEffect : IEffect
     public string Name => "傾斜";
     public string Category => "扭曲";
     public int SourceMargin => EffectContext.WholeLayer;
+
+    /// <summary>參數是角度、基準線也跟著內容走，縮小算完再放大是一樣的。</summary>
+    public bool SupportsPreviewScale => true;
 
     /// <summary>切變量以「範圍內的基準線」為準，換了範圍結果就不同 —— 不能只重算髒區。</summary>
     public bool IsPositionIndependent => false;
