@@ -233,10 +233,9 @@ public sealed class CanvasView : Control
     private bool HasAnimatedDashes()
     {
         var session = _session;
-        // 螞蟻線畫在把手框上，所以只要畫面上有框就要跑動畫（不再只看有沒有像素選取）
+        // 螞蟻線只在有像素選取／浮動內容時存在；藍框把手是靜態的，不必為它跑動畫
         return session != null &&
-               (session.SelectionHandles != null || session.SelectionHandlesQuad != null ||
-                session.SelectionHandlesWarp != null || session.Preview != null);
+               (session.Selection != null || session.Floating != null || session.Preview != null);
     }
 
     public EditorSession? Session => _session;
