@@ -25,6 +25,7 @@ public sealed class LayerEffectCache : IDisposable
     internal bool DirtyAll = true;
     internal SKRectI Dirty = SKRectI.Empty;      // 圖層座標（原始髒區，不含效果外擴；外擴在取工作時依當時的堆疊算）
     internal SKRectI LastRegion = SKRectI.Empty; // 上次計算的範圍（圖層座標）
+    internal bool LastClipped;                   // 上次的範圍被畫布裁掉過（＝這份快取與畫布位置有關）
     internal SKRectI LastCanvas = SKRectI.Empty; // 上次計算時畫布在圖層座標的範圍（只有「位置相關」效果在乎）
     internal SKPointI LastOffset;                // 上次計算時的圖層 Offset（物件是 doc 座標，Offset 變了物件在圖層座標就動了）
     internal bool HasLastOffset;
@@ -288,20 +289,30 @@ public static class LayerEffectRenderer
             cache.LastOffset = layer.EffectOffset;
             cache.HasLastOffset = true;
 
-            // 以畫布為框架的效果：畫布相對位置變了就得整層重算（其他效果與畫布無關）
             var canvasInLayer = new SKRectI(-layer.EffectOffset.X, -layer.EffectOffset.Y,
                 doc.Width - layer.EffectOffset.X, doc.Height - layer.EffectOffset.Y);
-            if (canvasDependent && canvasInLayer != cache.LastCanvas)
-            {
-                cache.MarkAllDirty();
-                cache.LastCanvas = canvasInLayer;
-            }
+
+            // 只算「看得到的那塊」：畫布外的部分算了也永遠不會被合成到（合成器只走畫布內的
+            // tile），可是成本照付 —— 一個大部分在畫布外的大物件，效果堆疊每次都在算不存在的
+            // 畫面（實測：完全在畫布外的 3200×370 文字，外框＋陰影仍要 113 ms）。
+            // 往外留 margin：畫布外的內容，它的外框／陰影還是可能伸進畫布裡。
+            // 上次算的範圍被裁過（或效果本身看畫布）＝這份快取與「畫布落在圖層的哪裡」有關：
+            // 圖層一平移，看得到的那一塊就換人，得重算（沒裁到的話快取與畫布無關，平移不必重算）。
+            if ((canvasDependent || cache.LastClipped) && canvasInLayer != cache.LastCanvas) cache.MarkAllDirty();
+            cache.LastCanvas = canvasInLayer;
 
             if (!cache.HasPending) continue;
 
-            // 快取範圍：內容 + 有限 margin；位置相關的效果再聯集畫布
-            var region = ContentRegion(layer);
-            if (!region.IsEmpty && margin > 0) region.Inflate(margin, margin);
+            // 先對齊 tile 再加 margin：內容範圍是「tile 粒度的內容框再外擴 margin」，
+            // 視窗要蓋得住同一個算法，完全在畫布內的圖層才不會被誤判成被裁到。
+            var visibleWindow = SnapOutToTiles(canvasInLayer);
+            if (margin > 0) visibleWindow.Inflate(margin, margin);
+
+            var content = ContentRegion(layer);
+            if (!content.IsEmpty && margin > 0) content.Inflate(margin, margin);
+            var region = content.IsEmpty ? content : SKRectI.Intersect(content, visibleWindow);
+            if (region.Width <= 0 || region.Height <= 0) region = SKRectI.Empty;
+            cache.LastClipped = !content.IsEmpty && region != content;
             if (canvasDependent) region = region.IsEmpty ? canvasInLayer : SKRectI.Union(region, canvasInLayer);
 
             if (region.IsEmpty)
@@ -362,6 +373,18 @@ public static class LayerEffectRenderer
             };
         }
         return null;
+    }
+
+    /// <summary>
+    /// 把可見視窗往外對齊到 tile 邊界。點陣圖層的內容範圍本身就是 tile 粒度
+    /// （<see cref="Tiles.TileSurface.ContentBounds"/>，256 的倍數），視窗不對齊的話
+    /// 連完全在畫布內的小圖層都會被判成「被裁到」，白白失去「平移不必重算」這個性質。
+    /// </summary>
+    private static SKRectI SnapOutToTiles(SKRectI rect)
+    {
+        static int Floor(int v) => (int)Math.Floor(v / (double)Tile.Size) * Tile.Size;
+        static int Ceil(int v) => (int)Math.Ceiling(v / (double)Tile.Size) * Tile.Size;
+        return new SKRectI(Floor(rect.Left), Floor(rect.Top), Ceil(rect.Right), Ceil(rect.Bottom));
     }
 
     /// <summary>

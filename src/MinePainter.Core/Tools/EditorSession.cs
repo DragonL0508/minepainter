@@ -535,7 +535,19 @@ public sealed class EditorSession : IDisposable
     {
         public RasterLayer Layer { get; } = layer;
         public Guid ElementId { get; } = elementId;
-        public SKImage Image { get; } = image;
+
+        private volatile SKImage _image = image;
+
+        /// <summary>目前要畫的那張圖（render thread 讀；背景算好「有效果」的版本後會換掉）。</summary>
+        public SKImage Image => _image;
+
+        /// <summary>換上新圖，回傳舊的那張（呼叫端負責退役，不能就地 Dispose）。</summary>
+        public SKImage SwapImage(SKImage next)
+        {
+            var old = _image;
+            _image = next;
+            return old;
+        }
 
         /// <summary>物件原本的（含效果外擴的）外框，doc 座標。</summary>
         public SKRectI Bounds { get; } = bounds;
@@ -593,66 +605,117 @@ public sealed class EditorSession : IDisposable
         var bounds = element.Bounds;
         if (bounds.Width <= 0 || bounds.Height <= 0) return;
 
-        SKImage image;
-        if (RenderEffectsWhileDragging && layer.HasActiveEffects &&
-            TryReadEffectCache(layer, element, ref bounds) is { } cached)
+        var withEffects = RenderEffectsWhileDragging && layer.HasActiveEffects;
+        var margin = withEffects ? LayerEffectRenderer.TotalMargin(layer) : 0;
+        bounds.Inflate(margin + 1, margin + 1);
+        if (bounds.Width <= 0 || bounds.Height <= 0) return;
+
+        SKImage? image = null;
+        var upgradeInBackground = false;
+        if (withEffects && TryReadEffectCache(layer, element, bounds) is { } cached)
         {
             // 快路徑：效果快取就是「這層算好的樣子」，直接裁一塊出來 —— 重跑一遍堆疊在 4K
             // 要 0.26 秒，手勢一開始就卡在那裡。只有「這層只有這一個物件」時才行，
             // 否則裁出來的那塊會夾帶隔壁物件的像素。
-            var info = new SKImageInfo(bounds.Width, bounds.Height, SKColorType.Bgra8888, SKAlphaType.Premul);
-            fixed (uint* ptr = cached)
-            {
-                image = SKImage.FromPixelCopy(info, (IntPtr)ptr, bounds.Width * 4);
-            }
-            if (image == null) return;
+            image = ImageFrom(cached, bounds);
         }
-        else if (RenderEffectsWhileDragging && layer.HasActiveEffects)
+        else if (withEffects)
         {
-            // 帶效果拖曳：物件單獨跑一遍這層的效果堆疊（外框／陰影／漸層跟著走）
-            var pixels = LayerEffectRenderer.RenderElementPreview(layer, element, out bounds);
-            if (bounds.Width <= 0 || bounds.Height <= 0) return;
-            var info = new SKImageInfo(bounds.Width, bounds.Height, SKColorType.Bgra8888, SKAlphaType.Premul);
-            fixed (uint* ptr = pixels)
-            {
-                image = SKImage.FromPixelCopy(info, (IntPtr)ptr, bounds.Width * 4);
-            }
-            if (image == null) return;
-        }
-        else
-        {
-            bounds.Inflate(1, 1);
-            var info = new SKImageInfo(bounds.Width, bounds.Height, SKColorType.Bgra8888, SKAlphaType.Premul);
-            using var surface = SKSurface.Create(info);
-            if (surface == null) return;
-            var canvas = surface.Canvas;
-            canvas.Clear(SKColors.Transparent);
-            canvas.Translate(-bounds.Left, -bounds.Top);
-            element.Render(canvas);
-            canvas.Flush();
-            image = surface.Snapshot();
+            // 快取蓋不到（物件有一部分在畫布外，快取只算看得到的那塊）。重跑整份堆疊要上百毫秒，
+            // 按下去就頓在那裡 —— 先用「只有物件、沒有效果」的樣子頂著（形狀、位置都對），
+            // 效果在背景算完再換上去。
+            upgradeInBackground = true;
         }
 
-        _elementOverlay = new ElementDragOverlay(layer, element.Id, image, bounds);
+        image ??= RenderElementOnly(element, bounds);
+        if (image == null) return;
+
+        var overlay = new ElementDragOverlay(layer, element.Id, image, bounds);
+        _elementOverlay = overlay;
         layer.HiddenElementId = element.Id; // 原件先藏起來（合成器重畫一次少了它的樣子）
+        if (upgradeInBackground) UpgradeOverlayWithEffects(overlay, layer, element, bounds);
+    }
+
+    /// <summary>只畫物件本身（不跑效果堆疊）到指定範圍。</summary>
+    private static SKImage? RenderElementOnly(Vectors.VectorElement element, SKRectI bounds)
+    {
+        var info = new SKImageInfo(bounds.Width, bounds.Height, SKColorType.Bgra8888, SKAlphaType.Premul);
+        using var surface = SKSurface.Create(info);
+        if (surface == null) return null;
+        var canvas = surface.Canvas;
+        canvas.Clear(SKColors.Transparent);
+        canvas.Translate(-bounds.Left, -bounds.Top);
+        element.Render(canvas);
+        canvas.Flush();
+        return surface.Snapshot();
+    }
+
+    private static unsafe SKImage? ImageFrom(uint[] pixels, SKRectI bounds)
+    {
+        var info = new SKImageInfo(bounds.Width, bounds.Height, SKColorType.Bgra8888, SKAlphaType.Premul);
+        fixed (uint* ptr = pixels)
+        {
+            return SKImage.FromPixelCopy(info, (IntPtr)ptr, bounds.Width * 4);
+        }
+    }
+
+    /// <summary>
+    /// 背景把覆疊圖換成「有效果」的版本。效果堆疊只吃這個物件與這層的效果清單（都是不可變的），
+    /// 所以算得起鎖外；算完回到 UI 執行緒換圖，手勢已經結束或換人就丟掉。
+    /// </summary>
+    private void UpgradeOverlayWithEffects(ElementDragOverlay overlay, RasterLayer layer,
+        Vectors.VectorElement element, SKRectI bounds)
+    {
+        Task.Run(() =>
+        {
+            uint[] pixels;
+            try
+            {
+                pixels = LayerEffectRenderer.RenderElementPreview(layer, element, out var rendered);
+                if (rendered != bounds) return; // 範圍對不上就別換（理論上不會，保險）
+            }
+            catch
+            {
+                return; // 算壞了就維持「沒有效果」的預覽
+            }
+            RunOnUiThread(() =>
+            {
+                if (!ReferenceEquals(_elementOverlay, overlay)) return; // 手勢已經結束或換了物件
+                if (ImageFrom(pixels, bounds) is not { } upgraded) return;
+                var old = overlay.SwapImage(upgraded);
+                Compositor.Retire(old); // render thread 這一幀可能還在畫舊的
+            });
+        });
+    }
+
+    /// <summary>
+    /// 背景算好的東西要回到 UI 執行緒時走這裡（Core 不認得 Dispatcher，由 App 掛上）。
+    /// 沒掛的話就地執行 —— 單元測試與離線流程本來就是單執行緒。
+    /// </summary>
+    public Action<Action>? UiThreadPost { get; set; }
+
+    private void RunOnUiThread(Action action)
+    {
+        if (UiThreadPost is { } post) post(action);
+        else action();
     }
 
     /// <summary>
     /// 從效果快取裁出這個物件那一塊（圖層座標 → doc 座標）。
     /// 快取不是最新的、或這層還有別的物件（裁出來會夾帶到）就回 null，交給完整重算那條路。
     /// </summary>
-    private static uint[]? TryReadEffectCache(RasterLayer layer, Vectors.VectorElement element, ref SKRectI bounds)
+    private static uint[]? TryReadEffectCache(RasterLayer layer, Vectors.VectorElement element, SKRectI docRect)
     {
         if (!layer.FxCache.Rendered || layer.Elements.Count != 1) return null;
-        var margin = LayerEffectRenderer.TotalMargin(layer);
-        var docRect = element.Bounds;
-        docRect.Inflate(margin + 1, margin + 1);
-        if (docRect.Width <= 0 || docRect.Height <= 0) return null;
 
         var layerRect = new SKRectI(
             docRect.Left - layer.Offset.X, docRect.Top - layer.Offset.Y,
             docRect.Right - layer.Offset.X, docRect.Bottom - layer.Offset.Y);
-        bounds = docRect;
+
+        // 快取只算「看得到的那塊」（見 LayerEffectRenderer 的畫布裁切）。物件有一部分在畫布外時
+        // 快取蓋不到它，直接裁出來的話拖曳中把那部分拉進畫面會是一片空白。
+        if (!layer.FxCache.LastRegion.Contains(layerRect)) return null;
+
         return LayerEffectRenderer.ReadPixels(layer.FxCache.Surface, layerRect);
     }
 

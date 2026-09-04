@@ -1080,6 +1080,8 @@ public partial class MainWindow : Window
         tab.SizeHandler = () => OnDocumentSizeChanged(tab);
         doc.SizeChanged += tab.SizeHandler;
         session.Notified += msg => Avalonia.Threading.Dispatcher.UIThread.Post(() => Toasts.Show(msg));
+        // Core 背景算完的東西（拖曳覆疊補上效果）要回 UI 執行緒才能換上去
+        session.UiThreadPost = action => Avalonia.Threading.Dispatcher.UIThread.Post(action);
 
         _tabs.Add(tab);
         BuildTabItem(tab);
