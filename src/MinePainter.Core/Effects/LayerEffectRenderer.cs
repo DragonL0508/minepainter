@@ -30,6 +30,17 @@ public sealed class LayerEffectCache : IDisposable
     internal SKPointI LastOffset;                // 上次計算時的圖層 Offset（物件是 doc 座標，Offset 變了物件在圖層座標就動了）
     internal bool HasLastOffset;
 
+    /// <summary>
+    /// 物件與圖層一起平移了同一個整數向量：物件在圖層座標裡沒動，快取內容沒變 ——
+    /// 把基準位移一起帶過去，算繪器才不會誤判「Offset 變了而物件沒跟著動」而整批重算。
+    /// 在 Document.SyncRoot 內呼叫。
+    /// </summary>
+    internal void FollowOffset(SKPointI offset)
+    {
+        if (!HasLastOffset) return;
+        LastOffset = offset;
+    }
+
     public bool HasPending => DirtyAll || !Dirty.IsEmpty;
 
     /// <summary>已被取走、還沒寫回的工作數（worker 鎖外計算中）。同步等待者靠它判斷「真的算完了」。</summary>
@@ -233,7 +244,7 @@ public static class LayerEffectRenderer
         var bounds = layer.Surface.ContentBounds;
         foreach (var el in layer.Elements)
         {
-            if (el.Id == layer.HiddenElementId) continue;
+            if (layer.IsElementHidden(el.Id)) continue;
             var b = el.Bounds;
             if (b.IsEmpty) continue;
             var lb = new SKRectI(b.Left - layer.Offset.X, b.Top - layer.Offset.Y,
@@ -581,7 +592,7 @@ public static class LayerEffectRenderer
                 rect.Right + layer.Offset.X, rect.Bottom + layer.Offset.Y);
             foreach (var el in layer.Elements)
             {
-                if (el.Id == layer.HiddenElementId) continue;
+                if (layer.IsElementHidden(el.Id)) continue;
                 if (!el.Bounds.IntersectsWith(docRect)) continue;
                 el.Render(canvas);
             }

@@ -45,6 +45,18 @@ public sealed class TransformSession : IDisposable
 
         /// <summary>進入四角／彎曲模式時的文字物件（已含矩形模式的變形）：網格變形疊在它們的輸出端。</summary>
         public Dictionary<Guid, VectorElement>? MeshStartElements;
+
+        /// <summary>
+        /// 手勢期間代替「物件（＋圖層效果）」呈現的快照。只給覆疊用 ——
+        /// 永遠不會被蓋回圖層像素（文字必須維持可再編輯）。
+        /// </summary>
+        public SKImage? ElementPreview;
+
+        /// <summary>ElementPreview 的 doc 範圍。</summary>
+        public SKRectI ElementPreviewBounds;
+
+        /// <summary>這一層的物件是本 session 藏起來的（放回來時只放自己藏的那些）。</summary>
+        public bool ElementsWereHidden;
     }
 
     /// <summary>
@@ -339,10 +351,20 @@ public sealed class TransformSession : IDisposable
 
     private volatile GestureOverlay? _overlay;
     private bool _gestureOverlay;      // 手勢覆疊進行中（像素已從合成結果拿掉）
+    private bool _elementsFrozen;      // 手勢覆疊進行中，且物件已由快照代表（見 CaptureElementPreviews）
     private bool _overlayEverPublished;
 
     /// <summary>render thread 每幀讀。</summary>
     public GestureOverlay? Overlay => _overlay;
+
+    /// <summary>
+    /// 手勢覆疊進行中（縮放／旋轉拖曳中：像素已拆下來，每幀只換矩陣、文字物件每幀重算一份）。
+    ///
+    /// 與 <see cref="Overlay"/> 不同 —— 只有文字的圖層沒有像素，<see cref="PublishOverlay"/>
+    /// 因此不會發布任何覆疊，但手勢照樣在進行中。「這一幀是不是手勢中」要問這個，
+    /// 問 Overlay 會在純文字圖層上永遠答錯（畫面端的快取路徑就是這樣被漏掉的）。
+    /// </summary>
+    public bool GestureActive => _gestureOverlay;
 
     /// <summary>本輪相對於開始時的旋轉（續接時以上一輪落地的角度為 0）。</summary>
     private float DeltaRotation
@@ -702,7 +724,144 @@ public sealed class TransformSession : IDisposable
             if (!display.IsEmpty) item.Layer.Invalidate(display);
             item.LastStamp = SKRectI.Empty;
         }
+        CaptureElementPreviews();
         PublishOverlay(handingOver: false);
+    }
+
+    /// <summary>
+    /// 手勢開始時把每一層的「物件＋圖層效果」拍成一張圖，手勢期間只變換這張圖。
+    ///
+    /// 文字的外框／陰影／光暈是**圖層效果堆疊**（不是文字物件自己的參數），而效果是 CPU 逐像素
+    /// 算出來的：4K 文件上一個帶外光暈的字，整串算一次實測 120 ms（外框 37 ms、沒效果 0 ms）。
+    /// 手勢中每動一下就 ReplaceElement 一次 ＝ 每幀重算一次整串效果，畫面當然跟不上；而且重算
+    /// 是背景逐格寫回的，畫面上還會出現「一部分新角度、一部分舊角度」的撕裂。
+    /// 使用者回報「移動工具轉文字會卡、文字工具不會」就是這個 —— 文字工具走的正是快照那條路
+    /// （<see cref="EditorSession.BeginElementOverlayLocked"/>），這裡把同一套補給變形手勢。
+    ///
+    /// 拍完就把原件藏起來、手勢期間不再動它（<see cref="_elementsFrozen"/>），放開時由
+    /// <see cref="StampAll"/>／<see cref="RestoreOriginal"/> 一次落地。
+    /// 拍不成（沒有效果快取、範圍太大…）就整份放棄，照舊每幀重算 —— 慢，但不會畫錯。
+    /// </summary>
+    private void CaptureElementPreviews()
+    {
+        var withElements = _items.Where(i => i.Pixels == null && i.Layer.HasElements).ToList();
+        if (withElements.Count == 0) return;
+
+        foreach (var item in withElements)
+        {
+            if (!TryCaptureElementPreview(item))
+            {
+                ReleaseElementPreviews(null); // 有一層拍不成就整份放棄（免得半快照半即時）
+                return;
+            }
+        }
+
+        lock (_doc.SyncRoot)
+        {
+            foreach (var item in withElements)
+            {
+                item.Layer.ElementsHidden = true;
+                item.ElementsWereHidden = true;
+            }
+        }
+        _elementsFrozen = true;
+    }
+
+    private bool TryCaptureElementPreview(Item item)
+    {
+        var layer = item.Layer;
+        lock (_doc.SyncRoot)
+        {
+            // 快照要是最新的：效果還在背景算的話先等它（與 EditorSession.BeginLayerDrag 同一套判斷）
+            var withEffects = layer.HasActiveEffects;
+            if (withEffects && (layer.FxCache.HasPending || !layer.EffectsRendered))
+                Effects.LayerEffectRenderer.RenderLayerNow(_doc, layer);
+            withEffects &= layer.EffectsRendered;
+
+            var region = withEffects ? layer.DisplayContentBounds : ElementBounds(layer);
+            if (region.Width <= 0 || region.Height <= 0) return false;
+            if (region.Width > MaxContentSide || region.Height > MaxContentSide) return false;
+
+            var info = new SKImageInfo(region.Width, region.Height, SKColorType.Bgra8888, SKAlphaType.Premul);
+            using var surface = SKSurface.Create(info);
+            if (surface == null) return false;
+            var canvas = surface.Canvas;
+            canvas.Clear(SKColors.Transparent);
+            canvas.Translate(-region.Left, -region.Top);
+            if (withEffects) DrawDisplayTiles(layer, canvas, region);
+            else foreach (var el in layer.Elements) el.Render(canvas);
+            canvas.Flush();
+
+            item.ElementPreview = surface.Snapshot();
+            item.ElementPreviewBounds = region;
+            return true;
+        }
+    }
+
+    /// <summary>整層物件的 doc 外框（含效果外擴的保守範圍）。</summary>
+    private static SKRectI ElementBounds(RasterLayer layer)
+    {
+        var bounds = SKRectI.Empty;
+        foreach (var el in layer.Elements)
+        {
+            var b = el.Bounds;
+            if (b.IsEmpty) continue;
+            bounds = bounds.IsEmpty ? b : SKRectI.Union(bounds, b);
+        }
+        return bounds;
+    }
+
+    /// <summary>把圖層的顯示用 tile（有效果堆疊時＝效果快取）畫到 canvas（doc 座標）。</summary>
+    private static void DrawDisplayTiles(RasterLayer layer, SKCanvas canvas, SKRectI docRect)
+    {
+        var surface = layer.DisplaySurface;
+        var layerRect = new SKRectI(
+            docRect.Left - layer.EffectOffset.X, docRect.Top - layer.EffectOffset.Y,
+            docRect.Right - layer.EffectOffset.X, docRect.Bottom - layer.EffectOffset.Y);
+        foreach (var idx in Tiles.TileIndex.CoveringRect(layerRect))
+        {
+            var tile = surface.GetTileForRead(idx);
+            if (tile == null) continue;
+            using var pixmap = tile.AsPixmap();
+            using var img = SKImage.FromPixels(pixmap);
+            var tileRect = idx.ToPixelRect();
+            canvas.DrawImage(img, tileRect.Left + layer.EffectOffset.X, tileRect.Top + layer.EffectOffset.Y);
+        }
+    }
+
+    /// <summary>
+    /// 把原件放回來（手勢一結束就做，快照本身還留著頂到合成器追上）。
+    ///
+    /// 順序很重要：交接是「等合成器把那塊畫好才收快照」，而合成器要畫得對，原件就得先解除隱藏
+    /// —— 反過來的話，合成器畫出來的是「沒有文字」的那份，收掉快照的瞬間文字會閃不見。
+    /// </summary>
+    private void UnfreezeElements()
+    {
+        _elementsFrozen = false;
+        lock (_doc.SyncRoot)
+        {
+            foreach (var item in _items)
+            {
+                if (item.ElementsWereHidden) item.Layer.ElementsHidden = false;
+                item.ElementsWereHidden = false;
+            }
+        }
+    }
+
+    /// <summary>收掉物件快照（合成器已追上，或 session 結束）。</summary>
+    private void ReleaseElementPreviews(Compositor? compositor)
+    {
+        UnfreezeElements();
+        foreach (var item in _items)
+        {
+            if (item.ElementPreview is { } image)
+            {
+                if (_overlayEverPublished && compositor != null) compositor.Retire(image);
+                else image.Dispose();
+                item.ElementPreview = null;
+            }
+            item.ElementPreviewBounds = SKRectI.Empty;
+        }
     }
 
     /// <summary>
@@ -719,6 +878,10 @@ public sealed class TransformSession : IDisposable
         }
         _gestureOverlay = false;
 
+        // 交接的範圍要含物件快照的落點：合成器把那塊畫好之前，快照得繼續頂著（不然會閃一下）
+        var elementHandover = ElementHandoverRegion();
+        UnfreezeElements(); // 先放回原件，下面才落地得到正確的位置
+
         if (IsIdentity)
         {
             RestoreOriginal();
@@ -729,20 +892,51 @@ public sealed class TransformSession : IDisposable
             var rot = DeltaRotation;
             StampAll(preview: false, sx, sy, rot);
         }
-        PublishOverlay(handingOver: true);
+        foreach (var item in _items)
+        {
+            if (item.ElementPreview == null) continue;
+            item.Layer.Invalidate(elementHandover); // 舊位置與新位置都要重畫
+        }
+        PublishOverlay(handingOver: true, elementHandover);
     }
 
-    private void PublishOverlay(bool handingOver)
+    /// <summary>
+    /// 物件快照在畫面上蓋到的範圍（原位置 ∪ 手勢矩陣映射過去的位置）——
+    /// 交接時要等這塊被合成器畫好，快照才收得掉。
+    /// </summary>
+    private SKRectI ElementHandoverRegion()
     {
-        var items = _items.Where(i => i.Pixels != null)
-            .Select(i => (i.Layer, i.Pixels!, i.SrcBounds)).ToArray();
+        var region = SKRectI.Empty;
+        foreach (var item in _items)
+        {
+            if (item.ElementPreview == null) continue;
+            var src = item.ElementPreviewBounds;
+            var mapped = _warp != null
+                ? SKRectI.Ceiling(_warp.Bounds)
+                : SKRectI.Ceiling(Matrix.MapRect(new SKRect(src.Left, src.Top, src.Right, src.Bottom)));
+            mapped.Inflate(2, 2);
+            var both = SKRectI.Union(src, mapped);
+            region = region.IsEmpty ? both : SKRectI.Union(region, both);
+        }
+        return region;
+    }
+
+    private void PublishOverlay(bool handingOver, SKRectI elementRegion = default)
+    {
+        // 只有文字的圖層沒有像素，代表它的是手勢開始時拍的那張物件快照（見 CaptureElementPreviews）
+        var items = _items
+            .Select(i => (i.Layer, Image: i.Pixels ?? i.ElementPreview,
+                Bounds: i.Pixels != null ? i.SrcBounds : i.ElementPreviewBounds))
+            .Where(t => t.Image != null)
+            .Select(t => (t.Layer, t.Image!, t.Bounds))
+            .ToArray();
         if (items.Length == 0)
         {
             _overlay = null;
             return;
         }
 
-        var region = SKRectI.Empty;
+        var region = elementRegion;
         if (handingOver)
         {
             foreach (var item in _items)
@@ -772,6 +966,7 @@ public sealed class TransformSession : IDisposable
             (state.HandoverRegion.IsEmpty || compositor.IsRegionClean(state.HandoverRegion)))
         {
             _overlay = null;
+            ReleaseElementPreviews(compositor);
         }
     }
 
@@ -790,7 +985,8 @@ public sealed class TransformSession : IDisposable
         if (_gestureOverlay)
         {
             PublishOverlay(handingOver: false);
-            UpdateElements();
+            // 物件已由快照代表：手勢期間不動原件（動一下就整串圖層效果重算一次）
+            if (!_elementsFrozen) UpdateElements();
             return;
         }
 
@@ -853,6 +1049,14 @@ public sealed class TransformSession : IDisposable
         if (old == delta) return;
         OffsetDelta = delta;
 
+        // 物件也走同一個整數位移（而不是從起始快照以矩陣重算）：整數相加不累積誤差，
+        // 而且這樣物件與圖層 Offset 是同一個位移 —— 物件在「圖層座標」裡等於沒動，
+        // 效果堆疊算出來會一模一樣，於是整串效果都不必重算。4K 上一個帶外光暈的文字圖層
+        // 重算一次 56 ms，拖曳時每動一步一次＝移動文字圖層一路卡到底（使用者回報）。
+        // 網格模式例外：那裡的位移是套在網格上的，物件要照原本的路重算。
+        var step = new SKPointI(delta.X - old.X, delta.Y - old.Y);
+        var lockstep = _quad == null && _warp == null;
+
         var m = Matrix;
         var (sx, sy) = Scales;
         foreach (var item in _items)
@@ -864,9 +1068,14 @@ public sealed class TransformSession : IDisposable
                     item.BaseOffset.X + delta.X, item.BaseOffset.Y + delta.Y);
                 foreach (var start in item.StartElements)
                 {
-                    if (item.Layer.FindElement(start.Id) != null)
+                    if (item.Layer.FindElement(start.Id) is not { } current) continue;
+                    if (lockstep)
+                        item.Layer.ReplaceElement(current.Translated(step.X, step.Y), effectsUnchanged: true);
+                    else
                         item.Layer.ReplaceElement(TransformedElement(item, start, m, sx, sy));
                 }
+                // 物件跟著 Offset 一起走了，把快取的基準位移一起帶過去
+                if (lockstep && item.Layer.HasElements) item.Layer.FxCache.FollowOffset(item.Layer.EffectOffset);
             }
 
             if (!external && !item.LastStamp.IsEmpty)
@@ -1129,6 +1338,7 @@ public sealed class TransformSession : IDisposable
         if (_disposed) return;
         _disposed = true;
         _overlay = null;
+        ReleaseElementPreviews(compositor);
         foreach (var item in _items)
         {
             // 借來的原始像素屬於圖層的 LayerPixelSource，session 不能釋放它

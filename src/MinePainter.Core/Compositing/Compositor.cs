@@ -637,7 +637,7 @@ public sealed class Compositor : IDisposable
             canvas.Translate(-tileRect.Left, -tileRect.Top);
             foreach (var el in layer.Elements)
             {
-                if (el.Id == layer.HiddenElementId) continue; // 畫布內編輯中，由 overlay 顯示
+                if (layer.IsElementHidden(el.Id)) continue; // 畫布內編輯／手勢快照中，由 overlay 顯示
                 if (!el.Bounds.IntersectsWith(tileRect)) continue;
                 el.Render(canvas);
                 drew = true;

@@ -43,6 +43,9 @@ public sealed unsafe class GpuLayerRenderer : IDisposable
     /// <summary>診斷：上一幀畫了幾格。</summary>
     public int LastTiles { get; private set; }
 
+    /// <summary>診斷／測試：上一幀有幾個文字物件是貼快照畫的（見 <see cref="RotatedTextCache"/>）。</summary>
+    public int LastCachedTextDraws { get; private set; }
+
     /// <summary>
     /// 試著畫。回傳 false＝這份文件目前的狀態這條路處理不了，呼叫端請走原本的 tile 路徑。
     /// 必須在 render thread、Document.SyncRoot 內呼叫。
@@ -51,6 +54,7 @@ public sealed unsafe class GpuLayerRenderer : IDisposable
     {
         if (!CanHandle(session)) return false;
         LastTiles = 0;
+        LastCachedTextDraws = 0;
         DrawGroup(canvas, session, session.Document.Root, visibleDoc);
         return true;
     }
@@ -217,11 +221,15 @@ public sealed unsafe class GpuLayerRenderer : IDisposable
         {
             // 變形手勢進行中：文字物件每幀都被換成新角度的實例（TransformSession.UpdateElements），
             // 每幀因此都要重排版、重描邊、重模糊一次 —— 走快照那條路（見 RotatedTextCache）。
-            var gesture = session.Transform?.Overlay is { HandingOver: false };
+            var gesture = session.Transform is { GestureActive: true };
             foreach (var element in raster.Elements)
             {
-                if (element.Id == raster.HiddenElementId) continue;
-                if (gesture && element is TextElement text && _rotatedText.TryDraw(canvas, text)) continue;
+                if (raster.IsElementHidden(element.Id)) continue;
+                if (gesture && element is TextElement text && _rotatedText.TryDraw(canvas, text))
+                {
+                    LastCachedTextDraws++;
+                    continue;
+                }
                 element.Render(canvas);
             }
         }

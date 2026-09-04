@@ -1030,7 +1030,7 @@ public sealed class EditorSession : IDisposable
         }
         foreach (var el in layer.Elements)
         {
-            if (el.Id == layer.HiddenElementId) continue;
+            if (layer.IsElementHidden(el.Id)) continue;
             var b = el.Bounds;
             if (b.IsEmpty) continue;
             var layerRect = new SKRectI(b.Left - layer.Offset.X, b.Top - layer.Offset.Y,
@@ -1547,7 +1547,7 @@ public sealed class EditorSession : IDisposable
                 FloatingSelection.DrawLayerPixels(raster, canvas, docRect);
                 foreach (var el in raster.Elements)
                 {
-                    if (el.Id == raster.HiddenElementId) continue;
+                    if (raster.IsElementHidden(el.Id)) continue;
                     el.Render(canvas);
                 }
                 break;

@@ -136,6 +136,35 @@ public sealed class RasterLayer : LayerNode, IDisposable
         }
     }
 
+    private bool _elementsHidden;
+
+    /// <summary>
+    /// 整層的物件暫時都不渲染（含效果堆疊的來源）——手勢期間物件由一張快照代表時用。
+    ///
+    /// 與 <see cref="HiddenElementId"/> 同一個用途，差別只在「一個」與「整層」：
+    /// 變形手勢一次動的是整層的物件，逐個藏沒有意義。在 Document.SyncRoot 內設定。
+    /// </summary>
+    public bool ElementsHidden
+    {
+        get => _elementsHidden;
+        set
+        {
+            if (_elementsHidden == value) return;
+            _elementsHidden = value;
+            var affected = SKRectI.Empty;
+            foreach (var el in _elements)
+            {
+                var b = el.Bounds;
+                if (b.IsEmpty) continue;
+                affected = affected.IsEmpty ? b : SKRectI.Union(affected, b);
+            }
+            if (!affected.IsEmpty) InvalidateElement(affected);
+        }
+    }
+
+    /// <summary>這個物件現在該不該畫（整層藏起來、或單獨被藏起來就不畫）。</summary>
+    public bool IsElementHidden(Guid id) => _elementsHidden || _hiddenElementId == id;
+
     public RasterLayer(TilePool? pool = null) => Surface = new TileSurface(pool);
 
     public override SKRectI ContentBounds
@@ -188,20 +217,30 @@ public sealed class RasterLayer : LayerNode, IDisposable
     }
 
     /// <summary>以同 Id 的新實例替換（不可變編輯模型的核心操作）。</summary>
-    public void ReplaceElement(VectorElement replacement)
+    /// <summary>
+    /// 換掉一個物件。<paramref name="effectsUnchanged"/>＝這次改動不會讓效果堆疊算出不同的東西
+    /// （目前只有「物件與圖層 Offset 一起平移同一個整數向量」符合），效果快取因此不必重算 ——
+    /// 4K 上一個帶外光暈的文字圖層重算一次要 56 ms，拖曳時每動一步一次就是一路卡到底。
+    /// </summary>
+    public void ReplaceElement(VectorElement replacement, bool effectsUnchanged = false)
     {
         var index = _elements.FindIndex(e => e.Id == replacement.Id);
         if (index < 0) throw new InvalidOperationException("找不到要替換的物件。");
         var oldBounds = _elements[index].Bounds;
         _elements[index] = replacement;
-        InvalidateElement(oldBounds.IsEmpty ? replacement.Bounds : SKRectI.Union(oldBounds, replacement.Bounds));
+        InvalidateElement(
+            oldBounds.IsEmpty ? replacement.Bounds : SKRectI.Union(oldBounds, replacement.Bounds),
+            effectsUnchanged);
     }
 
-    private void InvalidateElement(SKRectI bounds)
+    private void InvalidateElement(SKRectI bounds, bool effectsUnchanged = false)
     {
         if (bounds.IsEmpty) return;
         ElementCache.MarkDirty(bounds);
-        Invalidate(bounds);
+        // effectsUnchanged＝物件與圖層 Offset 走了同一個整數位移：物件在「圖層座標」裡沒動，
+        // 效果快取算出來會一模一樣，只是要重新合成到新位置而已（見 TransformSession.TranslateTo）
+        if (effectsUnchanged) InvalidateComposite(bounds);
+        else Invalidate(bounds);
     }
 
     internal override void AttachToDocument(Document? doc)

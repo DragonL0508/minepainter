@@ -1017,6 +1017,12 @@ public partial class MainWindow : Window
             session.CommitFloating();
         }
 
+        // 切到不會操作物件的工具，文字物件的選取框也要收掉。一般圖層的框只在移動工具下出現
+        // （HandleDragController.GetFrame 的 LayerContent），文字圖層卻是靠 SelectedElement
+        // 撐著，換了工具照樣掛在畫面上（使用者回報）。移動／文字工具之間切換則保留選取。
+        if (key is not ("move" or "text") && session.SelectedElement != null)
+            session.SelectedElement = null;
+
         var changed = _currentToolKey != key;
         _currentToolKey = key;
         session.ActiveTool = key switch
