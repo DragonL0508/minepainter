@@ -2499,6 +2499,24 @@ public partial class MainWindow : Window
                 : "移動時只顯示基底像素，放開後才套用效果（較省效能）");
         };
         EffectsMenu.Items.Add(fxWhileDrag);
+
+        var gpuRender = new MenuItem
+        {
+            Header = "GPU 圖層渲染（實驗）",
+            ToggleType = MenuItemToggleType.CheckBox,
+            IsChecked = Services.AppSettings.Instance.GpuLayerRendering,
+        };
+        ToolTip.SetTip(gpuRender,
+            "直接在 GPU 上畫圖層，效果（外框／陰影／光暈／塗色）也交給 GPU 算；" +
+            "處理不了的狀況（筆劃中、浮動內容、調整圖層…）會自動退回原本的路徑。");
+        gpuRender.Click += (_, _) =>
+        {
+            Services.AppSettings.Instance.GpuLayerRendering = gpuRender.IsChecked;
+            Services.AppSettings.Instance.Save();
+            Canvas.SetGpuRendering(gpuRender.IsChecked);
+            Toasts.Show(gpuRender.IsChecked ? "已開啟 GPU 圖層渲染" : "已改回 CPU 合成器");
+        };
+        EffectsMenu.Items.Add(gpuRender);
         EffectsMenu.Items.Add(new Separator());
 
         foreach (var category in EffectRegistry.Categories)

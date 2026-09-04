@@ -1,4 +1,4 @@
-using SkiaSharp;
+﻿using SkiaSharp;
 
 namespace MinePainter.Core.Tiles;
 
@@ -32,6 +32,14 @@ public sealed unsafe class Tile
     }
 
     public static Tile Rent(TilePool pool, bool zeroed = true) => new(pool, pool.Rent(zeroed));
+
+    /// <summary>
+    /// 內容版本：每次有人取得寫入權就 +1。顯示端（GPU 貼圖快取）靠它知道「這格要不要重傳」——
+    /// 不能用物件識別，就地寫入時 Tile 實例不會換。
+    /// </summary>
+    public int Version { get; private set; }
+
+    internal void BumpVersion() => Version++;
 
     public bool IsShared => Volatile.Read(ref _refCount) > 1;
     public bool IsAlive => Volatile.Read(ref _refCount) > 0;

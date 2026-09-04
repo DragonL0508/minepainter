@@ -25,6 +25,12 @@ public sealed class AppSettings
     /// <summary>最近開啟／儲存過的檔案（完整路徑，最新在前）。</summary>
     public List<string> RecentFiles { get; set; } = new();
 
+    /// <summary>
+    /// 直接在 GPU 上畫圖層樹（不經過 CPU 合成器），效果堆疊也盡量交給 GPU 濾鏡。
+    /// 還在驗證階段，預設關；處理不了的狀態會自動退回原本的路徑。
+    /// </summary>
+    public bool GpuLayerRendering { get; set; }
+
     /// <summary>效果／調整套用時記錄在圖層的效果堆疊（非破壞性），而不是直接改像素。</summary>
     public bool NonDestructiveEffects { get; set; } = true;
 

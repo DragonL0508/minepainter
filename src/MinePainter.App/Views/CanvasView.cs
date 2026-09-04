@@ -425,7 +425,7 @@ public sealed class CanvasView : Control
 
         context.Custom(new CanvasDrawOperation(
             new Rect(0, 0, Bounds.Width, Bounds.Height), session, _viewport, _stats, ShowPixelGrid,
-            (float)CurrentContentFade, SmoothZoom));
+            (float)CurrentContentFade, SmoothZoom, _gpuRenderer));
 
         DrawBrushCursor(context);
     }
@@ -622,6 +622,22 @@ public sealed class CanvasView : Control
 
         e.Pointer.Capture(this);
         e.Handled = true;
+    }
+
+    /// <summary>
+    /// GPU 圖層渲染（直接走圖層樹、效果交給 Skia 濾鏡）。設定關掉時是 null ＝ 走原本的合成器路徑。
+    /// 貼圖快取跟著畫布走，換分頁不必重建。
+    /// </summary>
+    private Rendering.GpuLayerRenderer? _gpuRenderer =
+        Services.AppSettings.Instance.GpuLayerRendering ? new Rendering.GpuLayerRenderer() : null;
+
+    /// <summary>設定切換時換路徑（立刻生效，不必重開）。</summary>
+    public void SetGpuRendering(bool on)
+    {
+        if (on == (_gpuRenderer != null)) return;
+        _gpuRenderer?.Dispose();
+        _gpuRenderer = on ? new Rendering.GpuLayerRenderer() : null;
+        RequestRedraw();
     }
 
     private readonly Core.Tools.HandleDragController _handles = new();

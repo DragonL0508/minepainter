@@ -1,4 +1,4 @@
-using SkiaSharp;
+﻿using SkiaSharp;
 
 namespace MinePainter.Core.Tiles;
 
@@ -100,6 +100,7 @@ public sealed class TileSurface : IDisposable
             _tiles[idx] = clone;
             tile = clone;
         }
+        tile.BumpVersion(); // 顯示端的 GPU 貼圖快取靠這個知道要不要重傳
         return tile;
     }
 

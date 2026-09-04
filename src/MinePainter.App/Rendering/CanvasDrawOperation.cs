@@ -22,6 +22,7 @@ public sealed class CanvasDrawOperation : ICustomDrawOperation
     private readonly int _docHeight;
     private readonly ViewportTransform _viewport;
     private readonly FrameStats _stats;
+    private readonly GpuLayerRenderer? _gpuRenderer;
 
     private readonly bool _highlightSelection;
     private readonly bool _showPixelGrid;
@@ -30,8 +31,10 @@ public sealed class CanvasDrawOperation : ICustomDrawOperation
     private readonly bool _smoothZoom;
 
     public CanvasDrawOperation(Rect bounds, EditorSession session, ViewportTransform viewport,
-        FrameStats stats, bool showPixelGrid = false, float contentFade = 1f, bool smoothZoom = false)
+        FrameStats stats, bool showPixelGrid = false, float contentFade = 1f, bool smoothZoom = false,
+        GpuLayerRenderer? gpuRenderer = null)
     {
+        _gpuRenderer = gpuRenderer;
         _smoothZoom = smoothZoom;
         _contentFade = Math.Clamp(contentFade, 0f, 1f);
         _showPixelGrid = showPixelGrid;
@@ -145,7 +148,18 @@ public sealed class CanvasDrawOperation : ICustomDrawOperation
         var docR = Math.Min(_docWidth, (Bounds.Width - _viewport.OffsetX) * invS);
         var docB = Math.Min(_docHeight, (Bounds.Height - _viewport.OffsetY) * invS);
 
-        if (docR > docL && docB > docT)
+        // GPU 路徑：直接走圖層樹，效果交給 Skia 濾鏡。處理不了就 false，照舊走下面的 tile。
+        var gpuDrew = false;
+        if (docR > docL && docB > docT && _gpuRenderer != null)
+        {
+            var visible = new SKRectI((int)docL, (int)docT, (int)Math.Ceiling(docR), (int)Math.Ceiling(docB));
+            lock (_session.Document.SyncRoot)
+            {
+                gpuDrew = _gpuRenderer.TryDraw(canvas, _session, visible);
+            }
+        }
+
+        if (!gpuDrew && docR > docL && docB > docT)
         {
             var c0 = Math.Clamp((int)(docL / Tile.Size), 0, _compositor.TileCols - 1);
             var r0 = Math.Clamp((int)(docT / Tile.Size), 0, _compositor.TileRows - 1);
