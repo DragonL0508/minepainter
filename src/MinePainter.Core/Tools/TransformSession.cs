@@ -1,4 +1,4 @@
-﻿using MinePainter.Core.Compositing;
+using MinePainter.Core.Compositing;
 using MinePainter.Core.Documents;
 using MinePainter.Core.History;
 using MinePainter.Core.Layers;
@@ -39,17 +39,6 @@ public sealed class TransformSession : IDisposable
 
         /// <summary>進入四角／彎曲模式時的文字物件（已含矩形模式的變形）：網格變形疊在它們的輸出端。</summary>
         public Dictionary<Guid, VectorElement>? MeshStartElements;
-
-        /// <summary>
-        /// 手勢代理圖：手勢開始時把這層「看得到的樣子」（含效果堆疊與文字物件）拍成一張低解析度的圖。
-        /// 手勢期間整層都不畫，只畫這張圖套上目前的矩陣 —— 不重算效果、不重新合成。
-        /// </summary>
-        public SKImage? Proxy;
-
-        /// <summary>代理圖對應的 doc 範圍（Offset=Base 基準）。</summary>
-        public SKRectI ProxyBounds;
-
-        public bool HidElements;
     }
 
     /// <summary>
@@ -655,108 +644,19 @@ public sealed class TransformSession : IDisposable
             }
         }
 
-        // 網格模式（四角／彎曲）的文字是靠元素的輸出端變形做的，代理圖套不上去；那兩種維持原路。
-        var canProxy = _warp == null && _quad == null;
-
         _gestureOverlay = true;
         _pixelsStamped = true; // 像素被拿掉了，就算手勢回到 identity 也得還原快照
         foreach (var item in _items)
         {
             lock (_doc.SyncRoot)
             {
-                if (canProxy) item.Proxy = BuildProxyLocked(item, out item.ProxyBounds);
                 ClearPixelTiles(item.Layer);
-                if (item.Proxy != null && item.StartElements.Length > 0)
-                {
-                    item.Layer.ElementsHidden = true; // 物件已經在代理圖裡，再畫一次會變兩份
-                    item.HidElements = true;
-                }
             }
             var display = OffsetRect(item.LastStamp, OffsetDelta);
             if (!display.IsEmpty) item.Layer.Invalidate(display);
             item.LastStamp = SKRectI.Empty;
         }
         PublishOverlay(handingOver: false);
-    }
-
-    /// <summary>代理圖的解析度上限（長邊）：手勢中糊一點沒關係，重點是畫得動、而且看得到。</summary>
-    private const int MaxProxySide = 2048;
-
-    /// <summary>
-    /// 拍下這層「現在看得到的樣子」：效果快取算好了就用它（外框／陰影都在裡面），
-    /// 否則基底像素＋物件。縮到 <see cref="MaxProxySide"/> 以內 —— 手勢期間只要看得到就好。
-    /// 在 Document.SyncRoot 內呼叫。
-    /// </summary>
-    private static SKImage? BuildProxyLocked(Item item, out SKRectI docRect)
-    {
-        var layer = item.Layer;
-        docRect = layer.DisplayContentBounds;
-        if (docRect.Width <= 0 || docRect.Height <= 0) return null;
-
-        var longest = Math.Max(docRect.Width, docRect.Height);
-        var scale = longest > MaxProxySide ? MaxProxySide / (float)longest : 1f;
-        var w = Math.Max(1, (int)MathF.Ceiling(docRect.Width * scale));
-        var h = Math.Max(1, (int)MathF.Ceiling(docRect.Height * scale));
-
-        var info = new SKImageInfo(w, h, SKColorType.Bgra8888, SKAlphaType.Premul);
-        using var surface = SKSurface.Create(info);
-        if (surface == null) return null;
-        var canvas = surface.Canvas;
-        canvas.Clear(SKColors.Transparent);
-        if (scale != 1f) canvas.Scale(scale);
-        canvas.Translate(-docRect.Left, -docRect.Top);
-
-        // 效果快取只算「畫布看得到的那塊」（見 LayerEffectRenderer 的裁切）。物件比畫布大很多時
-        // 快取蓋不到整層，直接拿來當代理圖的話，手勢中把畫布外那段拉進來會是一片空白 ——
-        // 那種情況改畫「基底像素＋物件」：形狀完整、只是暫時沒有效果，總比看不到好。
-        if (layer.EffectsRendered && !layer.FxCache.LastClipped)
-        {
-            // 效果快取＝這層算好的樣子（文字物件也已經併在裡面）
-            DrawSurface(layer.FxCache.Surface, layer.EffectOffset, canvas, docRect);
-        }
-        else
-        {
-            Selections.FloatingSelection.DrawLayerPixels(layer, canvas, docRect);
-            foreach (var el in layer.Elements)
-            {
-                if (el.Id == layer.HiddenElementId) continue;
-                el.Render(canvas);
-            }
-        }
-        canvas.Flush();
-        return surface.Snapshot();
-    }
-
-    private static void DrawSurface(Tiles.TileSurface source, SKPointI offset, SKCanvas canvas, SKRectI docRect)
-    {
-        var rect = new SKRectI(
-            docRect.Left - offset.X, docRect.Top - offset.Y,
-            docRect.Right - offset.X, docRect.Bottom - offset.Y);
-        foreach (var idx in Tiles.TileIndex.CoveringRect(rect))
-        {
-            var tile = source.GetTileForRead(idx);
-            if (tile == null) continue;
-            using var pixmap = tile.AsPixmap();
-            using var img = SKImage.FromPixels(pixmap);
-            var tileRect = idx.ToPixelRect();
-            canvas.DrawImage(img, tileRect.Left + offset.X, tileRect.Top + offset.Y);
-        }
-    }
-
-    /// <summary>手勢結束：物件放回去、代理圖收掉。</summary>
-    private void ReleaseProxies()
-    {
-        foreach (var item in _items)
-        {
-            if (item.HidElements)
-            {
-                item.Layer.ElementsHidden = false;
-                item.HidElements = false;
-            }
-            item.Proxy?.Dispose();
-            item.Proxy = null;
-            item.ProxyBounds = SKRectI.Empty;
-        }
     }
 
     /// <summary>
@@ -772,7 +672,6 @@ public sealed class TransformSession : IDisposable
             return;
         }
         _gestureOverlay = false;
-        lock (_doc.SyncRoot) ReleaseProxies(); // 物件放回去，接下來的蓋章才看得到它們
 
         if (IsIdentity)
         {
@@ -789,12 +688,8 @@ public sealed class TransformSession : IDisposable
 
     private void PublishOverlay(bool handingOver)
     {
-        // 有代理圖就用代理圖（低解析度、含效果、也涵蓋文字物件）；否則沿用原始像素
-        var items = _items
-            .Select(i => i.Proxy != null ? (i.Proxy, i.ProxyBounds) : (i.Pixels, i.SrcBounds))
-            .Where(i => i.Item1 != null)
-            .Select(i => (i.Item1!, i.Item2))
-            .ToArray();
+        var items = _items.Where(i => i.Pixels != null)
+            .Select(i => (i.Pixels!, i.SrcBounds)).ToArray();
         if (items.Length == 0)
         {
             _overlay = null;
@@ -845,13 +740,11 @@ public sealed class TransformSession : IDisposable
     {
         if (_disposed) return;
 
-        // 手勢覆疊中：像素由 render thread 以目前矩陣直接畫，這裡只發布新矩陣。
-        // 有代理圖時連文字物件都不動 —— 每幀 ReplaceElement 會讓效果堆疊整份重算，
-        // 大物件就是那樣把合成器拖垮的（放開時 StampAll 會一次套到最終狀態）。
+        // 手勢覆疊中：像素由 render thread 以目前矩陣直接畫，這裡只發布新矩陣、更新文字物件
         if (_gestureOverlay)
         {
             PublishOverlay(handingOver: false);
-            if (!_items.Any(i => i.Proxy != null)) UpdateElements();
+            UpdateElements();
             return;
         }
 

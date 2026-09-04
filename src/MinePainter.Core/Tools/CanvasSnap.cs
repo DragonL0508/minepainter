@@ -1,4 +1,4 @@
-﻿using MinePainter.Core.Layers;
+using MinePainter.Core.Layers;
 using SkiaSharp;
 
 namespace MinePainter.Core.Tools;
@@ -247,7 +247,6 @@ public static class CanvasSnap
                     foreach (var element in raster.Elements)
                     {
                         if (into.Count >= MaxTargets) return;
-                        if (raster.ElementsHidden) break;
                         if (exclude.Contains(element.Id) || element.Id == raster.HiddenElementId) continue;
                         var frame = element.FrameBounds; // 使用者看到的框（不含效果外擴）
                         if (frame.Width > 0 && frame.Height > 0) into.Add(new SnapTarget(frame));

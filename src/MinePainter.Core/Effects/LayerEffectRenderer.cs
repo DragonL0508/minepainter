@@ -25,7 +25,6 @@ public sealed class LayerEffectCache : IDisposable
     internal bool DirtyAll = true;
     internal SKRectI Dirty = SKRectI.Empty;      // 圖層座標（原始髒區，不含效果外擴；外擴在取工作時依當時的堆疊算）
     internal SKRectI LastRegion = SKRectI.Empty; // 上次計算的範圍（圖層座標）
-    internal bool LastClipped;                   // 上次的範圍被畫布裁掉過（＝這份快取與畫布位置有關）
     internal SKRectI LastCanvas = SKRectI.Empty; // 上次計算時畫布在圖層座標的範圍（只有「位置相關」效果在乎）
     internal SKPointI LastOffset;                // 上次計算時的圖層 Offset（物件是 doc 座標，Offset 變了物件在圖層座標就動了）
     internal bool HasLastOffset;
@@ -35,25 +34,15 @@ public sealed class LayerEffectCache : IDisposable
     /// <summary>已被取走、還沒寫回的工作數（worker 鎖外計算中）。同步等待者靠它判斷「真的算完了」。</summary>
     internal int InFlight;
 
-    /// <summary>
-    /// 每次被標髒就 +1。worker 在鎖外算的時候拿它比對：算到一半又被標髒，
-    /// 這份結果寫回去也是舊的（而且馬上會被重算），不如當場放棄、把髒區還回去重來。
-    /// </summary>
-    private int _generation;
-
-    internal int Generation => Volatile.Read(ref _generation);
-
     public void MarkDirty(SKRectI layerRect)
     {
         if (layerRect.Width <= 0 || layerRect.Height <= 0) return;
-        Interlocked.Increment(ref _generation);
         if (DirtyAll) return;
         Dirty = Dirty.IsEmpty ? layerRect : SKRectI.Union(Dirty, layerRect);
     }
 
     public void MarkAllDirty()
     {
-        Interlocked.Increment(ref _generation);
         DirtyAll = true;
         Dirty = SKRectI.Empty;
     }
@@ -97,13 +86,6 @@ public static class LayerEffectRenderer
         public required List<byte[]?> Masks; // 每個效果在 Compute 範圍內的遮罩（null = 整層）
         public required SKSizeI DocSize;
         public float ContentRotation;        // 這層唯一的文字物件的角度（見 EffectContext.ContentRotation）
-        public int Generation;               // 取這份工作時的髒區版本（見 LayerEffectCache.Generation）
-
-        /// <summary>只有「合成器排進來的」工作可以中途放棄；拖曳預覽那種一次性的算完就是要用。</summary>
-        public bool AbandonWhenStale;
-
-        /// <summary>取走之後又被標髒了：算完也是舊的，白算。</summary>
-        public bool IsStale => AbandonWhenStale && Layer.FxCache.Generation != Generation;
     }
 
     /// <summary>算完所有待處理的圖層；回傳是否有任何圖層被更新（呼叫端據此決定要不要再跑一輪）。</summary>
@@ -121,7 +103,7 @@ public static class LayerEffectRenderer
             }
             if (job == null) return any;
 
-            uint[]? result;
+            uint[] result;
             try
             {
                 result = Compute(job, ct);
@@ -130,13 +112,6 @@ public static class LayerEffectRenderer
             {
                 lock (doc.SyncRoot) AbandonLocked(doc, job); // 取消／炸掉：把工作還回去，等待者才不會卡死
                 throw;
-            }
-
-            if (result == null)
-            {
-                // 算到一半又被標髒：放棄這份，下一輪用新的髒區重算（省下寫回與一次多餘的重算）
-                lock (doc.SyncRoot) AbandonLocked(doc, job);
-                continue;
             }
 
             lock (doc.SyncRoot)
@@ -176,7 +151,7 @@ public static class LayerEffectRenderer
                     continue;
                 }
             }
-            uint[]? result;
+            uint[] result;
             try
             {
                 result = Compute(job, CancellationToken.None);
@@ -185,11 +160,6 @@ public static class LayerEffectRenderer
             {
                 lock (doc.SyncRoot) AbandonLocked(doc, job);
                 throw;
-            }
-            if (result == null)
-            {
-                lock (doc.SyncRoot) AbandonLocked(doc, job); // 被蓋過了，下一圈重算
-                continue;
             }
             lock (doc.SyncRoot)
             {
@@ -262,7 +232,7 @@ public static class LayerEffectRenderer
         var bounds = layer.Surface.ContentBounds;
         foreach (var el in layer.Elements)
         {
-            if (layer.ElementsHidden || el.Id == layer.HiddenElementId) continue;
+            if (el.Id == layer.HiddenElementId) continue;
             var b = el.Bounds;
             if (b.IsEmpty) continue;
             var lb = new SKRectI(b.Left - layer.Offset.X, b.Top - layer.Offset.Y,
@@ -318,40 +288,20 @@ public static class LayerEffectRenderer
             cache.LastOffset = layer.EffectOffset;
             cache.HasLastOffset = true;
 
+            // 以畫布為框架的效果：畫布相對位置變了就得整層重算（其他效果與畫布無關）
             var canvasInLayer = new SKRectI(-layer.EffectOffset.X, -layer.EffectOffset.Y,
                 doc.Width - layer.EffectOffset.X, doc.Height - layer.EffectOffset.Y);
-
-            // 只算「看得到的那塊」：畫布外的部分算了也永遠不會被合成到（合成器只走畫布內的
-            // tile），可是成本照付 —— 一個大部分在畫布外的大物件，效果堆疊每次都在算不存在的
-            // 畫面（實測：完全在畫布外的 3200×370 文字，外框＋陰影仍要 113 ms）。
-            // 往外留 margin：畫布外的內容，它的外框／陰影還是可能伸進畫布裡。
-            // 上次算的範圍被裁過（或效果本身看畫布）＝這份快取與「畫布落在圖層的哪裡」有關：
-            // 圖層一平移，看得到的那一塊就換人，得重算（沒裁到的話快取與畫布無關，平移不必重算）。
-            if ((canvasDependent || cache.LastClipped) && canvasInLayer != cache.LastCanvas) cache.MarkAllDirty();
-            cache.LastCanvas = canvasInLayer;
+            if (canvasDependent && canvasInLayer != cache.LastCanvas)
+            {
+                cache.MarkAllDirty();
+                cache.LastCanvas = canvasInLayer;
+            }
 
             if (!cache.HasPending) continue;
 
-            // 先對齊 tile 再加 margin：內容範圍是「tile 粒度的內容框再外擴 margin」，
-            // 視窗要蓋得住同一個算法，完全在畫布內的圖層才不會被誤判成被裁到。
-            var visibleWindow = SnapOutToTiles(canvasInLayer);
-            if (margin > 0) visibleWindow.Inflate(margin, margin);
-
-            var content = ContentRegion(layer);
-            if (!content.IsEmpty && margin > 0) content.Inflate(margin, margin);
-
-            // 只有「比畫布大很多」才裁。裁過的快取蓋不到整個物件，拖曳快照就得現算一次
-            // （或先顯示沒有效果的樣子再換上），使用者看到的就是拖一下閃一下。
-            // 稍微超出畫布的物件整份算完便宜得多，也讓拖曳／旋轉的快照永遠是完整的。
-            var canvasArea = (long)Math.Max(1, canvasInLayer.Width) * Math.Max(1, canvasInLayer.Height);
-            var contentArea = (long)Math.Max(0, content.Width) * Math.Max(0, content.Height);
-            var worthClipping = contentArea > canvasArea * 4;
-
-            var region = content.IsEmpty || !worthClipping
-                ? content
-                : SKRectI.Intersect(content, visibleWindow);
-            if (region.Width <= 0 || region.Height <= 0) region = SKRectI.Empty;
-            cache.LastClipped = !content.IsEmpty && region != content;
+            // 快取範圍：內容 + 有限 margin；位置相關的效果再聯集畫布
+            var region = ContentRegion(layer);
+            if (!region.IsEmpty && margin > 0) region.Inflate(margin, margin);
             if (canvasDependent) region = region.IsEmpty ? canvasInLayer : SKRectI.Union(region, canvasInLayer);
 
             if (region.IsEmpty)
@@ -409,23 +359,9 @@ public static class LayerEffectRenderer
                 Masks = masks,
                 DocSize = new SKSizeI(doc.Width, doc.Height),
                 ContentRotation = ContentRotationOf(layer),
-                Generation = cache.Generation,
-                AbandonWhenStale = true,
             };
         }
         return null;
-    }
-
-    /// <summary>
-    /// 把可見視窗往外對齊到 tile 邊界。點陣圖層的內容範圍本身就是 tile 粒度
-    /// （<see cref="Tiles.TileSurface.ContentBounds"/>，256 的倍數），視窗不對齊的話
-    /// 連完全在畫布內的小圖層都會被判成「被裁到」，白白失去「平移不必重算」這個性質。
-    /// </summary>
-    private static SKRectI SnapOutToTiles(SKRectI rect)
-    {
-        static int Floor(int v) => (int)Math.Floor(v / (double)Tile.Size) * Tile.Size;
-        static int Ceil(int v) => (int)Math.Ceiling(v / (double)Tile.Size) * Tile.Size;
-        return new SKRectI(Floor(rect.Left), Floor(rect.Top), Ceil(rect.Right), Ceil(rect.Bottom));
     }
 
     /// <summary>
@@ -449,8 +385,7 @@ public static class LayerEffectRenderer
         return (groupReader ?? Compositing.Compositor.StaticGroupSourceLocked)(group, rect);
     }
 
-    /// <summary>回傳 null＝這份工作在計算途中就被新的髒區蓋過了（放棄，髒區由呼叫端還回去）。</summary>
-    private static uint[]? Compute(Job job, CancellationToken ct)
+    private static uint[] Compute(Job job, CancellationToken ct)
     {
         var w = job.Compute.Width;
         var h = job.Compute.Height;
@@ -459,8 +394,6 @@ public static class LayerEffectRenderer
         for (var i = 0; i < job.Effects.Count; i++)
         {
             ct.ThrowIfCancellationRequested();
-            // 一道效果算完就看一次：後面還有好幾道的話，早點放棄省下的是整整幾十毫秒
-            if (job.IsStale) return null;
             var entry = job.Effects[i];
             var ctx = new EffectContext(job.Compute, job.Compute, current, job.DocSize)
             {
@@ -589,7 +522,7 @@ public static class LayerEffectRenderer
             DocSize = docSize,
             ContentRotation = element is Vectors.TextElement rotated ? rotated.Rotation : 0f,
         };
-        return Compute(job, CancellationToken.None) ?? pixels;
+        return Compute(job, CancellationToken.None);
     }
 
     /// <summary>
@@ -613,7 +546,7 @@ public static class LayerEffectRenderer
                 rect.Right + layer.Offset.X, rect.Bottom + layer.Offset.Y);
             foreach (var el in layer.Elements)
             {
-                if (layer.ElementsHidden || el.Id == layer.HiddenElementId) continue;
+                if (el.Id == layer.HiddenElementId) continue;
                 if (!el.Bounds.IntersectsWith(docRect)) continue;
                 el.Render(canvas);
             }

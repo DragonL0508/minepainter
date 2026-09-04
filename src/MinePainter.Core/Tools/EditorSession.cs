@@ -536,18 +536,7 @@ public sealed class EditorSession : IDisposable
         public RasterLayer Layer { get; } = layer;
         public Guid ElementId { get; } = elementId;
 
-        private volatile SKImage _image = image;
-
-        /// <summary>目前要畫的那張圖（render thread 讀；背景算好「有效果」的版本後會換掉）。</summary>
-        public SKImage Image => _image;
-
-        /// <summary>換上新圖，回傳舊的那張（呼叫端負責退役，不能就地 Dispose）。</summary>
-        public SKImage SwapImage(SKImage next)
-        {
-            var old = _image;
-            _image = next;
-            return old;
-        }
+        public SKImage Image { get; } = image;
 
         /// <summary>物件原本的（含效果外擴的）外框，doc 座標。</summary>
         public SKRectI Bounds { get; } = bounds;
@@ -611,35 +600,22 @@ public sealed class EditorSession : IDisposable
         if (bounds.Width <= 0 || bounds.Height <= 0) return;
 
         SKImage? image = null;
-        var upgradeInBackground = false;
         var scale = OverlayScale(bounds);
-        if (scale < 1f)
+        if (withEffects && scale >= 1f)
         {
-            // 太大：整張當一張貼圖畫不出來（見 OverlayScale），降解析度、也不跑效果堆疊
-            // （那要先配一塊同樣大的緩衝區）。低解析度的預覽總比手勢中整個物件消失好。
-        }
-        else if (withEffects && TryReadEffectCache(layer, element, bounds) is { } cached)
-        {
-            // 快路徑：效果快取就是「這層算好的樣子」，直接裁一塊出來 —— 重跑一遍堆疊在 4K
-            // 要 0.26 秒，手勢一開始就卡在那裡。只有「這層只有這一個物件」時才行，
-            // 否則裁出來的那塊會夾帶隔壁物件的像素。
-            image = ImageFrom(cached, bounds);
-        }
-        else if (withEffects)
-        {
-            // 快取蓋不到（物件有一部分在畫布外，快取只算看得到的那塊）。重跑整份堆疊要上百毫秒，
-            // 按下去就頓在那裡 —— 先用「只有物件、沒有效果」的樣子頂著（形狀、位置都對），
-            // 效果在背景算完再換上去。
-            upgradeInBackground = true;
+            // 帶效果拖曳：物件單獨跑一遍這層的效果堆疊（外框／陰影／漸層跟著走）。
+            // 快取剛好蓋得到就直接裁一塊（省下重跑一遍）。
+            var cached = TryReadEffectCache(layer, element, bounds);
+            image = ImageFrom(cached ?? LayerEffectRenderer.RenderElementPreview(layer, element, out _), bounds);
         }
 
+        // 太大時（見 OverlayScale）降解析度、也不跑效果堆疊：整張當一張貼圖畫不出來，
+        // 低解析度的預覽總比手勢中整個物件消失好。
         image ??= RenderElementOnly(element, bounds, scale);
         if (image == null) return;
 
-        var overlay = new ElementDragOverlay(layer, element.Id, image, bounds);
-        _elementOverlay = overlay;
+        _elementOverlay = new ElementDragOverlay(layer, element.Id, image, bounds);
         layer.HiddenElementId = element.Id; // 原件先藏起來（合成器重畫一次少了它的樣子）
-        if (upgradeInBackground) UpgradeOverlayWithEffects(overlay, layer, element, bounds);
     }
 
     /// <summary>
@@ -692,47 +668,6 @@ public sealed class EditorSession : IDisposable
     }
 
     /// <summary>
-    /// 背景把覆疊圖換成「有效果」的版本。效果堆疊只吃這個物件與這層的效果清單（都是不可變的），
-    /// 所以算得起鎖外；算完回到 UI 執行緒換圖，手勢已經結束或換人就丟掉。
-    /// </summary>
-    private void UpgradeOverlayWithEffects(ElementDragOverlay overlay, RasterLayer layer,
-        Vectors.VectorElement element, SKRectI bounds)
-    {
-        Task.Run(() =>
-        {
-            uint[] pixels;
-            try
-            {
-                pixels = LayerEffectRenderer.RenderElementPreview(layer, element, out var rendered);
-                if (rendered != bounds) return; // 範圍對不上就別換（理論上不會，保險）
-            }
-            catch
-            {
-                return; // 算壞了就維持「沒有效果」的預覽
-            }
-            RunOnUiThread(() =>
-            {
-                if (!ReferenceEquals(_elementOverlay, overlay)) return; // 手勢已經結束或換了物件
-                if (ImageFrom(pixels, bounds) is not { } upgraded) return;
-                var old = overlay.SwapImage(upgraded);
-                Compositor.Retire(old); // render thread 這一幀可能還在畫舊的
-            });
-        });
-    }
-
-    /// <summary>
-    /// 背景算好的東西要回到 UI 執行緒時走這裡（Core 不認得 Dispatcher，由 App 掛上）。
-    /// 沒掛的話就地執行 —— 單元測試與離線流程本來就是單執行緒。
-    /// </summary>
-    public Action<Action>? UiThreadPost { get; set; }
-
-    private void RunOnUiThread(Action action)
-    {
-        if (UiThreadPost is { } post) post(action);
-        else action();
-    }
-
-    /// <summary>
     /// 從效果快取裁出這個物件那一塊（圖層座標 → doc 座標）。
     /// 快取不是最新的、或這層還有別的物件（裁出來會夾帶到）就回 null，交給完整重算那條路。
     /// </summary>
@@ -743,10 +678,6 @@ public sealed class EditorSession : IDisposable
         var layerRect = new SKRectI(
             docRect.Left - layer.Offset.X, docRect.Top - layer.Offset.Y,
             docRect.Right - layer.Offset.X, docRect.Bottom - layer.Offset.Y);
-
-        // 快取只算「看得到的那塊」（見 LayerEffectRenderer 的畫布裁切）。物件有一部分在畫布外時
-        // 快取蓋不到它，直接裁出來的話拖曳中把那部分拉進畫面會是一片空白。
-        if (!layer.FxCache.LastRegion.Contains(layerRect)) return null;
 
         return LayerEffectRenderer.ReadPixels(layer.FxCache.Surface, layerRect);
     }

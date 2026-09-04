@@ -235,11 +235,7 @@ public sealed class CanvasDrawOperation : ICustomDrawOperation
         canvas.Save();
         canvas.Concat(ref m);
         foreach (var (image, src) in overlay.Items)
-        {
-            // 手勢代理圖是低解析度的（見 TransformSession.BuildProxyLocked）：
-            // 畫進它對應的 doc 範圍，而不是 1:1 貼 —— 原尺寸的那份剛好也對得上。
-            canvas.DrawImage(image, new SKRect(src.Left, src.Top, src.Right, src.Bottom), paint);
-        }
+            canvas.DrawImage(image, src.Left, src.Top, paint);
         canvas.Restore();
     }
 
