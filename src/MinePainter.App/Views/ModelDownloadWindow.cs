@@ -1,4 +1,4 @@
-using Avalonia;
+﻿using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
@@ -126,7 +126,8 @@ public sealed class ModelDownloadWindow : ModalDialog
             Minimum = 0,
             Maximum = 1,
             IsVisible = false,
-            Foreground = Brushes.White,
+            Foreground = AppTheme.ProgressBrush, // 亮色主題下白條在淺色軌道上看不見
+            Background = AppTheme.BarTrackBrush,
         };
         private readonly TextBlock _state = new() { FontSize = 11, Foreground = AppTheme.TextMutedBrush };
         private bool _installed;

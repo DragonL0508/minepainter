@@ -51,6 +51,14 @@ public sealed class CanvasView : Control
         new(Brushes.Black, 1, new DashStyle([4, 4], 0));
     private static readonly Pen BrushCursorPenLight =
         new(Brushes.White, 1, new DashStyle([4, 4], 4));
+
+    // 中心點細十字：圈大的時候光看圈抓不準筆刷會落在哪。白線＋深色外框，任何底色上都看得見
+    private static readonly Pen BrushCenterHaloPen =
+        new(new SolidColorBrush(Color.FromArgb(0xA0, 0, 0, 0)), 2.5);
+    private static readonly Pen BrushCenterPen = new(Brushes.White, 1);
+
+    /// <summary>十字臂長（螢幕像素）；圈太小時再縮短，不要戳出圈外。</summary>
+    private const double BrushCenterArm = 4;
     private bool _toolActive;
     private Point _lastPointerView;
     private bool _animationRunning;
@@ -774,6 +782,18 @@ public sealed class CanvasView : Control
         if (BrushCursorRadius() is not { } radius) return;
         context.DrawEllipse(null, BrushCursorPenDark, _hoverView, radius, radius);
         context.DrawEllipse(null, BrushCursorPenLight, _hoverView, radius, radius);
+
+        var arm = Math.Min(BrushCenterArm, radius - 1);
+        if (arm < 2) return; // 圈已經很小，再畫十字只會糊成一團
+        var c = _hoverView;
+        var h1 = new Point(c.X - arm, c.Y);
+        var h2 = new Point(c.X + arm, c.Y);
+        var v1 = new Point(c.X, c.Y - arm);
+        var v2 = new Point(c.X, c.Y + arm);
+        context.DrawLine(BrushCenterHaloPen, h1, h2);
+        context.DrawLine(BrushCenterHaloPen, v1, v2);
+        context.DrawLine(BrushCenterPen, h1, h2);
+        context.DrawLine(BrushCenterPen, v1, v2);
     }
 
     private ToolPointerEvent ToToolEvent(PointerPoint point)

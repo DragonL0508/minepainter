@@ -1897,6 +1897,26 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
+    /// 「複製這張圖片」：把整張畫布的合成結果（＝匯出看到的那張）放進剪貼簿。
+    /// 與「編輯 → 複製」不同 —— 那個複製的是選取範圍／作用中圖層。
+    /// </summary>
+    private void OnCopyFlattenedClicked(object? sender, RoutedEventArgs e)
+    {
+        var session = CommitPending();
+        if (session == null) return;
+
+        using var image = Core.Compositing.Compositor.RenderComposite(session.Document);
+        if (image == null)
+        {
+            Toasts.Show("沒有可複製的內容");
+            return;
+        }
+        Toasts.Show(Platform.ClipboardImage.TrySetImage(image)
+            ? $"已複製整張圖片 {image.Width} × {image.Height}"
+            : "複製失敗：無法存取剪貼簿");
+    }
+
+    /// <summary>
     /// 小工具「YouTube 縮圖預覽」：把目前文件的合成結果塞進一份本機的假 YouTube 頁面，
     /// 用系統預設瀏覽器開起來看縮圖在真實版面裡的樣子（不連網、不上傳）。
     /// </summary>
@@ -2892,6 +2912,7 @@ public partial class MainWindow : Window
             ["file.save"] = () => _ = SaveAsync(saveAs: false),
             ["file.saveAs"] = () => _ = SaveAsync(saveAs: true),
             ["file.export"] = () => OnExportClicked(null, new RoutedEventArgs()),
+            ["file.copyImage"] = () => OnCopyFlattenedClicked(null, new RoutedEventArgs()),
             ["file.closeTab"] = () => OnCloseTabClicked(null, new RoutedEventArgs()),
 
             ["edit.undo"] = () => OnUndoClicked(null, new RoutedEventArgs()),

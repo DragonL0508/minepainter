@@ -1,4 +1,4 @@
-using Avalonia.Controls;
+﻿using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Threading;
 using MinePainter.App.Controls;
@@ -19,6 +19,8 @@ public sealed class ProgressDialog : ModalDialog
         Maximum = 1,
         Height = 16,
         IsIndeterminate = true, // 第一次 Report 前先跑不定長度動畫
+        Foreground = AppTheme.ProgressBrush, // 不吃 Windows 的系統強調色
+        Background = AppTheme.BarTrackBrush,
     };
     private bool _done;
 

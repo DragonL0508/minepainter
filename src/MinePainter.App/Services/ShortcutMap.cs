@@ -21,6 +21,7 @@ public static class ShortcutMap
         new("file.save", "檔案", "儲存", new KeyGesture(Key.S, KeyModifiers.Control)),
         new("file.saveAs", "檔案", "另存新檔", null),
         new("file.export", "檔案", "匯出影像", null),
+        new("file.copyImage", "檔案", "複製這張圖片", null),
         new("file.closeTab", "檔案", "關閉分頁", new KeyGesture(Key.W, KeyModifiers.Control)),
 
         new("edit.undo", "編輯", "復原", new KeyGesture(Key.Z, KeyModifiers.Control)),

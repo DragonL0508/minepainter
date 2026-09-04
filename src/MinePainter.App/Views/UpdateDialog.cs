@@ -1,4 +1,4 @@
-using Avalonia;
+﻿using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
@@ -16,7 +16,12 @@ public sealed class UpdateDialog : ModalDialog
     public enum Choice { Later, Skip, Update }
 
     private readonly UpdateInfo _info;
-    private readonly ProgressBar _bar = new() { Minimum = 0, Maximum = 1, Height = 14, IsVisible = false };
+    private readonly ProgressBar _bar = new()
+    {
+        Minimum = 0, Maximum = 1, Height = 14, IsVisible = false,
+        Foreground = AppTheme.ProgressBrush, // 不吃 Windows 的系統強調色
+        Background = AppTheme.BarTrackBrush,
+    };
     private readonly TextBlock _status = new() { FontSize = 11, Foreground = AppTheme.TextMutedBrush, IsVisible = false };
     private readonly Button _update;
     private readonly Button _skip;

@@ -45,6 +45,7 @@
             <MenuItem Header="儲存(_S)" Click="OnSaveClicked" Tag="file.save" />
             <MenuItem Header="另存新檔(_A)…" Click="OnSaveAsClicked" Tag="file.saveAs" />
             <MenuItem Header="匯出影像(_E)…" Click="OnExportClicked" Tag="file.export" />
+            <MenuItem Header="複製這張圖片(_C)" Click="OnCopyFlattenedClicked" Tag="file.copyImage" />
             <Separator />
             <!-- 內容由 MainWindow.RefreshRecentFilesMenu 填（最近開過的檔案，最新在最上面） -->
             <MenuItem x:Name="RecentFilesMenu" Header="最近使用的檔案(_R)" />

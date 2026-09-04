@@ -1,4 +1,4 @@
-using Avalonia;
+﻿using Avalonia;
 using Avalonia.Media;
 using Avalonia.Styling;
 using SkiaSharp;
@@ -16,7 +16,7 @@ public static class AppTheme
         string Id, string Name, ThemeVariant Variant,
         uint Chrome, uint Panel, uint Header, uint Border, uint Separator, uint Inner,
         uint Text, uint TextMuted, uint Fill, uint FillHover, uint BarTrack,
-        uint ToastBg, uint ToastText, uint Surround);
+        uint ToastBg, uint ToastText, uint Surround, uint Progress);
 
     public static readonly Palette[] Palettes =
     [
@@ -24,22 +24,22 @@ public static class AppTheme
             Chrome: 0xFF0D0D0F, Panel: 0xFF121215, Header: 0xFF1A1A1E, Border: 0xFF050507,
             Separator: 0xFF2A2A30, Inner: 0xFF08080A, Text: 0xFFD6D6DB, TextMuted: 0xFF80808A,
             Fill: 0xFFE4E4E9, FillHover: 0xFFFFFFFF, BarTrack: 0xFF08080A,
-            ToastBg: 0xF01A1A20, ToastText: 0xFFE8E8EC, Surround: 0xFF0A0A0C),
+            ToastBg: 0xF01A1A20, ToastText: 0xFFE8E8EC, Surround: 0xFF0A0A0C, Progress: 0xFFFFFFFF),
         new("dark", "暗色", ThemeVariant.Dark,
             Chrome: 0xFF232327, Panel: 0xFF2A2A2E, Header: 0xFF35353B, Border: 0xFF1A1A1D,
             Separator: 0xFF45454B, Inner: 0xFF1E1E22, Text: 0xFFDDDDE2, TextMuted: 0xFF9A9AA2,
             Fill: 0xFFE4E4E9, FillHover: 0xFFFFFFFF, BarTrack: 0xFF1E1E22,
-            ToastBg: 0xF0323238, ToastText: 0xFFF0F0F4, Surround: 0xFF252529),
+            ToastBg: 0xF0323238, ToastText: 0xFFF0F0F4, Surround: 0xFF252529, Progress: 0xFFFFFFFF),
         new("light", "亮色", ThemeVariant.Light,
             Chrome: 0xFFE2E2E7, Panel: 0xFFECECF0, Header: 0xFFD8D8DF, Border: 0xFFB9B9C2,
             Separator: 0xFFC4C4CC, Inner: 0xFFDFDFE5, Text: 0xFF26262B, TextMuted: 0xFF6E6E78,
             Fill: 0xFFF9F9FC, FillHover: 0xFFFFFFFF, BarTrack: 0xFFC7C7D0,
-            ToastBg: 0xF0F2F2F6, ToastText: 0xFF26262B, Surround: 0xFFA9ADB5),
+            ToastBg: 0xF0F2F2F6, ToastText: 0xFF26262B, Surround: 0xFFA9ADB5, Progress: 0xFF3A3A42),
         new("white", "極淨白", ThemeVariant.Light,
             Chrome: 0xFFFBFBFD, Panel: 0xFFFFFFFF, Header: 0xFFF1F1F5, Border: 0xFFE0E0E6,
             Separator: 0xFFE8E8EE, Inner: 0xFFF4F4F8, Text: 0xFF202025, TextMuted: 0xFF8A8A94,
             Fill: 0xFFFBFBFD, FillHover: 0xFFFFFFFF, BarTrack: 0xFFDDDDE5,
-            ToastBg: 0xF0FFFFFF, ToastText: 0xFF202025, Surround: 0xFFEDEEF1),
+            ToastBg: 0xF0FFFFFF, ToastText: 0xFF202025, Surround: 0xFFEDEEF1, Progress: 0xFF3A3A42),
     ];
 
     // ---- 可變 brush 單例（初始值 = 暗色，與舊版硬編碼一致） ----
@@ -57,6 +57,12 @@ public static class AppTheme
 
     /// <summary>BarSlider 的底條色：亮色主題下要比 Inner 深，白色填滿才有對比（免畫邊界線）。</summary>
     public static SolidColorBrush BarTrackBrush { get; } = new(Color.FromUInt32(0xFF1E1E22));
+
+    /// <summary>
+    /// 進度條（存檔／匯出／下載）的填色。以前沒指定，Avalonia 會拿 Windows 的系統強調色去畫，
+    /// 每台機器不一樣；統一成暗色主題白、亮色主題深灰（白條在淺色軌道上根本看不見）。
+    /// </summary>
+    public static SolidColorBrush ProgressBrush { get; } = new(Color.FromUInt32(0xFFFFFFFF));
     public static SolidColorBrush ToastBgBrush { get; } = new(Color.FromUInt32(0xF0323238));
     public static SolidColorBrush ToastTextBrush { get; } = new(Color.FromUInt32(0xFFF0F0F4));
 
@@ -87,6 +93,7 @@ public static class AppTheme
         FillBrush.Color = Color.FromUInt32(p.Fill);
         FillHoverBrush.Color = Color.FromUInt32(p.FillHover);
         BarTrackBrush.Color = Color.FromUInt32(p.BarTrack);
+        ProgressBrush.Color = Color.FromUInt32(p.Progress);
         ToastBgBrush.Color = Color.FromUInt32(p.ToastBg);
         ToastTextBrush.Color = Color.FromUInt32(p.ToastText);
         CanvasSurround = new SKColor((byte)(p.Surround >> 16), (byte)(p.Surround >> 8), (byte)p.Surround);
