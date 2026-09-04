@@ -210,6 +210,7 @@ public partial class MainWindow : Window
             var debugTextFx = Environment.GetEnvironmentVariable("MINEPAINTER_DEBUG_TEXTFX");
             if (debugTextFx is "1" or "2" or "5") SeedDebugText();
 
+
             // MINEPAINTER_DEBUG_PRESETS=1 或 =<資料夾>：啟動即打開預設集面板（搭配 MINEPAINTER_PRESETS_DIR 指到測試用的庫）；
             // MINEPAINTER_DEBUG_PRESETS_DROP=<x>,<y>：1.5 秒後把庫裡第一個預設集當作丟在畫布那個 doc 座標（驗證落點套用）
             if (Environment.GetEnvironmentVariable("MINEPAINTER_DEBUG_PRESETS") is { Length: > 0 } debugPresets)

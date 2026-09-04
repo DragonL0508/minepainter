@@ -87,6 +87,12 @@ public sealed class RasterLayer : LayerNode, IDisposable
     /// 暫時不渲染的物件（畫布內編輯 overlay 顯示期間避免重影）。
     /// 在 Document.SyncRoot 內設定。
     /// </summary>
+    /// <summary>
+    /// 整層的物件都先不畫：手勢期間由代理圖（低解析度、含效果的快照）代替整層顯示，
+    /// 原件再畫一次就會變兩份。見 TransformSession 的手勢覆疊。
+    /// </summary>
+    public bool ElementsHidden { get; set; }
+
     public Guid? HiddenElementId
     {
         get => _hiddenElementId;

@@ -55,21 +55,6 @@ public sealed class Document : IDisposable
 
     public object SyncRoot { get; } = new();
 
-    private volatile bool _interactiveGesture;
-
-    /// <summary>
-    /// 進行中的移動／旋轉／縮放手勢。手勢期間**不算效果堆疊**：
-    /// 一段帶外框＋陰影的大文字，效果算一次要上百毫秒，每動一步就排一次的話合成器永遠追不上，
-    /// 畫面上看起來就是「手勢期間完全沒有渲染」（使用者 2026-09-04 回報）。
-    /// 手勢中改畫沒有效果的原始內容（看得到、只是暫時沒有外框陰影），放開再算回來 ——
-    /// 使用者明示「寧可過程中品質很低，也不要完全看不到」。
-    /// </summary>
-    public bool InteractiveGesture
-    {
-        get => _interactiveGesture;
-        set => _interactiveGesture = value;
-    }
-
     /// <summary>文件某範圍已變更、需要重新合成。</summary>
     public event Action<SKRectI>? Changed;
 

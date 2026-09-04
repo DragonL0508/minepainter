@@ -493,7 +493,7 @@ public sealed class Compositor : IDisposable
                                      !stroke.DirtyBounds.IsEmpty &&
                                      stroke.DirtyBounds.IntersectsWith(tileRect);
                     // 效果堆疊作用中：物件已經併進效果快取（外框／陰影要包住文字），不再另外畫
-                    var elementsInFx = raster.EffectsRendered;
+                    var elementsInFx = raster.HasActiveEffects && raster.FxCache.Rendered;
                     var elementTile = raster.HasElements && !elementsInFx ? RenderElementTile(raster, tileRect) : null;
                     var floatingHere = !detached && floating != null && floating.LayerId == raster.Id &&
                                        floating.TargetBounds.IntersectsWith(tileRect);
@@ -637,7 +637,7 @@ public sealed class Compositor : IDisposable
             canvas.Translate(-tileRect.Left, -tileRect.Top);
             foreach (var el in layer.Elements)
             {
-                if (el.Id == layer.HiddenElementId) continue; // 畫布內編輯中，由 overlay 顯示
+                if (layer.ElementsHidden || el.Id == layer.HiddenElementId) continue; // 由 overlay 顯示
                 if (!el.Bounds.IntersectsWith(tileRect)) continue;
                 el.Render(canvas);
                 drew = true;
