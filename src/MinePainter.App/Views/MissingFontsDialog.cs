@@ -9,40 +9,44 @@ namespace MinePainter.App.Views;
 /// <summary>
 /// 開專案檔時，檔案裡用到的字型這台機器沒有裝就跳這個。
 ///
-/// 專案檔只記字型的家族名，換一台機器沒裝那支字型，Skia 會安靜地換一支畫出來 ——
-/// 字還在、位置與寬度卻全變了，而且沒有任何提示。這個對話框就是那個提示：
-/// 列出缺哪幾支、哪段文字在用，讓使用者自己決定要裝字型還是換字型。
+/// 專案檔只記字型的家族名，換一台機器沒裝那支，Skia 會安靜地換一支畫出來 ——
+/// 字還在、排版與寬度卻全變了。這裡直接讓使用者當場挑替代字型（一步 undo 就換完），
+/// 不挑就關掉、維持系統自己挑的替代字面。
 /// </summary>
 public sealed class MissingFontsDialog : ModalDialog
 {
-    public MissingFontsDialog(string fileName, IReadOnlyList<MissingFont> missing)
-        : base("缺少字型", 460)
-    {
-        var body = new StackPanel { Spacing = 10 };
-        body.Children.Add(new TextBlock
-        {
-            Text = $"「{fileName}」用到 {missing.Count} 種這台電腦沒有的字型，" +
-                   "那些文字會先用系統挑的替代字型顯示（排版與寬度可能跑掉）。",
-            FontSize = 12,
-            TextWrapping = TextWrapping.Wrap,
-        });
+    private const string Keep = "（不替換）";
 
+    private readonly Dictionary<string, ComboBox> _pickers = new();
+
+    /// <summary>使用者選好的替換：原字型 → 新字型（沒選的不在裡面）。</summary>
+    public IReadOnlyDictionary<string, string> Replacements { get; private set; } =
+        new Dictionary<string, string>();
+
+    public MissingFontsDialog(string projectName, IReadOnlyList<MissingFont> missing)
+        : base($"{projectName} 缺少以下字型：", 520)
+    {
+        var families = Services.FontCatalog.Families;
         var list = new StackPanel { Spacing = 6 };
+
         foreach (var font in missing)
         {
-            var row = new DockPanel();
-            var count = new TextBlock
+            var picker = new ComboBox
             {
-                Text = font.TextCount == 1 ? "1 段文字" : $"{font.TextCount} 段文字",
-                FontSize = 11,
-                Foreground = AppTheme.TextMutedBrush,
+                Width = 210,
+                FontSize = 12,
+                HorizontalContentAlignment = HorizontalAlignment.Stretch,
+                MaxDropDownHeight = 360,
+                ItemTemplate = Services.FontCatalog.FamilyItemTemplate(170),
+                SelectionBoxItemTemplate = Services.FontCatalog.SelectionBoxTemplate(),
                 VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(8, 0, 0, 0),
             };
-            DockPanel.SetDock(count, Dock.Right);
-            row.Children.Add(count);
+            picker.Items.Add(Keep);
+            foreach (var f in families) picker.Items.Add(f);
+            picker.SelectedIndex = 0;
+            _pickers[font.Family] = picker;
 
-            var name = new StackPanel { Spacing = 1 };
+            var name = new StackPanel { Spacing = 1, VerticalAlignment = VerticalAlignment.Center };
             name.Children.Add(new TextBlock
             {
                 Text = font.Family,
@@ -50,16 +54,17 @@ public sealed class MissingFontsDialog : ModalDialog
                 FontWeight = FontWeight.Bold,
                 TextTrimming = TextTrimming.CharacterEllipsis,
             });
-            if (!string.IsNullOrEmpty(font.Sample))
+            name.Children.Add(new TextBlock
             {
-                name.Children.Add(new TextBlock
-                {
-                    Text = $"例如：{font.Sample}",
-                    FontSize = 11,
-                    Foreground = AppTheme.TextMutedBrush,
-                    TextTrimming = TextTrimming.CharacterEllipsis,
-                });
-            }
+                Text = font.TextCount == 1 ? $"1 段文字・{font.Sample}" : $"{font.TextCount} 段文字・{font.Sample}",
+                FontSize = 11,
+                Foreground = AppTheme.TextMutedBrush,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+            });
+
+            var row = new DockPanel();
+            DockPanel.SetDock(picker, Dock.Right);
+            row.Children.Add(picker);
             row.Children.Add(name);
 
             list.Children.Add(new Border
@@ -71,22 +76,27 @@ public sealed class MissingFontsDialog : ModalDialog
             });
         }
 
-        body.Children.Add(new ScrollViewer
+        var body = new ScrollViewer
         {
-            MaxHeight = 260,
+            MaxHeight = 320,
             HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled,
             Content = list,
-        });
+        };
 
-        body.Children.Add(new TextBlock
+        SetBody(body, ButtonRow(
+            MakeButton("替換", primary: true, confirm: true),
+            MakeButton("略過")));
+    }
+
+    /// <summary>按下「替換」時把選好的對應收起來（沒選的不算）。</summary>
+    protected override bool Validate()
+    {
+        var picked = new Dictionary<string, string>();
+        foreach (var (family, picker) in _pickers)
         {
-            Text = "裝好字型後重新開啟這個檔案就會恢復原本的排版；" +
-                   "也可以直接選中文字、在工具列換一支有裝的字型。",
-            FontSize = 11,
-            Foreground = AppTheme.TextMutedBrush,
-            TextWrapping = TextWrapping.Wrap,
-        });
-
-        SetBody(body, ButtonRow(MakeButton("知道了", primary: true, confirm: true)));
+            if (picker.SelectedItem is string chosen && chosen != Keep) picked[family] = chosen;
+        }
+        Replacements = picked;
+        return true;
     }
 }

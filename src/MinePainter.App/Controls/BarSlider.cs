@@ -354,7 +354,7 @@ public sealed class BarSlider : Control
     {
         base.OnPointerWheelChanged(e);
         var step = Decimals > 0 ? Math.Pow(10, -Decimals) : Math.Max(1, (Maximum - Minimum) / 100);
-        SetAndNotify(Value + WheelInput.Direction(e) * WheelInput.Notches(e) * step); // 往上滾＝變大
+        SetAndNotify(Value + WheelInput.Direction(e) * WheelInput.Notches(e) * step); // 往下滾＝變大
         DragCompleted?.Invoke(Value);
         e.Handled = true;
     }

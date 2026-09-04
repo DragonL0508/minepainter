@@ -1,4 +1,4 @@
-using MinePainter.Core.Documents;
+﻿using MinePainter.Core.Documents;
 using MinePainter.Core.Layers;
 using MinePainter.Core.Vectors;
 
@@ -52,6 +52,47 @@ public static class VectorCommands
         history.Push(new ActionHistoryEntry(label, newElement.Bounds,
             undo: _ => layer.ReplaceElement(oldElement),
             redo: _ => layer.ReplaceElement(newElement)));
+    }
+
+    /// <summary>
+    /// 整份文件換字型：把用著 <paramref name="mapping"/> 裡各個家族的文字物件改成對應的新家族，
+    /// 記成**一步** undo。開檔時發現缺字型、使用者當場選了替代字型就走這裡。
+    /// 回傳實際換掉的文字物件數。
+    /// </summary>
+    public static int ReplaceFontFamilies(Document doc, HistoryManager history,
+        IReadOnlyDictionary<string, string> mapping, string label)
+    {
+        if (mapping.Count == 0) return 0;
+
+        var changes = new List<(RasterLayer Layer, TextElement Before, TextElement After)>();
+        lock (doc.SyncRoot)
+        {
+            foreach (var node in doc.Descendants())
+            {
+                if (node is not RasterLayer layer) continue;
+                foreach (var element in layer.Elements)
+                {
+                    if (element is not TextElement text) continue;
+                    if (!mapping.TryGetValue(text.FontFamily, out var replacement)) continue;
+                    if (string.IsNullOrEmpty(replacement) || replacement == text.FontFamily) continue;
+                    changes.Add((layer, text, text with { FontFamily = replacement }));
+                }
+            }
+            foreach (var (layer, _, after) in changes) layer.ReplaceElement(after);
+        }
+        if (changes.Count == 0) return 0;
+
+        var snapshot = changes.ToArray();
+        history.Push(new ActionHistoryEntry(label, doc.Bounds,
+            undo: _ =>
+            {
+                foreach (var (layer, before, _) in snapshot) layer.ReplaceElement(before);
+            },
+            redo: _ =>
+            {
+                foreach (var (layer, _, after) in snapshot) layer.ReplaceElement(after);
+            }));
+        return changes.Count;
     }
 
     /// <summary>

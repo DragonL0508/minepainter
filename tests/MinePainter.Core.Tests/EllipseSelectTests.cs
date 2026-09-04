@@ -1,4 +1,4 @@
-using MinePainter.Core.History;
+﻿using MinePainter.Core.History;
 using MinePainter.Core.IO;
 using MinePainter.Core.Layers;
 using MinePainter.Core.Tools;
@@ -84,6 +84,31 @@ public class EllipseSelectTests
 
         tool.OnPointerUp(new ToolPointerEvent(new SKPoint(200, 100), 1f), session);
         Assert.Null(session.Preview);
+    }
+
+    [Fact]
+    public void Shift_ConstrainsToACircle()
+    {
+        using var session = NewSession();
+        // 拖出一個寬扁的框，但按住 Shift → 邊長取較長的一軸＝正圓
+        Drag(session, new SKPoint(20, 20), new SKPoint(140, 60), ToolModifiers.Shift);
+
+        var selection = session.Selection;
+        Assert.NotNull(selection);
+        var bounds = selection!.Bounds;
+        Assert.Equal(bounds.Width, bounds.Height); // 正圓：外接框是正方形
+        Assert.Equal(120, bounds.Width);           // 邊長取較長的那一軸（120 而不是 40）
+    }
+
+    [Fact]
+    public void Shift_CircleGrowsTowardsThePointer()
+    {
+        using var session = NewSession();
+        // 往左上拖：正圓要長在錨點的左上方，不是右下
+        Drag(session, new SKPoint(200, 200), new SKPoint(150, 120), ToolModifiers.Shift);
+
+        var bounds = session.Selection!.Bounds;
+        Assert.Equal(new SKRectI(120, 120, 200, 200), bounds);
     }
 
     [Fact]

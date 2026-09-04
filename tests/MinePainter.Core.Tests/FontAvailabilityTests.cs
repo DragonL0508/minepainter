@@ -1,4 +1,4 @@
-using MinePainter.Core.Documents;
+﻿using MinePainter.Core.Documents;
 using MinePainter.Core.IO;
 using MinePainter.Core.Layers;
 using MinePainter.Core.Vectors;
@@ -63,6 +63,43 @@ public class FontAvailabilityTests
         if (installed != null) AddText(layer, installed, "有裝");
         Assert.Empty(FontAvailability.MissingIn(doc));
         doc.Dispose();
+    }
+
+    [Fact]
+    public void ReplaceFontFamilies_SwapsEveryUse_InOneUndoStep()
+    {
+        var (doc, layer) = NewDoc();
+        AddText(layer, Missing, "第一段");
+        AddText(layer, Missing, "第二段");
+        var keep = SKFontManager.Default.FontFamilies.FirstOrDefault() ?? "Arial";
+        AddText(layer, keep, "不該被動到");
+
+        using var session = new MinePainter.Core.Tools.EditorSession(doc);
+        var before = session.History.UndoStack.Count;
+        var replaced = MinePainter.Core.History.VectorCommands.ReplaceFontFamilies(
+            doc, session.History, new Dictionary<string, string> { [Missing] = keep }, "替換缺少的字型");
+
+        Assert.Equal(2, replaced);
+        Assert.All(layer.Elements, e => Assert.Equal(keep, ((TextElement)e).FontFamily));
+        Assert.Equal(before + 1, session.History.UndoStack.Count); // 一步 undo
+
+        Assert.True(session.Undo());
+        Assert.Equal(2, layer.Elements.Count(e => ((TextElement)e).FontFamily == Missing));
+    }
+
+    [Fact]
+    public void ReplaceFontFamilies_NoOpWhenNothingMatches()
+    {
+        var (doc, layer) = NewDoc();
+        AddText(layer, Missing, "文字");
+        using var session = new MinePainter.Core.Tools.EditorSession(doc);
+        var before = session.History.UndoStack.Count;
+
+        var replaced = MinePainter.Core.History.VectorCommands.ReplaceFontFamilies(
+            doc, session.History, new Dictionary<string, string> { ["不存在的來源"] = "Arial" }, "替換");
+
+        Assert.Equal(0, replaced);
+        Assert.Equal(before, session.History.UndoStack.Count); // 沒動就不記一步
     }
 
     [Fact]

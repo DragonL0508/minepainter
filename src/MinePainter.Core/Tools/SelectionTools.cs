@@ -1,6 +1,7 @@
 ﻿using MinePainter.Core.History;
 using MinePainter.Core.Layers;
 using MinePainter.Core.Selections;
+using MinePainter.Core.Vectors;
 using SkiaSharp;
 
 namespace MinePainter.Core.Tools;
@@ -129,7 +130,9 @@ public sealed class RectangleSelectTool : ITool
 }
 
 /// <summary>
-/// 橢圓（圓形）選取：拖出外接矩形，Shift 加選 / Ctrl 減選 / Shift+Ctrl 交集（與矩形選取同一套）。
+/// 橢圓（圓形）選取：拖出外接矩形。Ctrl 減選 / Shift+Ctrl 交集（與矩形選取同一套），
+/// **Shift 拖出正圓**（與形狀工具同一個約束，見 <see cref="ShapeTool.Constrain"/>）——
+/// Shift 在選取工具裡本來就是「加選」，兩件事會同時發生：加一個正圓進選取範圍。
 /// </summary>
 public sealed class EllipseSelectTool : ITool
 {
@@ -158,7 +161,7 @@ public sealed class EllipseSelectTool : ITool
     public void OnPointerMove(ToolPointerEvent e, EditorSession session)
     {
         if (!_dragging) return;
-        session.Preview = new OverlayPreview(OutlinePoints(Rect(e.DocPosition)), Closed: true);
+        session.Preview = new OverlayPreview(OutlinePoints(Rect(e.DocPosition, e.Modifiers)), Closed: true);
     }
 
     public void OnPointerUp(ToolPointerEvent e, EditorSession session)
@@ -169,7 +172,7 @@ public sealed class EllipseSelectTool : ITool
         var original = _original;
         _original = null;
 
-        var r = Rect(e.DocPosition);
+        var r = Rect(e.DocPosition, e.Modifiers);
         if (r.Width < 1 || r.Height < 1)
         {
             // 點一下 = 取消選取（與矩形選取一致）
@@ -182,9 +185,14 @@ public sealed class EllipseSelectTool : ITool
         RectangleSelectTool.Apply(session, path, e.Modifiers, original, "橢圓選取");
     }
 
-    private SKRect Rect(SKPoint p) => SKRect.Create(
-        Math.Min(_anchor.X, p.X), Math.Min(_anchor.Y, p.Y),
-        Math.Abs(p.X - _anchor.X), Math.Abs(p.Y - _anchor.Y));
+    /// <summary>拖曳出來的外接矩形；按住 Shift 時邊長取較長的一軸 ＝ 正圓。</summary>
+    private SKRect Rect(SKPoint p, ToolModifiers modifiers)
+    {
+        var end = ShapeTool.Constrain(_anchor, p, modifiers.HasFlag(ToolModifiers.Shift), ShapeKind.Ellipse);
+        return SKRect.Create(
+            Math.Min(_anchor.X, end.X), Math.Min(_anchor.Y, end.Y),
+            Math.Abs(end.X - _anchor.X), Math.Abs(end.Y - _anchor.Y));
+    }
 
     /// <summary>橢圓的取樣折線（覆疊預覽畫的是折線，沒有曲線）。</summary>
     private static SKPoint[] OutlinePoints(SKRect r)

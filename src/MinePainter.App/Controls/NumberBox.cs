@@ -133,7 +133,7 @@ public sealed class NumberBox : UserControl
     protected override void OnPointerWheelChanged(PointerWheelEventArgs e)
     {
         base.OnPointerWheelChanged(e);
-        var up = WheelInput.Direction(e); // 往上滾＝變大
+        var up = WheelInput.Direction(e); // 往下滾＝變大
         if (up != 0)
         {
             var notches = WheelInput.Notches(e);

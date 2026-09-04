@@ -1681,10 +1681,25 @@ public partial class MainWindow : Window
         lock (doc.SyncRoot) missing = MinePainter.Core.Vectors.FontAvailability.MissingIn(doc);
         if (missing.Count == 0) return;
 
+        var projectName = Path.GetFileNameWithoutExtension(fileName);
         Dispatcher.UIThread.Post(async () =>
         {
             if (!IsVisible) return;
-            await new MissingFontsDialog(fileName, missing).ShowDialog(this);
+            var dialog = new MissingFontsDialog(projectName, missing);
+            await dialog.ShowDialog(this);
+            if (!dialog.Confirmed || dialog.Replacements.Count == 0) return;
+
+            // 找回那份文件所屬的分頁：對話框開著的時候使用者可能已經切走了
+            var tab = _tabs.FirstOrDefault(t => ReferenceEquals(t.Session.Document, doc));
+            if (tab == null) return;
+            var replaced = VectorCommands.ReplaceFontFamilies(
+                doc, tab.Session.History, dialog.Replacements, "替換缺少的字型");
+            if (replaced == 0) return;
+
+            doc.NotifyChanged(doc.Bounds);
+            _layersContent.Refresh();
+            RefreshUiState();
+            Toasts.Show($"已替換 {dialog.Replacements.Count} 種字型（{replaced} 段文字）");
         }, DispatcherPriority.Background);
     }
 

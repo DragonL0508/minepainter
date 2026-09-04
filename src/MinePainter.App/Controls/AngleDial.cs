@@ -96,7 +96,7 @@ public sealed class AngleDial : Control
     protected override void OnPointerWheelChanged(PointerWheelEventArgs e)
     {
         base.OnPointerWheelChanged(e);
-        SetAndNotify(Value + WheelInput.Direction(e) * WheelInput.Notches(e) * Step); // 往上滾＝變大
+        SetAndNotify(Value + WheelInput.Direction(e) * WheelInput.Notches(e) * Step); // 往下滾＝變大
         e.Handled = true;
     }
 
