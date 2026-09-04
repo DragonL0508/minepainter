@@ -618,15 +618,6 @@ public sealed class EditorSession : IDisposable
         bounds.Inflate(margin + Slack, margin + Slack);
         if (bounds.Width <= 0 || bounds.Height <= 0) return;
 
-        // GPU 路徑接得住這個物件（效果翻得成 Skia 濾鏡，或根本沒效果）：不做快照，
-        // 手勢中直接畫原件 —— 開場不用先算一遍效果，過程中的效果也是真的即時算出來的。
-        if (LiveElementRendering && CanDrawElementLive(layer))
-        {
-            _elementOverlay = new ElementDragOverlay(layer, element.Id, null, bounds);
-            layer.HiddenElementId = element.Id;
-            return;
-        }
-
         // 上一趟手勢剛落地、效果還在背景重算（那扇窗大約 0.2–0.3 秒）：這時再按下去，
         // 效果快取不是最新的，本來就得整個物件重算一遍 —— 使用者感受到的就是「頭幾次不順、
         // 多做幾次才變順」。而剛落地的那張殘影，畫的正好就是這個物件現在的樣子，直接接手來用。
@@ -659,16 +650,6 @@ public sealed class EditorSession : IDisposable
 
         _elementOverlay = new ElementDragOverlay(layer, element.Id, image, bounds);
         layer.HiddenElementId = element.Id; // 原件先藏起來（合成器重畫一次少了它的樣子）
-    }
-
-    /// <summary>
-    /// 這個物件在手勢中能不能交給畫面端即時畫（＝可以不做快照）。
-    /// 條件要跟 GpuLayerRenderer.CanHandle 對得上 —— 那邊退回舊路而這邊又沒快照的話，
-    /// 手勢中的物件會整個不見。
-    /// </summary>
-    private bool CanDrawElementLive(RasterLayer layer)
-    {
-        return !layer.HasActiveEffects || Effects.GpuEffectFilters.CanTranslate(layer.Effects);
     }
 
     /// <summary>
@@ -851,8 +832,10 @@ public sealed class EditorSession : IDisposable
     public static bool RenderEffectsWhileDragging { get; set; } = true;
 
     /// <summary>
-    /// 畫面端有沒有辦法「即時畫出手勢中的物件」（＝GPU 圖層渲染開著）。
-    /// 開著時物件拖曳不再做快照，見 <see cref="BeginElementOverlayLocked"/>。
+    /// 畫面端能不能「照層序即時畫出手勢中的內容」（＝GPU 圖層渲染開著）。
+    ///
+    /// 開著時變形手勢不必再要求「這層上面沒有看得見的東西」——覆疊畫得到對的位置，
+    /// 就不用退回逐步蓋章（見 TransformSession.BeginGesturePreview）。
     /// </summary>
     public bool LiveElementRendering { get; set; }
 

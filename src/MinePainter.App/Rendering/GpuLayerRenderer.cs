@@ -13,8 +13,8 @@ namespace MinePainter.App.Rendering;
 /// 算完才上傳成貼圖給 GPU 貼上去。GPU 幾乎閒著（實測一幀 0.6 ms），CPU 那邊一次上百毫秒 ——
 /// 「手勢中畫面跟不上」的根就在這裡。
 ///
-/// **這條路徑**：每幀直接走圖層樹，把每層的 tile 當貼圖畫上去，混合／不透明度交給 GPU，
-/// 效果堆疊能翻成 Skia 濾鏡的就交給 GPU 算（見 <see cref="GpuEffectFilters"/>）。
+/// **這條路徑**：每幀直接走圖層樹，把每層的 tile 當貼圖畫上去，混合／不透明度交給 GPU。
+/// 效果堆疊仍舊由 CPU 算（DisplaySurface）—— 畫面看到的與匯出得到的因此永遠是同一份。
 /// CPU 合成器仍然是匯出與離線路徑的唯一真相，也是這條路處理不了時的退路。
 ///
 /// **處理不了就整份退回**（回傳 false，呼叫端畫原本的 tile）：進行中的筆劃／浮動內容／
@@ -35,12 +35,10 @@ public sealed unsafe class GpuLayerRenderer : IDisposable
     }
 
     private readonly Dictionary<Guid, LayerImages> _images = new();
-    private readonly Dictionary<Guid, (IReadOnlyList<LayerEffect> Effects, SKImageFilter? Filter)> _filters = new();
     private readonly Dictionary<Guid, (Core.Adjustments.IAdjustment Adjustment, SKColorFilter Filter)> _adjustments = new();
 
-    /// <summary>診斷：上一幀畫了幾格、用了幾個 GPU 濾鏡。</summary>
+    /// <summary>診斷：上一幀畫了幾格。</summary>
     public int LastTiles { get; private set; }
-    public int LastFilters { get; private set; }
 
     /// <summary>
     /// 試著畫。回傳 false＝這份文件目前的狀態這條路處理不了，呼叫端請走原本的 tile 路徑。
@@ -50,7 +48,6 @@ public sealed unsafe class GpuLayerRenderer : IDisposable
     {
         if (!CanHandle(session)) return false;
         LastTiles = 0;
-        LastFilters = 0;
         DrawGroup(canvas, session, session.Document.Root, visibleDoc);
         return true;
     }
@@ -62,35 +59,32 @@ public sealed unsafe class GpuLayerRenderer : IDisposable
         // 而覆疊本來就只在「上面沒有看得見的東西」時才成立），這裡照常畫圖層樹即可 ——
         // 被變形的那層此刻沒有像素（手勢開始時已經拆下來），畫出來也是空的。
 
-        // 拖曳中的物件，若那層的效果進不了 GPU 濾鏡，畫面上拿的會是 CPU 效果快取 ——
-        // 而那份裡面已經烙著物件的「原位置」，拆不開，只好整份退回舊路。
-        if (session.ElementOverlay is { } dragging && dragging.Layer.EffectsRendered &&
-            !GpuEffectFilters.CanTranslate(dragging.Layer.Effects))
-        {
-            return false;
-        }
-
         return true;
     }
 
     /// <summary>
-    /// 拖曳中的物件：**不用快照**，直接把原件套上手勢的變換畫出來。
-    ///
-    /// 快照那套（先把「物件＋效果」拍成一張圖、手勢中只挪那張圖）本來是為了閃避
-    /// 「每動一步就要重算效果堆疊」的 CPU 成本。效果現在是 GPU 濾鏡，那個成本沒了 ——
-    /// 直接畫真正的物件，外框／陰影跟著即時算，手勢中看到的就是最終結果。
+    /// 手勢中的物件覆疊（「物件＋效果」的快照，跟著滑鼠走／轉／縮）。
+    /// 舊路徑把它畫在所有圖層之上；這裡照層序畫在它自己那一層的位置，上面有東西也不會被蓋錯。
     /// </summary>
-    private static SKMatrix OverlayMatrix(EditorSession.ElementDragOverlay overlay)
+    private static void DrawElementOverlay(SKCanvas canvas, EditorSession.ElementDragOverlay overlay)
     {
-        var b = overlay.Bounds;
-        var cur = overlay.CurrentRect;
-        var sx = b.Width > 0 ? cur.Width / b.Width : 1f;
-        var sy = b.Height > 0 ? cur.Height / b.Height : 1f;
-        var m = SKMatrix.CreateScaleTranslation(sx, sy, cur.Left - b.Left * sx, cur.Top - b.Top * sy);
+        var rect = overlay.CurrentRect; // 只讀一次：UI thread 正在改它
         var rotation = overlay.Rotation;
+        var image = overlay.Image!;
+        var transformed = rotation != 0 || image.Width != overlay.Bounds.Width ||
+                          rect.Width != overlay.Bounds.Width || rect.Height != overlay.Bounds.Height;
+        using var paint = new SKPaint
+        {
+            FilterQuality = transformed ? SKFilterQuality.Low : SKFilterQuality.None,
+            IsAntialias = transformed,
+        };
         if (rotation != 0)
-            m = SKMatrix.Concat(SKMatrix.CreateRotationDegrees(rotation, cur.MidX, cur.MidY), m);
-        return m;
+        {
+            canvas.Save();
+            canvas.RotateDegrees(rotation, rect.MidX, rect.MidY);
+        }
+        canvas.DrawImage(image, rect, paint);
+        if (rotation != 0) canvas.Restore();
     }
 
     private void DrawGroup(SKCanvas canvas, EditorSession session, GroupLayer group, SKRectI visibleDoc)
@@ -160,11 +154,18 @@ public sealed unsafe class GpuLayerRenderer : IDisposable
 
     private void DrawNestedGroup(SKCanvas canvas, EditorSession session, GroupLayer group, SKRectI visibleDoc)
     {
-        var filter = FilterFor(group);
-        var isolate = group.Opacity < 1f || group.BlendMode != BlendMode.Normal || filter != null;
+        // 整組套過效果的那份已經算好了就直接畫它（外框／陰影包住整組，而不是每個子層各一份）
+        if (group.EffectsRendered)
+        {
+            DrawSurface(canvas, GroupImages(group), group.FxCache.Surface, SKPointI.Empty, visibleDoc,
+                group.Opacity, group.BlendMode);
+            return;
+        }
+
+        var isolate = group.Opacity < 1f || group.BlendMode != BlendMode.Normal;
         if (isolate)
         {
-            using var paint = LayerPaint(group, filter);
+            using var paint = LayerPaint(group, null);
             canvas.SaveLayer(paint);
         }
         DrawGroup(canvas, session, group, visibleDoc);
@@ -173,11 +174,11 @@ public sealed unsafe class GpuLayerRenderer : IDisposable
 
     private void DrawRaster(SKCanvas canvas, EditorSession session, RasterLayer raster, SKRectI visibleDoc)
     {
-        var filter = FilterFor(raster);
-
-        // 效果能交給 GPU 就畫「原始內容 + 濾鏡」；否則用 CPU 算好的那份（DisplaySurface）。
-        var source = filter != null ? raster.Surface : raster.DisplaySurface;
-        var elementsInSource = filter == null && raster.EffectsRendered; // CPU 快取已含物件
+        // 效果一律拿 CPU 算好的那份（DisplaySurface）——「畫面看到的」與「匯出得到的」是同一份。
+        // 曾經試過把效果翻成 Skia 濾鏡交給 GPU 算，但 Skia 的 dilate 是方形核心，
+        // 而外框走的是精確歐氏距離場：15px 的外框會把中文筆畫糊成一塊塊方塊（使用者回報）。
+        var source = raster.DisplaySurface;
+        var elementsInSource = raster.EffectsRendered; // CPU 快取已含物件
 
         var stroke = session.StrokeBuffer;
         var strokeHere = stroke.IsActive && stroke.TargetLayerId == raster.Id && !stroke.DirtyBounds.IsEmpty;
@@ -185,11 +186,11 @@ public sealed unsafe class GpuLayerRenderer : IDisposable
         var floatingHere = floating != null && floating.LayerId == raster.Id;
 
         // 橡皮擦的 DstOut 一定要在隔離層裡擦，否則會擦穿到下方圖層
-        var isolate = raster.Opacity < 1f || raster.BlendMode != BlendMode.Normal || filter != null ||
+        var isolate = raster.Opacity < 1f || raster.BlendMode != BlendMode.Normal ||
                       (strokeHere && stroke.IsEraser);
         if (isolate)
         {
-            using var paint = LayerPaint(raster, filter);
+            using var paint = LayerPaint(raster, null);
             canvas.SaveLayer(paint);
         }
 
@@ -205,23 +206,13 @@ public sealed unsafe class GpuLayerRenderer : IDisposable
         }
         if (strokeHere) DrawStroke(canvas, stroke);
         if (floatingHere) floating!.DrawInto(canvas, preview: true);
+        if (session.ElementOverlay is { Image: not null } drag && ReferenceEquals(drag.Layer, raster))
+            DrawElementOverlay(canvas, drag);
 
         if (!elementsInSource)
         {
-            var overlay = session.ElementOverlay;
-            var dragging = overlay != null && ReferenceEquals(overlay.Layer, raster);
             foreach (var element in raster.Elements)
             {
-                if (dragging && element.Id == overlay!.ElementId)
-                {
-                    // 手勢中的那個物件：原件套上手勢的變換直接畫（不用快照，效果即時跟著算）
-                    var m = OverlayMatrix(overlay);
-                    canvas.Save();
-                    canvas.Concat(ref m);
-                    element.Render(canvas);
-                    canvas.Restore();
-                    continue;
-                }
                 if (element.Id == raster.HiddenElementId) continue;
                 element.Render(canvas);
             }
@@ -292,17 +283,27 @@ public sealed unsafe class GpuLayerRenderer : IDisposable
         var offset = surface == raster.DisplaySurface && raster.EffectsRendered
             ? raster.EffectOffset
             : raster.Offset;
+        DrawSurface(canvas, Images(raster.Id), surface, offset, visibleDoc, opacity, BlendMode.Normal);
+    }
+
+    /// <summary>把一張 tile surface 畫上去（只畫看得到的那幾格；每格一張貼圖，靠 Tile.Version 判斷要不要重傳）。</summary>
+    private void DrawSurface(SKCanvas canvas, LayerImages cache, TileSurface surface, SKPointI offset,
+        SKRectI visibleDoc, float opacity, BlendMode blend)
+    {
 
         // 只畫看得到的那幾格
         var layerRect = new SKRectI(
             visibleDoc.Left - offset.X, visibleDoc.Top - offset.Y,
             visibleDoc.Right - offset.X, visibleDoc.Bottom - offset.Y);
 
-        using var paint = opacity >= 1f
+        using var paint = opacity >= 1f && blend == BlendMode.Normal
             ? null
-            : new SKPaint { Color = new SKColor(255, 255, 255, (byte)(opacity * 255)) };
+            : new SKPaint
+            {
+                Color = new SKColor(255, 255, 255, (byte)(opacity * 255)),
+                BlendMode = blend.ToSkia(),
+            };
 
-        var cache = Images(raster.Id);
         foreach (var idx in TileIndex.CoveringRect(layerRect))
         {
             var tile = surface.GetTileForRead(idx);
@@ -314,6 +315,8 @@ public sealed unsafe class GpuLayerRenderer : IDisposable
             LastTiles++;
         }
     }
+
+    private LayerImages GroupImages(GroupLayer group) => Images(group.Id);
 
     private LayerImages Images(Guid layerId)
     {
@@ -340,26 +343,10 @@ public sealed unsafe class GpuLayerRenderer : IDisposable
         return image;
     }
 
-    /// <summary>這層的 GPU 濾鏡（效果清單沒換就沿用；翻不出來是 null）。</summary>
-    private SKImageFilter? FilterFor(LayerNode node)
-    {
-        if (!node.HasActiveEffects) return null;
-        if (_filters.TryGetValue(node.Id, out var cached) && ReferenceEquals(cached.Effects, node.Effects))
-            return cached.Filter;
-
-        cached.Filter?.Dispose();
-        var filter = GpuEffectFilters.Build(node.Effects);
-        _filters[node.Id] = (node.Effects, filter);
-        if (filter != null) LastFilters++;
-        return filter;
-    }
-
     public void Dispose()
     {
         foreach (var cache in _images.Values) cache.Dispose();
         _images.Clear();
-        foreach (var (_, filter) in _filters.Values) filter?.Dispose();
-        _filters.Clear();
         foreach (var (_, filter) in _adjustments.Values) filter.Dispose();
         _adjustments.Clear();
     }
