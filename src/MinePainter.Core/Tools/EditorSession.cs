@@ -675,9 +675,15 @@ public sealed class EditorSession : IDisposable
     {
         if (!layer.FxCache.Rendered || layer.Elements.Count != 1) return null;
 
+
         var layerRect = new SKRectI(
             docRect.Left - layer.Offset.X, docRect.Top - layer.Offset.Y,
             docRect.Right - layer.Offset.X, docRect.Bottom - layer.Offset.Y);
+
+        // 快取只算「畫布看得到的那塊」時（見 LayerEffectRenderer 的裁切）蓋不到整個物件，
+        // 直接裁出來的話拖曳中把畫布外那段拉進畫面會是一片空白 —— 那種情況乖乖整份現算。
+        // 直接問「這塊在不在上次算的範圍裡」，不靠旗標推論。
+        if (layer.FxCache.LastClipped || !layer.FxCache.LastRegion.Contains(layerRect)) return null;
 
         return LayerEffectRenderer.ReadPixels(layer.FxCache.Surface, layerRect);
     }
