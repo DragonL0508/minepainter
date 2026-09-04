@@ -604,7 +604,9 @@ public sealed class EditorSession : IDisposable
         var ghost = _ghost;
         // 合成器「畫完了」不等於「畫對了」：效果堆疊還在背景重算時，合成結果裡的物件是沒有效果的，
         // 這時收掉殘影，畫面就會閃一下（外框／陰影消失再出現）——放開的瞬間閃爍就是這個。
-        var effectsBehind = ghost?.Layer is { HasActiveEffects: true, EffectsRendered: false };
+        // 「算過」不等於「算的是現在這份」：物件搬走之後快取仍舊 Rendered，畫的卻是舊位置
+        // （拖曳中原件是藏起來的，那份快取甚至是空的）。這裡要的是「已經是最新的」。
+        var effectsBehind = ghost?.Layer is { HasActiveEffects: true } gl && !gl.FxCache.UpToDate;
         if (ghost != null && !effectsBehind && Compositor.IsRegionClean(ghost.Region))
         {
             _ghost = null;
@@ -612,6 +614,7 @@ public sealed class EditorSession : IDisposable
         }
 
         if (_layerOverlay is { HandingOver: true } overlay &&
+            !(overlay.Layer is { HasActiveEffects: true } ol && !ol.FxCache.UpToDate) &&
             Compositor.IsRegionClean(overlay.Region))
         {
             _layerOverlay = null;

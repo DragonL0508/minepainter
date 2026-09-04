@@ -30,7 +30,17 @@ public sealed class Compositor : IDisposable
     private readonly CancellationTokenSource _cts = new();
 
     private readonly object _dirtyGate = new();
-    private readonly HashSet<TileIndex> _dirty = new();
+    /// <summary>髒格 → 最後一次「內容改動」的時間戳（毫秒；0 ＝有人現在就要這格，不必等冷卻）。</summary>
+    private readonly Dictionary<TileIndex, long> _dirty = new();
+
+    /// <summary>
+    /// 已經被 worker 領走、正在合成的格子。
+    ///
+    /// 「乾淨」對外的意思是**快取裡那格已經是最新的畫面**：覆疊／殘影就是靠它決定
+    /// 什麼時候把手上那份交還給合成器（見 EditorSession.CollectOverlayGhost）。
+    /// 領走但還沒畫完的期間快取裡還是舊圖，這時報乾淨，畫面就會閃一下「東西不見了」。
+    /// </summary>
+    private readonly HashSet<TileIndex> _inFlight = new();
 
     private readonly ConcurrentDictionary<TileIndex, SKImage?> _cache = new();
 
@@ -109,7 +119,7 @@ public sealed class Compositor : IDisposable
     /// <summary>診斷：還在排隊等合成的 tile 數（＝畫面落後多少）。</summary>
     public int DirtyCount
     {
-        get { lock (_dirtyGate) return _dirty.Count; }
+        get { lock (_dirtyGate) return _dirty.Count + _inFlight.Count; }
     }
 
     /// <summary>
@@ -122,7 +132,7 @@ public sealed class Compositor : IDisposable
         {
             foreach (var idx in TileIndex.CoveringRect(docRect))
             {
-                if (_dirty.Contains(idx)) return false;
+                if (_dirty.ContainsKey(idx) || _inFlight.Contains(idx)) return false;
             }
         }
         return true;
@@ -136,7 +146,7 @@ public sealed class Compositor : IDisposable
     /// </summary>
     public bool IsTileClean(TileIndex idx)
     {
-        lock (_dirtyGate) return !_dirty.Contains(idx);
+        lock (_dirtyGate) return !_dirty.ContainsKey(idx) && !_inFlight.Contains(idx);
     }
 
     public Compositor(Document document, StrokeBuffer? strokeBuffer = null,
@@ -199,14 +209,14 @@ public sealed class Compositor : IDisposable
             if (image != null) _touch[idx] = Interlocked.Increment(ref _touchClock);
             lock (_dirtyGate)
             {
-                if (!_dirty.Contains(idx)) return true;
+                if (!_dirty.ContainsKey(idx)) return true;
             }
             return true; // dirty 但有舊圖：先給舊圖，新圖合成完會通知
         }
 
         lock (_dirtyGate)
         {
-            if (_dirty.Add(idx)) Monitor.PulseAll(_dirtyGate);
+            if (!_inFlight.Contains(idx) && _dirty.TryAdd(idx, 0)) Monitor.PulseAll(_dirtyGate);
         }
         image = null;
         return false;
@@ -231,16 +241,14 @@ public sealed class Compositor : IDisposable
     private void MarkDirty(SKRectI docRect)
     {
         var any = false;
+        var now = Environment.TickCount64;
         lock (_dirtyGate)
         {
-            // 已經整份都髒了就不必再走一遍格子（效果堆疊每寫回一次就會標一次整層，
-            // 一秒好幾百次，每次都列舉整張網格是白做的）
-            if (_dirty.Count >= TileCols * TileRows) return;
-
             foreach (var idx in TileIndex.CoveringRect(docRect))
             {
                 if (idx.X < 0 || idx.Y < 0 || idx.X >= TileCols || idx.Y >= TileRows) continue;
-                any |= _dirty.Add(idx);
+                any |= !_dirty.ContainsKey(idx);
+                _dirty[idx] = now; // 每改一次就重新計時：還在被拖的格子一直是「熱的」
             }
         }
         if (any)
@@ -342,9 +350,14 @@ public sealed class Compositor : IDisposable
             {
                 lock (_dirtyGate)
                 {
-                    // 沒事做就睡著（逾時再醒一次，收拾取消與偶發的漏叫）
-                    while (_dirty.Count == 0 && !token.IsCancellationRequested)
-                        Monitor.Wait(_dirtyGate, 100);
+                    // 沒有「冷了的」格子就睡著。逾時上限 100 ms：醒來順便跑一輪效果堆疊、
+                    // 收拾取消與偶發的漏叫。
+                    while (!token.IsCancellationRequested)
+                    {
+                        var wait = NextReadyDelayLocked();
+                        if (wait <= 0) break;
+                        Monitor.Wait(_dirtyGate, Math.Min(wait, 100));
+                    }
                 }
                 if (token.IsCancellationRequested) break;
 
@@ -366,6 +379,15 @@ public sealed class Compositor : IDisposable
                     {
                         // 效果算壞了不該讓合成器死掉；下一輪會再試
                     }
+                    // 效果還沒算完就先別合成：那樣合出來的是「效果還在舊位置／還沒套上」的樣子，
+                    // 而覆疊與殘影正是靠「合成器追上了沒」決定什麼時候交還畫面的。
+                    // 別的 worker 正在算（工作已被領走）時就在這裡等，回頭再看看有沒有工作可領。
+                    if (Effects.LayerEffectRenderer.HasPendingWork(_document))
+                    {
+                        lock (_dirtyGate) Monitor.Wait(_dirtyGate, 10);
+                        continue;
+                    }
+
                     TakeDirtyBatch(batch, BatchSize);
                     if (batch.Count == 0) break;
                     RenderBatch(batch);
@@ -401,9 +423,12 @@ public sealed class Compositor : IDisposable
         {
             if (_dirty.Count == 0) return;
 
+            var ready = Environment.TickCount64 - DirtyCoolDownMs;
             var visible = _visibleTiles;
-            foreach (var idx in _dirty)
+
+            foreach (var (idx, tick) in _dirty)
             {
+                if (tick > ready) continue; // 還在被改：等它停下來再合成
                 if (idx.X < visible.Left || idx.X > visible.Right ||
                     idx.Y < visible.Top || idx.Y > visible.Bottom) continue;
                 into.Add(idx);
@@ -413,8 +438,9 @@ public sealed class Compositor : IDisposable
             // 可見範圍不夠湊滿一批就補畫布其他地方的（之後拉動畫面才不用等）
             if (into.Count < max)
             {
-                foreach (var idx in _dirty)
+                foreach (var (idx, tick) in _dirty)
                 {
+                    if (tick > ready) continue;
                     if (idx.X >= visible.Left && idx.X <= visible.Right &&
                         idx.Y >= visible.Top && idx.Y <= visible.Bottom) continue;
                     into.Add(idx);
@@ -422,7 +448,48 @@ public sealed class Compositor : IDisposable
                 }
             }
 
-            foreach (var idx in into) _dirty.Remove(idx);
+            foreach (var idx in into)
+            {
+                _dirty.Remove(idx);
+                _inFlight.Add(idx);
+            }
+        }
+    }
+
+    /// <summary>
+    /// 「內容剛改過」的格子要冷卻多久才合成（毫秒）。
+    ///
+    /// 拖曳／筆劃進行中，同一批格子每一幀都會被標髒一次；照標照合成的話，合成器整趟都在算
+    /// **下一幀就作廢**的東西，還一直握著 Document.SyncRoot —— UI thread 與 render thread
+    /// 每幀都得排隊等它（實測 4K、11 個帶效果的圖層：拖曳中每次 pointer move 卡到 20–40 ms）。
+    /// 而畫面根本不看這份結果：GPU 路徑是直接走圖層樹畫的。
+    ///
+    /// 所以「還在動的格子」先不碰，手一停就補上。有人明確要某一格時（TryGetTile，
+    /// 例如滴管或退回 tile 路徑）時間戳是 0，不受冷卻影響。
+    /// </summary>
+    public static int DirtyCoolDownMs { get; set; } = 120;
+
+    /// <summary>還要多久才有格子可以合成（毫秒）。int.MaxValue ＝ 沒有髒格。呼叫端須持 _dirtyGate。</summary>
+    private int NextReadyDelayLocked()
+    {
+        if (_dirty.Count == 0) return int.MaxValue;
+        var now = Environment.TickCount64;
+        var best = long.MaxValue;
+        foreach (var tick in _dirty.Values)
+        {
+            var wait = tick + DirtyCoolDownMs - now;
+            if (wait <= 0) return 0;
+            if (wait < best) best = wait;
+        }
+        return (int)Math.Min(best, int.MaxValue);
+    }
+
+    /// <summary>整批畫完了：這些格子的快取已經是最新的，可以報乾淨了。</summary>
+    private void FinishBatch(List<TileIndex> batch)
+    {
+        lock (_dirtyGate)
+        {
+            foreach (var idx in batch) _inFlight.Remove(idx);
         }
     }
 
@@ -455,6 +522,7 @@ public sealed class Compositor : IDisposable
                 foreach (var idx in batch) RenderTileLocked(idx);
             }
         }
+        FinishBatch(batch);
         Interlocked.Add(ref _renderTicks, System.Diagnostics.Stopwatch.GetTimestamp() - start);
         TrimCache(); // 每批都看一眼（沒超出預算時只是比一個數字）
         Interlocked.Add(ref _tilesRendered, batch.Count);

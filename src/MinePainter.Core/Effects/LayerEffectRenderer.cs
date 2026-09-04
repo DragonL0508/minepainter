@@ -43,6 +43,15 @@ public sealed class LayerEffectCache : IDisposable
 
     public bool HasPending => DirtyAll || !Dirty.IsEmpty;
 
+    /// <summary>
+    /// 快取現在就代表這一層的樣子（算過、沒有待處理、也沒有在飛的工作）。
+    ///
+    /// <see cref="Rendered"/> 只說「至少完整算過一次」，內容搬走之後它仍舊是 true，
+    /// 但快取畫的是**舊的**位置。要判斷「畫面可以交還給合成器了嗎」必須用這個 ——
+    /// 用 Rendered 的話，物件放開的瞬間會先看到舊的（或空的）那份，就是使用者說的「閃一下」。
+    /// </summary>
+    public bool UpToDate => Rendered && !HasPending && InFlight <= 0;
+
     /// <summary>已被取走、還沒寫回的工作數（worker 鎖外計算中）。同步等待者靠它判斷「真的算完了」。</summary>
     internal int InFlight;
 
@@ -79,6 +88,24 @@ public static class LayerEffectRenderer
 {
     /// <summary>某層的效果快取剛寫回（worker 執行緒上觸發）：縮圖等「不走合成器」的畫面靠它更新。</summary>
     public static event Action<LayerNode>? LayerRendered;
+
+    /// <summary>
+    /// 這份文件還有沒有效果要算（含已被取走、正在鎖外計算的）。
+    /// 合成器靠它決定「現在合成出來的會不會是舊的效果」—— 會的話就等，
+    /// 不然畫面會先閃過一版沒有效果／效果還在舊位置的樣子。自行取 SyncRoot。
+    /// </summary>
+    public static bool HasPendingWork(Document doc)
+    {
+        lock (doc.SyncRoot)
+        {
+            foreach (var node in doc.Descendants())
+            {
+                if (!node.HasActiveEffects) continue;
+                if (node.FxCache.HasPending || node.FxCache.InFlight > 0) return true;
+            }
+            return false;
+        }
+    }
 
     /// <summary>
     /// 群組效果的來源像素：把這一組合成起來的樣子讀成 doc 座標的緩衝區。
