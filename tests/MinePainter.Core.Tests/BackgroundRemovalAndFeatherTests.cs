@@ -1,4 +1,4 @@
-using MinePainter.Core.AI;
+﻿using MinePainter.Core.AI;
 using MinePainter.Core.Adjustments;
 using MinePainter.Core.Effects;
 using MinePainter.Core.History;
@@ -28,30 +28,95 @@ public class BackgroundRemovalAndFeatherTests
     // ---- 羽化物件 ----
 
     [Fact]
-    public void Feather_FadesEdgeInward_KeepsCore()
+    public void Feather_SoftensEdge_LeavesInteriorUntouched()
     {
         const int w = 64, h = 64;
+        // 內容在 x = 12..51，左邊界線落在 x = 11 與 12 之間
         var src = Canvas(w, h, (x, y) => x is >= 12 and < 52 && y is >= 12 and < 52 ? Premul(0, 0, 255, 255) : 0);
         var fx = new ObjectFeatherEffect { Radius = 8, Strength = 100 };
         var ctx = EffectContext.FromPixels(src, w, h, fx.SourceMargin);
         fx.Render(ctx);
 
+        // 內部完全不動（舊版會從邊緣往內淡出一整個半徑，把物件啃掉一圈）
         Assert.Equal(255, A(ctx.Dst[32 * w + 32]));
-        Assert.InRange(A(ctx.Dst[32 * w + 12]), 0, 40);
-        Assert.InRange(A(ctx.Dst[32 * w + 16]), 60, 200);
+        Assert.Equal(255, A(ctx.Dst[32 * w + 20]));
+        Assert.Equal(255, A(ctx.Dst[32 * w + 17]));
+
+        // 邊緣兩側對稱地過渡，且是單調的
+        Assert.InRange(A(ctx.Dst[32 * w + 12]), 120, 200);
+        Assert.InRange(A(ctx.Dst[32 * w + 11]), 55, 135);
+        Assert.True(A(ctx.Dst[32 * w + 10]) < A(ctx.Dst[32 * w + 11]));
+        Assert.True(A(ctx.Dst[32 * w + 11]) < A(ctx.Dst[32 * w + 12]));
+        Assert.True(A(ctx.Dst[32 * w + 12]) < A(ctx.Dst[32 * w + 13]));
+
+        // 軟邊之外仍是空的
         Assert.Equal(0u, ctx.Dst[32 * w + 5]);
-        Assert.True(A(ctx.Dst[32 * w + 14]) < A(ctx.Dst[32 * w + 17]));
     }
 
     [Fact]
-    public void Feather_Strength_LimitsHowTransparentEdgeGets()
+    public void Feather_KeepsObjectSize_EdgeStaysPut()
+    {
+        const int w = 64, h = 64;
+        var src = Canvas(w, h, (x, y) => x is >= 12 and < 52 && y is >= 12 and < 52 ? Premul(0, 0, 255, 255) : 0);
+        var fx = new ObjectFeatherEffect { Radius = 10 };
+        var ctx = EffectContext.FromPixels(src, w, h, fx.SourceMargin);
+        fx.Render(ctx);
+
+        // 往外補的和往內淡掉的互相抵銷：整條掃描線的 alpha 總量幾乎不變（＝物件沒被削瘦）
+        var before = 0;
+        var after = 0;
+        for (var x = 0; x < w; x++)
+        {
+            before += A(src[32 * w + x]);
+            after += A(ctx.Dst[32 * w + x]);
+        }
+        Assert.InRange(after, before - 255, before + 255);
+
+        // 顏色照抄邊緣色，補出來的邊不會發黑
+        var edge = ctx.Dst[32 * w + 10];
+        Unpremul(edge, out var b, out var g, out var r, out var a);
+        Assert.True(a > 0);
+        Assert.InRange(r, 240, 255);
+        Assert.InRange(g, 0, 12);
+        Assert.InRange(b, 0, 12);
+    }
+
+    [Fact]
+    public void Feather_SemiTransparentObject_KeepsItsOwnOpacity()
+    {
+        const int w = 48, h = 48;
+        var src = Canvas(w, h, (x, y) => x is >= 12 and < 36 && y is >= 12 and < 36 ? Premul(0, 0, 255, 128) : 0);
+        var fx = new ObjectFeatherEffect { Radius = 8 };
+        var ctx = EffectContext.FromPixels(src, w, h, fx.SourceMargin);
+        fx.Render(ctx);
+
+        Assert.Equal(128, A(ctx.Dst[24 * w + 24]));           // 內部原樣
+        Assert.InRange(A(ctx.Dst[24 * w + 11]), 20, 80);      // 外圈不會比物件本身還濃
+        Assert.True(A(ctx.Dst[24 * w + 11]) < 128);
+    }
+
+    [Fact]
+    public void Feather_Strength_BlendsTowardsTheSoftEdge()
     {
         const int w = 32, h = 32;
         var src = Canvas(w, h, (x, y) => x >= 8 && x < 24 && y >= 8 && y < 24 ? Premul(0, 0, 255, 255) : 0);
-        var fx = new ObjectFeatherEffect { Radius = 6, Strength = 50 };
-        var ctx = EffectContext.FromPixels(src, w, h, fx.SourceMargin);
-        fx.Render(ctx);
-        Assert.InRange(A(ctx.Dst[16 * w + 8]), 120, 140);
+        var full = new ObjectFeatherEffect { Radius = 6, Strength = 100 };
+        var ctx = EffectContext.FromPixels(src, w, h, full.SourceMargin);
+        full.Render(ctx);
+        var strong = A(ctx.Dst[16 * w + 8]);
+
+        var half = new ObjectFeatherEffect { Radius = 6, Strength = 50 };
+        ctx = EffectContext.FromPixels(src, w, h, half.SourceMargin);
+        half.Render(ctx);
+        var mild = A(ctx.Dst[16 * w + 8]);
+
+        Assert.True(mild > strong);          // 強度越低，邊緣越接近原本的不透明
+        Assert.True(mild < 255);
+
+        var none = new ObjectFeatherEffect { Radius = 6, Strength = 0 };
+        ctx = EffectContext.FromPixels(src, w, h, none.SourceMargin);
+        none.Render(ctx);
+        Assert.Equal(src, ctx.Dst);          // 強度 0 = 原封不動
     }
 
     [Fact]
@@ -67,7 +132,9 @@ public class BackgroundRemovalAndFeatherTests
         var fade = new ObjectFeatherEffect { Radius = 6, FeatherCanvasEdge = true };
         ctx = EffectContext.FromPixels(src, w, h, fade.SourceMargin);
         fade.Render(ctx);
-        Assert.InRange(A(ctx.Dst[0]), 0, 40);
+        // 軟邊以畫布邊為中心，看得到的只有內側那一半（角落再少一點）
+        Assert.InRange(A(ctx.Dst[0]), 60, 200);
+        Assert.Equal(255, A(ctx.Dst[8 * w + 8]));   // 離邊夠遠的地方完全不動
     }
 
     // ---- 引導濾波：糊掉的遮罩貼回高清邊緣 ----

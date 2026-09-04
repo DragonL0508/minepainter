@@ -102,6 +102,62 @@ internal static class DistanceTransform
         return d;
     }
 
+    /// <summary>
+    /// 加了 pad 的來源快照（目標範圍往外各 pad 格）。畫布外依 <paramref name="canvasEdge"/>
+    /// 當空白，或沿用最近的邊緣像素（貼齊畫布邊的物件不會被當成有邊）。
+    /// </summary>
+    public static uint[] PaddedSource(EffectContext ctx, int pad, bool canvasEdge)
+    {
+        var w = ctx.Width + pad * 2;
+        var h = ctx.Height + pad * 2;
+        var buf = new uint[w * h];
+        var docLeft = ctx.Region.Left - pad;
+        var docTop = ctx.Region.Top - pad;
+        ParallelFor(0, h, y =>
+        {
+            for (var x = 0; x < w; x++)
+            {
+                var dx = docLeft + x;
+                var dy = docTop + y;
+                var outside = dx < 0 || dy < 0 || dx >= ctx.DocSize.Width || dy >= ctx.DocSize.Height;
+                buf[y * w + x] = outside
+                    ? (canvasEdge ? 0u : ctx.SrcAt(x - pad, y - pad))
+                    : ctx.SrcOrTransparent(x - pad, y - pad);
+            }
+        });
+        return buf;
+    }
+
+    /// <summary>
+    /// 有號距離場（px）：正 = 在物件內、負 = 在物件外，0 落在次像素精度的邊緣線上。
+    /// 羽化用 —— 軟邊要以「原本的邊緣」為中心往內往外各鋪一半，物件才不會被削瘦一圈。
+    ///
+    /// 輸入是「覆蓋率」而不是 alpha：整片半透明的物件（alpha 128）每一格的 alpha 都 &lt; 255，
+    /// 直接拿 alpha 當覆蓋率的話整個內部都會被當成邊，羽化就把整片吃掉了。呼叫端先用
+    /// 「鄰近內容的平均 alpha」正規化，半透明物件的內部覆蓋率才會是滿的。
+    ///
+    /// <see cref="FromAlpha"/>／<see cref="ToTransparent"/> 各自只有一側是準的：每個有內容的像素
+    /// 都是 FromAlpha 的種子（值夾在 −0.5..0），所以它在物件內部量不出深度；ToTransparent 反之。
+    /// 取「有內容的用到空白的距離、空白的用到內容的距離取負」，兩側就都是真正的距離。
+    /// </summary>
+    public static float[] SignedFromCoverage(byte[] coverage, int w, int h)
+    {
+        var n = w * h;
+        var toEmpty = new float[n];
+        var toContent = new float[n];
+        for (var i = 0; i < n; i++)
+        {
+            var c = coverage[i];
+            toEmpty[i] = SeedFromCoverage(255 - c);
+            toContent[i] = SeedFromCoverage(c);
+        }
+        Propagate(toEmpty, w, h);
+        Propagate(toContent, w, h);
+        for (var i = 0; i < n; i++)
+            if (coverage[i] == 0) toEmpty[i] = -toContent[i];
+        return toEmpty;
+    }
+
     /// <summary>可分離的方框模糊（半徑 r，邊界取最近值），O(w·h)。</summary>
     private static float[] BoxBlur(float[] src, int w, int h, int r)
     {
@@ -775,14 +831,22 @@ public sealed record ObjectGradientEffect : IEffect
 }
 
 /// <summary>
-/// 羽化物件（paint.net 的 Feather Object 外掛）：物件邊緣往內漸淡到透明。
-/// 以「到最近透明像素的距離」為準：距離 ≥ 半徑 → 原 alpha；越靠邊越透明。
-/// 用來柔化去背後的硬邊，或做出淡出的貼圖邊緣。
+/// 羽化物件（paint.net 的 Feather Object 外掛）：把物件的硬邊換成柔邊，用來收掉去背後的鋸齒。
+///
+/// **只修邊緣**：軟邊以「原本的邊緣線」為中心，往內往外各鋪一半（<c>寬度</c>／2），
+/// 邊緣外那一圈補上、邊緣內那一圈淡出，剛好抵銷 —— 物件不會被削瘦，離邊緣夠遠的內部像素
+/// 一格都不動（使用者 2026-09-05 明示：羽化不該讓內部變半透明）。
+/// 舊版是從邊緣往內單向淡出整整一個半徑，等於把物件啃掉一圈。
+///
+/// 往外長出來的那半圈需要顏色：用 premultiplied 模糊把邊緣色外推（premultiplied 的平均
+/// ＝以 alpha 加權的顏色平均，不會把空白的黑混進來），參考 alpha 再用「內容遮罩的模糊」正規化，
+/// 半透明的物件羽化出來的邊也就不會比物件本身還濃。
 /// </summary>
 public sealed record ObjectFeatherEffect : IEffect
 {
-    public int Radius { get; init; } = 10;     // 1..100
-    /// <summary>強度 0..100：邊緣最外圈剩下多少 alpha（0 = 完全透明）。</summary>
+    /// <summary>軟邊的總寬度（px）：以原邊緣為中心，往內往外各一半。</summary>
+    public int Radius { get; init; } = 4;
+    /// <summary>強度 0..100：0 = 完全不動，100 = 整條軟邊都照羽化的結果走。</summary>
     public int Strength { get; init; } = 100;
     /// <summary>畫布邊界也視為物件邊（貼齊畫布邊的物件是否也羽化）。</summary>
     public bool FeatherCanvasEdge { get; init; }
@@ -790,11 +854,13 @@ public sealed record ObjectFeatherEffect : IEffect
 
     public string Name => "羽化";
     public string Category => "物件";
-    public int SourceMargin => Math.Min(Radius, 100) + 2;
+
+    /// <summary>軟邊只往外長半個寬度，來源／輸出各留這麼多餘裕就夠。</summary>
+    public int SourceMargin => Math.Clamp(Radius, 1, 100) / 2 + 3;
 
     private static readonly ParamDef[] Params =
     [
-        new SliderParam("radius", "半徑", 1, 50, o => ((ObjectFeatherEffect)o).Radius,
+        new SliderParam("radius", "寬度", 1, 50, o => ((ObjectFeatherEffect)o).Radius,
             (o, v) => ((ObjectFeatherEffect)o) with { Radius = (int)v }, "px") { Geometric = true },
         new SliderParam("strength", "強度", 0, 100, o => ((ObjectFeatherEffect)o).Strength,
             (o, v) => ((ObjectFeatherEffect)o) with { Strength = (int)v }, "%"),
@@ -805,38 +871,65 @@ public sealed record ObjectFeatherEffect : IEffect
 
     public void Render(EffectContext ctx)
     {
-        var radius = Math.Min(Radius, 100);
-        var pad = radius + 2;
-        var dist = DistanceTransform.ToTransparent(ctx, pad, FeatherCanvasEdge);
-        var dw = ctx.Width + pad * 2;
-        var floor = 1f - Strength / 100f;
+        var half = Math.Clamp(Radius, 1, 100) / 2f;   // 軟邊往內／往外各鋪這麼多
+        var pad = SourceMargin;
+        var w = ctx.Width + pad * 2;
+        var h = ctx.Height + pad * 2;
+        var strength = Math.Clamp(Strength, 0, 100) / 100f;
+
+        var padded = DistanceTransform.PaddedSource(ctx, pad, FeatherCanvasEdge);
+
+        // 邊緣往外那半圈需要顏色，內部的覆蓋率也需要一個「這裡的物件本來多濃」的基準：
+        // ext = premultiplied 模糊（＝以 alpha 加權的鄰近色，不會把空白的黑混進來）、
+        // cover = 內容遮罩的模糊；ext.A ÷ cover.A 就是「鄰近有內容像素的平均 alpha」。
+        var blurRadius = MathF.Max(1f, half);
+        var ext = GaussianBlur(padded, w, h, blurRadius, ctx.Cancellation);
+        var cover = new uint[padded.Length];
+        for (var i = 0; i < padded.Length; i++) cover[i] = A(padded[i]) > 0 ? 0xFF000000u : 0u;
+        cover = GaussianBlur(cover, w, h, blurRadius, ctx.Cancellation);
+
+        var refAlpha = new byte[padded.Length];
+        var coverage = new byte[padded.Length];
+        for (var i = 0; i < padded.Length; i++)
+        {
+            var cv = A(cover[i]);
+            var reference = cv == 0 ? 255 : Math.Clamp(A(ext[i]) * 255 / cv, 1, 255);
+            refAlpha[i] = (byte)reference;
+            coverage[i] = (byte)Math.Min(255, A(padded[i]) * 255 / reference);
+        }
+
+        var sd = DistanceTransform.SignedFromCoverage(coverage, w, h);
 
         ctx.ForRows(y =>
         {
             for (var x = 0; x < ctx.Width; x++)
             {
-                var src = ctx.SrcAt(x, y);
-                if (A(src) == 0) { ctx.Dst[y * ctx.Width + x] = 0; continue; }
-                var d = dist[(y + pad) * dw + (x + pad)];
-                if (d >= radius) { ctx.Dst[y * ctx.Width + x] = src; continue; }
-                // 距離 0.5（邊緣像素中心）→ 幾乎透明；smoothstep 讓過渡沒有折角
-                var t = Math.Clamp((d - 0.5f) / radius, 0f, 1f);
-                var s = t * t * (3f - 2f * t);
-                var keep = floor + (1f - floor) * s;
-                var mul = (int)(keep * 256f + 0.5f);
-                ctx.Dst[y * ctx.Width + x] = mul >= 256 ? src : mul <= 0 ? 0 : ScalePremul(src, mul);
+                var di = (y + pad) * w + (x + pad);
+                var oi = y * ctx.Width + x;
+                var src = padded[di];
+                var d = sd[di];
+                if (d >= half) { ctx.Dst[oi] = src; continue; }   // 內部：一格都不動
+                if (d <= -half) { ctx.Dst[oi] = 0; continue; }    // 軟邊外：本來就空
+
+                var t = (d + half) / (2 * half);
+                var s = t * t * (3f - 2f * t);                    // smoothstep：過渡沒有折角
+                // 目標＝「這裡的物件濃度 × 覆蓋率」。用 refAlpha 而不是像素自己的 alpha，
+                // 抗鋸齒邊的半格 alpha 才不會被再乘一次（寬度趨近 0 時羽化就是恆等變換）。
+                var target = refAlpha[di] * s;
+                var a0 = A(src);
+                var alpha = Clamp255(a0 + (target - a0) * strength);
+                if (alpha == 0) { ctx.Dst[oi] = 0; continue; }
+
+                // 有內容就用自己的顏色、空白就用外推出來的邊緣色，換上新的 alpha
+                var tinted = a0 > 0 ? src : ext[di];
+                if (A(tinted) == 0) { ctx.Dst[oi] = 0; continue; }
+                if (a0 > 0 && alpha == a0) { ctx.Dst[oi] = src; continue; }
+                Unpremul(tinted, out var b, out var g, out var r, out _);
+                ctx.Dst[oi] = Premul(b, g, r, alpha);
             }
         });
     }
 
-    private static uint ScalePremul(uint p, int mul)
-    {
-        var b = (int)(p & 0xFF) * mul >> 8;
-        var g = (int)((p >> 8) & 0xFF) * mul >> 8;
-        var r = (int)((p >> 16) & 0xFF) * mul >> 8;
-        var a = (int)(p >> 24) * mul >> 8;
-        return (uint)b | ((uint)g << 8) | ((uint)r << 16) | ((uint)a << 24);
-    }
 }
 
 /// <summary>
