@@ -210,7 +210,7 @@ public sealed class CanvasDrawOperation : ICustomDrawOperation
                 layerOverlay.Draw(canvas, visibleRect, quality);
         }
 
-        DrawFloatingOverlay(canvas);
+        DrawFloatingOverlay(canvas, gpuDrew);
         DrawTransformOverlay(canvas);
         DrawPixelGrid(canvas);
         canvas.Restore();                       // 文件範圍 clip
@@ -290,7 +290,7 @@ public sealed class CanvasDrawOperation : ICustomDrawOperation
     ///
     /// Ghost = 已經落地／取消、但合成器還沒重畫完的殘影，少了它畫面會閃一下。
     /// </summary>
-    private void DrawFloatingOverlay(SKCanvas canvas)
+    private void DrawFloatingOverlay(SKCanvas canvas, bool gpuDrew)
     {
         // 縮放取樣與 tile 同調（見 QualityFor）
         var quality = QualityFor(_viewport.Scale);
@@ -311,8 +311,10 @@ public sealed class CanvasDrawOperation : ICustomDrawOperation
             if (ghost.Rotation != 0) canvas.Restore();
         }
 
-        // 手勢中的文字物件：一張圖跟著滑鼠走／轉／縮（原件已隱藏）
-        if (_session.ElementOverlay is { } element)
+        // 手勢中的文字物件：一張圖跟著滑鼠走／轉／縮（原件已隱藏）。
+        // GPU 路徑會直接把原件套上手勢變換畫出來（效果即時算），這裡就不能再貼一次快照 ——
+        // 不然畫面上會同時有兩份文字。
+        if (!gpuDrew && _session.ElementOverlay is { Image: not null } element)
         {
             var elementRect = element.CurrentRect; // 只讀一次：UI thread 正在改它
             var rotation = element.Rotation;
@@ -333,7 +335,7 @@ public sealed class CanvasDrawOperation : ICustomDrawOperation
                 canvas.Save();
                 canvas.RotateDegrees(rotation, elementRect.MidX, elementRect.MidY);
             }
-            canvas.DrawImage(element.Image, elementRect, paint);
+            canvas.DrawImage(element.Image!, elementRect, paint);
             if (rotation != 0) canvas.Restore();
         }
 

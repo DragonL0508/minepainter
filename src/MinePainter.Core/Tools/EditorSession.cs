@@ -531,12 +531,17 @@ public sealed class EditorSession : IDisposable
     /// 每個 pointer-move 都重算就是「怎麼拖都跟不上」。代價是手勢中的效果跟著整張圖轉／縮
     /// （陰影角度、外框粗細會暫時失真），放開重算一次就校正回來 —— PS 的變形預覽也是這樣。
     /// </summary>
-    public sealed class ElementDragOverlay(RasterLayer layer, Guid elementId, SKImage image, SKRectI bounds)
+    public sealed class ElementDragOverlay(RasterLayer layer, Guid elementId, SKImage? image, SKRectI bounds)
     {
         public RasterLayer Layer { get; } = layer;
         public Guid ElementId { get; } = elementId;
 
-        public SKImage Image { get; } = image;
+        /// <summary>
+        /// 手勢中要貼的那張快照。**GPU 路徑不需要它**（那條路直接把原件套上手勢變換畫出來，
+        /// 效果即時算），這時是 null —— 也就省下了「按下去的那一刻先渲染一遍整個物件加效果」
+        /// 那筆開場費用（4K 帶效果的大字要 0.2 秒以上，正是「一按下去就頓一下」的來源）。
+        /// </summary>
+        public SKImage? Image { get; } = image;
 
         /// <summary>物件原本的（含效果外擴的）外框，doc 座標。</summary>
         public SKRectI Bounds { get; } = bounds;
@@ -599,6 +604,15 @@ public sealed class EditorSession : IDisposable
         bounds.Inflate(margin + 1, margin + 1);
         if (bounds.Width <= 0 || bounds.Height <= 0) return;
 
+        // GPU 路徑接得住這個物件（效果翻得成 Skia 濾鏡，或根本沒效果）：不做快照，
+        // 手勢中直接畫原件 —— 開場不用先算一遍效果，過程中的效果也是真的即時算出來的。
+        if (LiveElementRendering && CanDrawElementLive(layer))
+        {
+            _elementOverlay = new ElementDragOverlay(layer, element.Id, null, bounds);
+            layer.HiddenElementId = element.Id;
+            return;
+        }
+
         SKImage? image = null;
         var scale = OverlayScale(bounds);
         if (withEffects && scale >= 1f)
@@ -616,6 +630,21 @@ public sealed class EditorSession : IDisposable
 
         _elementOverlay = new ElementDragOverlay(layer, element.Id, image, bounds);
         layer.HiddenElementId = element.Id; // 原件先藏起來（合成器重畫一次少了它的樣子）
+    }
+
+    /// <summary>
+    /// 這個物件在手勢中能不能交給畫面端即時畫（＝可以不做快照）。
+    /// 條件要跟 GpuLayerRenderer.CanHandle 對得上 —— 那邊退回舊路而這邊又沒快照的話，
+    /// 手勢中的物件會整個不見。
+    /// </summary>
+    private bool CanDrawElementLive(RasterLayer layer)
+    {
+        if (layer.HasActiveEffects && !Effects.GpuEffectFilters.CanTranslate(layer.Effects)) return false;
+        foreach (var node in Document.Descendants())
+        {
+            if (node is AdjustmentLayer) return false; // GPU 路徑還沒接調整圖層
+        }
+        return true;
     }
 
     /// <summary>
@@ -736,9 +765,10 @@ public sealed class EditorSession : IDisposable
         _elementOverlay = null;
         if (overlay.Layer.HiddenElementId == overlay.ElementId) overlay.Layer.HiddenElementId = null;
 
-        if (discardGhost)
+        if (discardGhost || overlay.Image == null)
         {
-            Compositor.Retire(overlay.Image);
+            // 沒有快照＝走的是即時渲染那條路：原件解除隱藏後畫面上馬上就是它，不需要殘影
+            if (overlay.Image != null) Compositor.Retire(overlay.Image);
             return;
         }
         var final = overlay.CurrentRect;
@@ -785,6 +815,12 @@ public sealed class EditorSession : IDisposable
     /// 關掉則拖曳中只畫基底像素，放開才看到效果 —— 給效能吃緊的機器用（App 設定）。
     /// </summary>
     public static bool RenderEffectsWhileDragging { get; set; } = true;
+
+    /// <summary>
+    /// 畫面端有沒有辦法「即時畫出手勢中的物件」（＝GPU 圖層渲染開著）。
+    /// 開著時物件拖曳不再做快照，見 <see cref="BeginElementOverlayLocked"/>。
+    /// </summary>
+    public bool LiveElementRendering { get; set; }
 
     /// <summary>
     /// 把整個圖層從合成結果裡拆下來，改由畫面覆疊（拖曳整個圖層用）。

@@ -1,4 +1,4 @@
-using MinePainter.Core.Effects;
+﻿using MinePainter.Core.Effects;
 using MinePainter.Core.Layers;
 using MinePainter.Core.Tiles;
 using MinePainter.Core.Tools;
@@ -50,19 +50,28 @@ public sealed class GpuLayerRenderer : IDisposable
         if (!CanHandle(session)) return false;
         LastTiles = 0;
         LastFilters = 0;
-        DrawGroup(canvas, session.Document.Root, visibleDoc);
+        DrawGroup(canvas, session, session.Document.Root, visibleDoc);
         return true;
     }
 
     /// <summary>這條路徑還沒接手的狀態：有任何一個就整份退回原本的合成器。</summary>
     private static bool CanHandle(EditorSession session)
     {
-        if (session.StrokeBuffer.IsActive) return false;      // 進行中的筆劃
-        if (session.Floating != null) return false;           // 浮動內容
-        if (session.LayerOverlay != null) return false;       // 圖層拖曳覆疊
-        if (session.ElementOverlay != null) return false;     // 物件拖曳覆疊
-        if (session.Transform?.Overlay != null) return false; // 變形手勢覆疊
-        if (session.Ghost != null) return false;              // 落地殘影
+        if (session.StrokeBuffer.IsActive) return false; // 進行中的筆劃
+        if (session.Floating != null) return false;      // 浮動內容
+        if (session.Ghost != null) return false;         // 落地殘影
+
+        // 變形手勢的覆疊由 CanvasDrawOperation.DrawTransformOverlay 另外畫（在所有圖層之上，
+        // 而覆疊本來就只在「上面沒有看得見的東西」時才成立），這裡照常畫圖層樹即可 ——
+        // 被變形的那層此刻沒有像素（手勢開始時已經拆下來），畫出來也是空的。
+
+        // 拖曳中的物件，若那層的效果進不了 GPU 濾鏡，畫面上拿的會是 CPU 效果快取 ——
+        // 而那份裡面已經烙著物件的「原位置」，拆不開，只好整份退回舊路。
+        if (session.ElementOverlay is { } dragging && dragging.Layer.EffectsRendered &&
+            !GpuEffectFilters.CanTranslate(dragging.Layer.Effects))
+        {
+            return false;
+        }
 
         foreach (var node in session.Document.Descendants())
         {
@@ -71,7 +80,27 @@ public sealed class GpuLayerRenderer : IDisposable
         return true;
     }
 
-    private void DrawGroup(SKCanvas canvas, GroupLayer group, SKRectI visibleDoc)
+    /// <summary>
+    /// 拖曳中的物件：**不用快照**，直接把原件套上手勢的變換畫出來。
+    ///
+    /// 快照那套（先把「物件＋效果」拍成一張圖、手勢中只挪那張圖）本來是為了閃避
+    /// 「每動一步就要重算效果堆疊」的 CPU 成本。效果現在是 GPU 濾鏡，那個成本沒了 ——
+    /// 直接畫真正的物件，外框／陰影跟著即時算，手勢中看到的就是最終結果。
+    /// </summary>
+    private static SKMatrix OverlayMatrix(EditorSession.ElementDragOverlay overlay)
+    {
+        var b = overlay.Bounds;
+        var cur = overlay.CurrentRect;
+        var sx = b.Width > 0 ? cur.Width / b.Width : 1f;
+        var sy = b.Height > 0 ? cur.Height / b.Height : 1f;
+        var m = SKMatrix.CreateScaleTranslation(sx, sy, cur.Left - b.Left * sx, cur.Top - b.Top * sy);
+        var rotation = overlay.Rotation;
+        if (rotation != 0)
+            m = SKMatrix.Concat(SKMatrix.CreateRotationDegrees(rotation, cur.MidX, cur.MidY), m);
+        return m;
+    }
+
+    private void DrawGroup(SKCanvas canvas, EditorSession session, GroupLayer group, SKRectI visibleDoc)
     {
         foreach (var child in group.Children)
         {
@@ -79,16 +108,16 @@ public sealed class GpuLayerRenderer : IDisposable
             switch (child)
             {
                 case RasterLayer raster:
-                    DrawRaster(canvas, raster, visibleDoc);
+                    DrawRaster(canvas, session, raster, visibleDoc);
                     break;
                 case GroupLayer nested:
-                    DrawNestedGroup(canvas, nested, visibleDoc);
+                    DrawNestedGroup(canvas, session, nested, visibleDoc);
                     break;
             }
         }
     }
 
-    private void DrawNestedGroup(SKCanvas canvas, GroupLayer group, SKRectI visibleDoc)
+    private void DrawNestedGroup(SKCanvas canvas, EditorSession session, GroupLayer group, SKRectI visibleDoc)
     {
         var filter = FilterFor(group);
         var isolate = group.Opacity < 1f || group.BlendMode != BlendMode.Normal || filter != null;
@@ -97,11 +126,11 @@ public sealed class GpuLayerRenderer : IDisposable
             using var paint = LayerPaint(group, filter);
             canvas.SaveLayer(paint);
         }
-        DrawGroup(canvas, group, visibleDoc);
+        DrawGroup(canvas, session, group, visibleDoc);
         if (isolate) canvas.Restore();
     }
 
-    private void DrawRaster(SKCanvas canvas, RasterLayer raster, SKRectI visibleDoc)
+    private void DrawRaster(SKCanvas canvas, EditorSession session, RasterLayer raster, SKRectI visibleDoc)
     {
         var filter = FilterFor(raster);
 
@@ -119,8 +148,20 @@ public sealed class GpuLayerRenderer : IDisposable
         DrawTiles(canvas, raster, source, visibleDoc, isolate ? 1f : raster.Opacity);
         if (!elementsInSource)
         {
+            var overlay = session.ElementOverlay;
+            var dragging = overlay != null && ReferenceEquals(overlay.Layer, raster);
             foreach (var element in raster.Elements)
             {
+                if (dragging && element.Id == overlay!.ElementId)
+                {
+                    // 手勢中的那個物件：原件套上手勢的變換直接畫（不用快照，效果即時跟著算）
+                    var m = OverlayMatrix(overlay);
+                    canvas.Save();
+                    canvas.Concat(ref m);
+                    element.Render(canvas);
+                    canvas.Restore();
+                    continue;
+                }
                 if (element.Id == raster.HiddenElementId) continue;
                 element.Render(canvas);
             }

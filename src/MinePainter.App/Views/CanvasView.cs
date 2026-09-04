@@ -238,6 +238,7 @@ public sealed class CanvasView : Control
     public void SetSession(EditorSession session, ViewportTransform? viewport = null)
     {
         _session = session;
+        session.LiveElementRendering = _gpuRenderer != null; // 每個分頁各有一個 session，切過去要跟著設
         SubscribeSession(session);
         if (viewport is { } vp)
         {
@@ -634,6 +635,8 @@ public sealed class CanvasView : Control
     /// <summary>設定切換時換路徑（立刻生效，不必重開）。</summary>
     public void SetGpuRendering(bool on)
     {
+        // 這條路能即時畫出手勢中的物件，所以物件拖曳不用再做快照（見 EditorSession）
+        if (Session != null) Session.LiveElementRendering = on;
         if (on == (_gpuRenderer != null)) return;
         _gpuRenderer?.Dispose();
         _gpuRenderer = on ? new Rendering.GpuLayerRenderer() : null;
