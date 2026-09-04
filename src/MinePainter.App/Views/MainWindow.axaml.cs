@@ -749,7 +749,8 @@ public partial class MainWindow : Window
         _historyPanel = Create(new PanelWindow("歷史記錄", _historyContent, 216, resizableHeight: 292), HistoryToggle);
         _layersPanel = Create(new PanelWindow("圖層", _layersContent, 330, resizableHeight: 436), LayersToggle);
         _palettePanel = Create(new PanelWindow("調色盤", _paletteContent, 330), PaletteToggle);
-        _presetsPanel = Create(new PanelWindow("預設集", _presetsContent, 440, resizableHeight: 400), PresetsToggle);
+        // 440 寬是「資料夾清單 + 三欄縮圖」的最小值，再窄就掉成兩欄；高度只留三排縮圖
+        _presetsPanel = Create(new PanelWindow("預設集", _presetsContent, 440, resizableHeight: 356), PresetsToggle);
 
         PanelWindow Create(PanelWindow panel, ToggleButton toggle)
         {
@@ -3314,6 +3315,7 @@ public partial class MainWindow : Window
         if (FontFamilyCombo.SelectedItem is string family) session.Text.FontFamily = family;
         session.Text.FontWeight = SelectedFontWeight();
         session.Text.FontSize = (float)FontSizeBox.Value;
+        session.Text.LetterSpacing = (float)LetterSpacingBox.Value;
         session.Text.Bold = BoldToggle.IsChecked == true;
         session.Text.Italic = ItalicToggle.IsChecked == true;
         session.Text.Underline = UnderlineToggle.IsChecked == true;
@@ -3355,6 +3357,15 @@ public partial class MainWindow : Window
             if (_suppressVectorEvents) return;
             if (Canvas.Session is { } s) s.Text.FontSize = (float)v;
             ApplyTextEdit(el => el.WithFontSize((float)v));
+            CommitTextEdit();
+            UpdateCanvasEditBoxStyle();
+        };
+        LetterSpacingBox.Value = 0;
+        LetterSpacingBox.ValueChanged += v =>
+        {
+            if (_suppressVectorEvents) return;
+            if (Canvas.Session is { } s) s.Text.LetterSpacing = (float)v;
+            ApplyTextEdit(el => el with { LetterSpacing = (float)v });
             CommitTextEdit();
             UpdateCanvasEditBoxStyle();
         };
@@ -4038,6 +4049,7 @@ public partial class MainWindow : Window
         if (SelectedText is not { } sel) return;
         _suppressVectorEvents = true;
         FontSizeBox.Value = sel.Element.FontSize;
+        LetterSpacingBox.Value = sel.Element.LetterSpacing;
         ShowFontFamily(sel.Element.FontFamily);
         RepopulateFontStyles(sel.Element.FontFamily, sel.Element.FontWeight);
         BoldToggle.IsChecked = sel.Element.Bold;
@@ -4177,9 +4189,7 @@ public partial class MainWindow : Window
         var session = Canvas.Session;
         if (session == null) return;
 
-        var fg = session.Foreground;
-        CurrentColorSwatch.Background = new SolidColorBrush(Color.FromRgb(fg.Red, fg.Green, fg.Blue));
-        _paletteContent.SetColor(fg);
+        _paletteContent.SetColor(session.Foreground);
 
         UndoMenuItem.IsEnabled = session.History.CanUndo;
         RedoMenuItem.IsEnabled = session.History.CanRedo;

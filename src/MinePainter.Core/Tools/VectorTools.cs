@@ -101,6 +101,9 @@ public sealed class TextTool : VectorToolBase
     public bool Strikethrough { get; set; }
     public TextAlign Alignment { get; set; } = TextAlign.Left;
 
+    /// <summary>字距（px，可負）。</summary>
+    public float LetterSpacing { get; set; }
+
 
     protected override void OnCreateStart(ToolPointerEvent e, EditorSession session)
     {
@@ -144,6 +147,7 @@ public sealed class TextTool : VectorToolBase
             Underline = Underline,
             Strikethrough = Strikethrough,
             Alignment = Alignment,
+            LetterSpacing = LetterSpacing,
             Color = session.Foreground,
         };
         lock (doc.SyncRoot)

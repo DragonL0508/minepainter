@@ -174,8 +174,8 @@
 
         <StackPanel x:Name="SizeGroup" Orientation="Horizontal" Spacing="5" VerticalAlignment="Center">
           <TextBlock Text="大小：" FontSize="12" VerticalAlignment="Center" />
-          <controls:NumberBox x:Name="SizeBox" Minimum="1" Maximum="500" AdaptiveStep="True" Width="64"
-                              Presets="1,2,3,4,5,6,8,10,12,16,20,24,32,40,48,64,80,100,128,160,200,256,320,400,500" />
+          <controls:NumberBox x:Name="SizeBox" Minimum="1" Maximum="2000" AdaptiveStep="True" Width="64"
+                              Presets="1,2,3,4,5,6,8,10,12,16,20,24,32,40,48,64,80,100,128,160,200,256,320,400,500,640,800,1000,1250,1600,2000" />
         </StackPanel>
 
         <StackPanel x:Name="HardnessGroup" Orientation="Horizontal" Spacing="5" VerticalAlignment="Center">
@@ -209,6 +209,10 @@
           <TextBlock Text="字級：" FontSize="12" VerticalAlignment="Center" />
           <controls:NumberBox x:Name="FontSizeBox" Minimum="8" Maximum="288" AdaptiveStep="True" Width="64"
                               Presets="8,10,12,14,16,18,20,24,28,32,36,48,64,72,96,128,144,192,288" />
+          <TextBlock Text="字距：" FontSize="12" VerticalAlignment="Center" />
+          <controls:NumberBox x:Name="LetterSpacingBox" Minimum="-100" Maximum="500" AdaptiveStep="True" Width="58"
+                              Presets="-8,-4,-2,-1,0,1,2,4,8,16,32,64"
+                              ToolTip.Tip="字距（像素，可為負）；縮放文字時跟著字級一起變" />
 
           <StackPanel Orientation="Horizontal" Spacing="1" Margin="4,0,0,0">
             <ToggleButton x:Name="BoldToggle" Width="28" Height="24" Padding="0"
@@ -309,10 +313,6 @@
                   ToolTip.Tip="丟棄工作路徑（Esc）；Backspace 只退最後一個錨點" />
         </StackPanel>
 
-        <Separator Width="1" Height="24" Background="{x:Static app:AppTheme.SeparatorBrush}" />
-        <Border x:Name="CurrentColorSwatch" Width="26" Height="26" CornerRadius="3"
-                BorderBrush="{x:Static app:AppTheme.SeparatorBrush}" BorderThickness="1" Background="Black"
-                ToolTip.Tip="目前前景色（調色盤面板可改）" />
       </StackPanel>
     </Border>
 
