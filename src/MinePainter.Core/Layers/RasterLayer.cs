@@ -132,7 +132,11 @@ public sealed class RasterLayer : LayerNode, IDisposable
                     affected = affected.IsEmpty ? el.Bounds : SKRectI.Union(affected, el.Bounds);
             }
             _hiddenElementId = value;
-            if (!affected.IsEmpty) InvalidateElement(affected);
+            if (affected.IsEmpty) return;
+            // 藏起來的那一刻就把快取裡那一份抹掉（不然拖曳中畫面上會有兩份，見 ClearCacheRegionLocked）
+            if (value != null && HasActiveEffects)
+                MinePainter.Core.Effects.LayerEffectRenderer.ClearCacheRegionLocked(this, affected);
+            InvalidateElement(affected);
         }
     }
 
@@ -158,7 +162,10 @@ public sealed class RasterLayer : LayerNode, IDisposable
                 if (b.IsEmpty) continue;
                 affected = affected.IsEmpty ? b : SKRectI.Union(affected, b);
             }
-            if (!affected.IsEmpty) InvalidateElement(affected);
+            if (affected.IsEmpty) return;
+            if (value && HasActiveEffects)
+                MinePainter.Core.Effects.LayerEffectRenderer.ClearCacheRegionLocked(this, affected);
+            InvalidateElement(affected);
         }
     }
 

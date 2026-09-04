@@ -90,6 +90,47 @@ public static class LayerEffectRenderer
     public static event Action<LayerNode>? LayerRendered;
 
     /// <summary>
+    /// 立刻把效果快取裡這一塊（doc 座標）清成透明，不等背景重算。
+    ///
+    /// 用在「物件被藏起來」的那一刻：拖曳中原件改由覆疊代表，可是快取裡還留著**上一份**
+    /// 算好的樣子（含外框／陰影），而快取重算要幾百毫秒 —— 那段期間畫面上會同時有兩份文字
+    /// （使用者 2026-09-05 回報）。清掉之後那一塊立刻空掉，正確內容照舊由背景補上。
+    ///
+    /// 範圍會往外加上整串效果的 margin：外框／光暈畫到內容之外，只清內容框會留下一圈殘影。
+    /// 呼叫端須持有 Document.SyncRoot。
+    /// </summary>
+    public static unsafe void ClearCacheRegionLocked(LayerNode layer, SKRectI docRect)
+    {
+        var cache = layer.FxCache;
+        if (!cache.Rendered || docRect.IsEmpty) return;
+
+        var margin = TotalMargin(layer);
+        var off = layer.EffectOffset;
+        var rect = new SKRectI(docRect.Left - off.X, docRect.Top - off.Y,
+            docRect.Right - off.X, docRect.Bottom - off.Y);
+        rect.Inflate(margin + 1, margin + 1);
+
+        foreach (var idx in TileIndex.CoveringRect(rect))
+        {
+            if (cache.Surface.GetTileForRead(idx) == null) continue;
+            var tileRect = idx.ToPixelRect();
+            var inter = SKRectI.Intersect(tileRect, rect);
+            if (inter.Width <= 0 || inter.Height <= 0) continue;
+
+            var tile = cache.Surface.GetTileForWrite(idx);
+            var dst = (uint*)tile.Pixels;
+            for (var y = inter.Top; y < inter.Bottom; y++)
+            {
+                var row = dst + (y - tileRect.Top) * Tile.Size + (inter.Left - tileRect.Left);
+                new Span<uint>(row, inter.Width).Clear();
+            }
+            if (tile.IsBlank()) cache.Surface.RemoveTile(idx);
+        }
+
+        cache.MarkDirty(rect); // 正確內容還是要重算
+    }
+
+    /// <summary>
     /// 這份文件還有沒有效果要算（含已被取走、正在鎖外計算的）。
     /// 合成器靠它決定「現在合成出來的會不會是舊的效果」—— 會的話就等，
     /// 不然畫面會先閃過一版沒有效果／效果還在舊位置的樣子。自行取 SyncRoot。

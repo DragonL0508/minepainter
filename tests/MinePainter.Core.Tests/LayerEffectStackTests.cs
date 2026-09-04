@@ -76,6 +76,47 @@ public class LayerEffectStackTests
         Assert.Equal(["近", "遠"], order); // 兩層都算完，看得到的那層先
     }
 
+    /// <summary>
+    /// 拖曳中原件被藏起來的那一刻，效果快取裡的舊那份要立刻消失。
+    /// 留著的話畫面上會同時有兩份文字（被拖的那份＋快取裡的舊那份），
+    /// 而重特效的 4K 文字重算要幾百毫秒，那扇窗長到一眼就看得到。
+    /// </summary>
+    [Fact]
+    public void HidingAnElement_ClearsItFromTheEffectCacheImmediately()
+    {
+        using var doc = ImageCodec.CreateBlankDocument(512, 256, SKColors.Transparent);
+        var layer = new RasterLayer { Name = "文字" };
+        var text = new Vectors.TextElement
+        {
+            Text = "測試",
+            Position = new SKPoint(60, 60),
+            FontSize = 72,
+            Color = SKColors.Black,
+        };
+        lock (doc.SyncRoot)
+        {
+            doc.Root.Add(layer);
+            layer.AddElement(text);
+            layer.SetEffects([LayerEffect.Create(new ObjectOutlineEffect())]);
+        }
+
+        LayerEffectRenderer.RenderLayerNow(doc, layer);
+        Assert.True(layer.FxCache.Rendered);
+        Assert.True(layer.FxCache.Surface.TileCount > 0, "快取裡該有算好的文字");
+
+        lock (doc.SyncRoot) layer.HiddenElementId = text.Id;
+
+        // 快取裡那一塊要立刻空掉（不是等背景重算）
+        var bounds = text.Bounds;
+        var margin = LayerEffectRenderer.TotalMargin(layer);
+        bounds.Inflate(margin, margin);
+        foreach (var idx in TileIndex.CoveringRect(bounds))
+        {
+            var tile = layer.FxCache.Surface.GetTileForRead(idx);
+            Assert.True(tile == null || tile.IsBlank(), $"{idx} 還留著舊的那份文字");
+        }
+    }
+
     [Fact]
     public void AddEffect_RendersIntoCache_BaseUntouched()
     {
