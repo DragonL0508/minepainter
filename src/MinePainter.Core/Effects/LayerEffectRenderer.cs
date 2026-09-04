@@ -439,13 +439,23 @@ public static class LayerEffectRenderer
     /// </summary>
     private const long PreviewAreaThreshold = 1 << 20; // 1 MPx
 
-    /// <summary>這一份工作要用什麼比例算（1 = 全解析度）。</summary>
-    private static float PreviewScaleFor(Document doc, List<LayerEffect> effects, SKRectI compute, bool exact)
+    /// <summary>
+    /// 這一份工作要用什麼比例算（1 = 全解析度）。
+    ///
+    /// <paramref name="full"/>＝整層重算。局部更新一律沿用快取現在的比例：同一份快取不能
+    /// 一半細一半粗 —— 拖完一個物件之後只有那一小塊被重算，用全解析度算的話那塊會突然
+    /// 比周圍清楚（使用者 2026-09-05 回報的「拉一拉之後物件又變高解析」）。
+    /// </summary>
+    private static float PreviewScaleFor(Document doc, LayerEffectCache cache, List<LayerEffect> effects,
+        SKRectI region, bool full, bool exact)
     {
-        if (exact || compute.IsEmpty) return 1f;
+        if (exact) return 1f;
+        if (!full && cache.Rendered) return cache.PreviewScale;
+        if (region.IsEmpty) return 1f;
+
         var want = EffectPreviewScale.Quantize(doc.PreviewScale);
         if (want >= 1f) return 1f;
-        if ((long)compute.Width * compute.Height < PreviewAreaThreshold) return 1f;
+        if ((long)region.Width * region.Height < PreviewAreaThreshold) return 1f;
         if (!EffectPreviewScale.CanScale(effects)) return 1f;
         var safe = EffectPreviewScale.SafeScale(effects, want);
         return safe >= 1f ? 1f : safe;
@@ -564,7 +574,7 @@ public static class LayerEffectRenderer
 
             return new Job
             {
-                Scale = PreviewScaleFor(doc, effects, compute, exact),
+                Scale = PreviewScaleFor(doc, cache, effects, region, full, exact),
                 Layer = layer,
                 Region = region,
                 Compute = compute,
@@ -747,8 +757,8 @@ public static class LayerEffectRenderer
         }
 
         cache.Rendered = true;
-        if (job.Full) cache.PreviewScale = job.Scale;
-        else if (job.Scale < cache.PreviewScale) cache.PreviewScale = job.Scale; // 局部重算把整份拉到較粗的那一邊
+        // 局部更新用的就是快取現在的比例（見 PreviewScaleFor），所以直接記這次的
+        cache.PreviewScale = job.Scale;
         var off = layer.EffectOffset;
         var docRect = new SKRectI(
             write.Left + off.X, write.Top + off.Y,
@@ -788,7 +798,7 @@ public static class LayerEffectRenderer
         var job = new Job
         {
             // 拖曳快照是拿來上屏的，畫面縮著看就沒必要算全解析度（見 EffectPreviewScale）
-            Scale = doc == null ? 1f : PreviewScaleFor(doc, effects, bounds, exact: false),
+            Scale = doc == null ? 1f : PreviewScaleFor(doc, layer.FxCache, effects, bounds, full: true, exact: false),
             Layer = layer,
             Region = bounds,
             Compute = bounds,

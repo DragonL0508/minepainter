@@ -397,9 +397,16 @@ public sealed class LayerPropertiesWindow : Window
                 ? "把堆疊結果寫進像素並清空堆疊（可復原）"
                 : "群組沒有自己的像素，不能烙印（先合併群組再烙印）");
         bakeButton.IsEnabled = effects.Count > 0 && layer is RasterLayer;
-        bakeButton.Click += (_, _) =>
+        bakeButton.Click += async (_, _) =>
         {
-            if (layer is RasterLayer raster && LayerEffectCommands.Bake(_session, raster)) StateChanged?.Invoke();
+            // 烙印要把全解析度的結果寫進像素：畫面上可能是降解析度的預覽，這裡會整層重算
+            if (layer is RasterLayer raster)
+            {
+                var baked = false;
+                await ProgressDialog.RunAsync(this, "烙印效果",
+                    _ => baked = LayerEffectCommands.Bake(_session, raster));
+                if (baked) StateChanged?.Invoke();
+            }
             SyncFromModel();
         };
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };

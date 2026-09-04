@@ -1913,12 +1913,16 @@ public partial class MainWindow : Window
     /// 「複製這張圖片」：把整張畫布的合成結果（＝匯出看到的那張）放進剪貼簿。
     /// 與「編輯 → 複製」不同 —— 那個複製的是選取範圍／作用中圖層。
     /// </summary>
-    private void OnCopyFlattenedClicked(object? sender, RoutedEventArgs e)
+    private async void OnCopyFlattenedClicked(object? sender, RoutedEventArgs e)
     {
         var session = CommitPending();
         if (session == null) return;
 
-        using var image = Core.Compositing.Compositor.RenderComposite(session.Document);
+        var doc = session.Document;
+        SKImage? image = null;
+        await ProgressDialog.RunAsync(this, "算出整張圖片",
+            _ => image = Core.Compositing.Compositor.RenderComposite(doc));
+        using var flattened = image;
         if (image == null)
         {
             Toasts.Show("沒有可複製的內容");
@@ -2141,12 +2145,17 @@ public partial class MainWindow : Window
 
     // ---- 編輯：剪貼簿 ----
 
-    private void OnCopyClicked(object? sender, RoutedEventArgs e)
+    private async void OnCopyClicked(object? sender, RoutedEventArgs e)
     {
         var session = CommitPending();
         if (session == null) return;
 
-        using var image = session.CopyToImage(out var origin);
+        // 複製要的是全解析度的樣子：畫面上可能是降解析度的預覽，這裡會整層重算
+        // （4K、一堆效果的圖層要好幾秒），所以丟背景跑並在超過 150ms 時顯示進度
+        SKImage? image = null;
+        SKPointI origin = default;
+        await ProgressDialog.RunAsync(this, "複製影像", _ => image = session.CopyToImage(out origin));
+        using var copied = image;
         if (image == null)
         {
             Toasts.Show("沒有可複製的內容");
@@ -2157,12 +2166,15 @@ public partial class MainWindow : Window
             : "複製失敗：無法存取剪貼簿");
     }
 
-    private void OnCutClicked(object? sender, RoutedEventArgs e)
+    private async void OnCutClicked(object? sender, RoutedEventArgs e)
     {
         var session = CommitPending();
         if (session == null) return;
 
-        using var image = session.CopyToImage(out var origin);
+        SKImage? image = null;
+        SKPointI origin = default;
+        await ProgressDialog.RunAsync(this, "剪下影像", _ => image = session.CopyToImage(out origin));
+        using var cut = image;
         if (image == null)
         {
             Toasts.Show("沒有可剪下的內容");
@@ -2314,12 +2326,19 @@ public partial class MainWindow : Window
             Toasts.Show(label);
         });
 
-    private void OnFlattenClicked(object? sender, RoutedEventArgs e) =>
-        RunCommand(s =>
-        {
-            if (LayerCommands.Flatten(s.Document, s.History))
-                Toasts.Show("已平面化");
-        });
+    private async void OnFlattenClicked(object? sender, RoutedEventArgs e)
+    {
+        var session = CommitPending();
+        if (session == null) return;
+
+        // 平面化把合成結果寫進像素，效果一律重算全解析度 —— 大文件要跑一陣子
+        var flattened = false;
+        await ProgressDialog.RunAsync(this, "平面化影像",
+            _ => flattened = LayerCommands.Flatten(session.Document, session.History));
+        _layersContent.Refresh();
+        RefreshUiState();
+        if (flattened) Toasts.Show("已平面化");
+    }
 
     // ---- 影像大小／畫布大小／圖層幾何（paint.net 的 Image / Layers 選單補齊） ----
 

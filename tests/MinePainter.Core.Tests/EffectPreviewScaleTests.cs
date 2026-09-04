@@ -93,6 +93,36 @@ public class EffectPreviewScaleTests
         }
     }
 
+    /// <summary>
+    /// 同一份快取只能有一種解析度：拖完之後只有一小塊被重算，那塊不能用全解析度算
+    /// —— 不然物件會有一部分突然變清楚。
+    /// </summary>
+    [Fact]
+    public void 局部重算沿用快取現在的比例()
+    {
+        // 半徑大的模糊：SafeScale 的下限管不到它，比例才會真的跟著檢視走
+        var (doc, layer) = BigBlurredLayer(LayerEffect.Create(new GaussianBlurEffect { Radius = 80 }));
+        using (doc)
+        {
+            doc.PreviewScale = 0.25f;
+            LayerEffectRenderer.RenderLayerNow(doc, layer);
+            var preview = layer.FxCache.PreviewScale;
+            Assert.True(preview < 1f);
+
+            // 使用者又縮更小（想要的比例變粗了），然後只改一小塊。
+            // 縮小不會讓快取重算（現有的更細，夠用），所以這次局部更新必須沿用快取的比例，
+            // 不然那一小塊會比周圍粗。
+            doc.PreviewScale = 0.1f;
+            Assert.True(EffectPreviewScale.Quantize(0.1f) < preview, "這條測試要的是『想要的比例比快取粗』");
+
+            lock (doc.SyncRoot) layer.Surface.Fill(new SKRectI(400, 400, 500, 500), SKColors.Blue);
+            layer.Invalidate(new SKRectI(400, 400, 500, 500));
+            LayerEffectRenderer.RenderLayerNow(doc, layer);
+
+            Assert.Equal(preview, layer.FxCache.PreviewScale);
+        }
+    }
+
     [Fact]
     public void 輸出一律重算全解析度()
     {
