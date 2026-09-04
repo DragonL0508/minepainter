@@ -17,8 +17,9 @@ namespace MinePainter.App.Rendering;
 /// 效果堆疊仍舊由 CPU 算（DisplaySurface）—— 畫面看到的與匯出得到的因此永遠是同一份。
 /// CPU 合成器仍然是匯出與離線路徑的唯一真相，也是這條路處理不了時的退路。
 ///
-/// **處理不了就整份退回**（回傳 false，呼叫端畫原本的 tile）：進行中的筆劃／浮動內容／
-/// 拖曳覆疊／變形覆疊、調整圖層。那些都牽涉合成器內部的狀態，等這條路徑站穩再逐一接手。
+/// **一律啟用**；真的遇到處理不了的狀態就整份退回（<see cref="TryDraw"/> 回傳 false，
+/// 呼叫端改畫合成器的 tile）。目前沒有這樣的狀態 —— 進行中的筆劃、浮動內容、拖曳與變形手勢、
+/// 落地殘影、調整圖層都已經接手 —— 但退路留著，之後加新東西時才有地方站。
 /// </summary>
 public sealed unsafe class GpuLayerRenderer : IDisposable
 {

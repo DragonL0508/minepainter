@@ -22,7 +22,7 @@ public sealed class CanvasDrawOperation : ICustomDrawOperation
     private readonly int _docHeight;
     private readonly ViewportTransform _viewport;
     private readonly FrameStats _stats;
-    private readonly GpuLayerRenderer? _gpuRenderer;
+    private readonly GpuLayerRenderer _gpuRenderer;
 
     private readonly bool _highlightSelection;
     private readonly bool _showPixelGrid;
@@ -31,8 +31,8 @@ public sealed class CanvasDrawOperation : ICustomDrawOperation
     private readonly bool _smoothZoom;
 
     public CanvasDrawOperation(Rect bounds, EditorSession session, ViewportTransform viewport,
-        FrameStats stats, bool showPixelGrid = false, float contentFade = 1f, bool smoothZoom = false,
-        GpuLayerRenderer? gpuRenderer = null)
+        FrameStats stats, GpuLayerRenderer gpuRenderer, bool showPixelGrid = false, float contentFade = 1f,
+        bool smoothZoom = false)
     {
         _gpuRenderer = gpuRenderer;
         _smoothZoom = smoothZoom;
@@ -150,7 +150,7 @@ public sealed class CanvasDrawOperation : ICustomDrawOperation
 
         // GPU 路徑：直接走圖層樹，效果交給 Skia 濾鏡。處理不了就 false，照舊走下面的 tile。
         var gpuDrew = false;
-        if (docR > docL && docB > docT && _gpuRenderer != null)
+        if (docR > docL && docB > docT)
         {
             var visible = new SKRectI((int)docL, (int)docT, (int)Math.Ceiling(docR), (int)Math.Ceiling(docB));
             lock (_session.Document.SyncRoot)

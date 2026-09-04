@@ -238,7 +238,7 @@ public sealed class CanvasView : Control
     public void SetSession(EditorSession session, ViewportTransform? viewport = null)
     {
         _session = session;
-        session.LiveElementRendering = _gpuRenderer != null; // 每個分頁各有一個 session，切過去要跟著設
+        session.LiveElementRendering = true; // 每個分頁各有一個 session，切過去要跟著設
         SubscribeSession(session);
         if (viewport is { } vp)
         {
@@ -279,6 +279,7 @@ public sealed class CanvasView : Control
     {
         base.OnDetachedFromVisualTree(e);
         _animationRunning = false;
+        _gpuRenderer.Dispose(); // 每格 tile 的 GPU 貼圖跟著畫布走，畫布收掉就一起還
     }
 
     // ---- 方向鍵微調：按一下走一格，按住則由動畫迴圈等速滑行 ----
@@ -425,8 +426,8 @@ public sealed class CanvasView : Control
         }
 
         context.Custom(new CanvasDrawOperation(
-            new Rect(0, 0, Bounds.Width, Bounds.Height), session, _viewport, _stats, ShowPixelGrid,
-            (float)CurrentContentFade, SmoothZoom, _gpuRenderer));
+            new Rect(0, 0, Bounds.Width, Bounds.Height), session, _viewport, _stats, _gpuRenderer,
+            ShowPixelGrid, (float)CurrentContentFade, SmoothZoom));
 
         DrawBrushCursor(context);
     }
@@ -626,22 +627,11 @@ public sealed class CanvasView : Control
     }
 
     /// <summary>
-    /// GPU 圖層渲染（直接走圖層樹、效果交給 Skia 濾鏡）。設定關掉時是 null ＝ 走原本的合成器路徑。
-    /// 貼圖快取跟著畫布走，換分頁不必重建。
+    /// GPU 圖層渲染：每幀直接走圖層樹，把各層算好的 tile 當貼圖照層序貼上去。
+    /// 一律啟用 —— 它處理不了的狀態會自己回報（<see cref="Rendering.GpuLayerRenderer.TryDraw"/>
+    /// 回傳 false），那一幀就走原本的合成器 tile。貼圖快取跟著畫布走，換分頁不必重建。
     /// </summary>
-    private Rendering.GpuLayerRenderer? _gpuRenderer =
-        Services.AppSettings.Instance.GpuLayerRendering ? new Rendering.GpuLayerRenderer() : null;
-
-    /// <summary>設定切換時換路徑（立刻生效，不必重開）。</summary>
-    public void SetGpuRendering(bool on)
-    {
-        // 這條路能即時畫出手勢中的物件，所以物件拖曳不用再做快照（見 EditorSession）
-        if (Session != null) Session.LiveElementRendering = on;
-        if (on == (_gpuRenderer != null)) return;
-        _gpuRenderer?.Dispose();
-        _gpuRenderer = on ? new Rendering.GpuLayerRenderer() : null;
-        RequestRedraw();
-    }
+    private readonly Rendering.GpuLayerRenderer _gpuRenderer = new();
 
     private readonly Core.Tools.HandleDragController _handles = new();
     private readonly Core.Tools.ElementDragHelper _elementRotate = new(); // 右鍵旋轉文字物件
