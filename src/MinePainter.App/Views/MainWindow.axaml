@@ -132,6 +132,9 @@
             <MenuItem x:Name="SmoothZoomMenuItem" Header="放大時平滑取樣" Click="OnToggleSmoothZoomClicked"
                       ToggleType="CheckBox"
                       ToolTip.Tip="關（預設，同 paint.net）：放大時顯示真實像素、硬邊；開：放大時雙線性插值，看起來平滑但看不到真實像素邊界。只影響畫面顯示，不影響輸出。" />
+            <MenuItem x:Name="CanvasLodMenuItem" Header="縮小時用降取樣貼圖" Click="OnToggleCanvasLodClicked"
+                      ToggleType="CheckBox"
+                      ToolTip.Tip="開（預設）：縮小檢視時一張貼圖抵好幾格，畫面順很多、縮小的鋸齒也少。關：一律逐格畫全解析度。只影響顯示，不影響輸出。" />
           </MenuItem>
 
           <!-- 小工具：各種與編輯本身無關的獨立小玩具 -->

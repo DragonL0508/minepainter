@@ -31,6 +31,12 @@ public sealed class AppSettings
     /// <summary>檢視 → 放大時平滑取樣（預設關：放大顯示真實像素，同 paint.net）。</summary>
     public bool SmoothZoom { get; set; }
 
+    /// <summary>
+    /// 縮小檢視時改貼降取樣貼圖（見 <see cref="Rendering.GpuLayerRenderer.LodLevelFor"/>）。
+    /// 關掉＝一律逐格畫全解析度：慢，但如果懷疑畫面出錯跟這條路有關，可以用它對照。
+    /// </summary>
+    public bool CanvasLod { get; set; } = true;
+
     /// <summary>啟動時靜默檢查 GitHub 有沒有新版（開發建置不檢查）。</summary>
     public bool CheckUpdatesOnStartup { get; set; } = true;
 

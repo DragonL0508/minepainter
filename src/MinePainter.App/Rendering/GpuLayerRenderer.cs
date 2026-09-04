@@ -49,6 +49,9 @@ public sealed unsafe class GpuLayerRenderer : IDisposable
         public long Used;       // 最後用到的幀序（LRU／過期回收用）
     }
 
+    /// <summary>縮小檢視要不要走 LOD（設定選單可關；關掉＝一律逐格畫全解析度）。</summary>
+    public static bool LodEnabled { get; set; } = true;
+
     /// <summary>
     /// LOD 最高做到第幾階。第 3 階一張貼圖已經涵蓋 8×8 格（2048×2048 文件像素），
     /// 再往下一張貼圖要讀 256 格來源才建得起來，重建成本反而蓋過省下來的 draw call。
@@ -96,6 +99,7 @@ public sealed unsafe class GpuLayerRenderer : IDisposable
     /// </summary>
     public static int LodLevelFor(double scale)
     {
+        if (!LodEnabled) return 0;
         if (!double.IsFinite(scale) || scale <= 0) return 0; // 算不出縮放比就照舊逐格畫
         var level = 0;
         while (level < MaxLodLevel && scale <= 1.0 / (1 << (level + 1))) level++;

@@ -111,6 +111,8 @@ public partial class MainWindow : Window
         Canvas.TextEditRequested += StartCanvasTextEdit;
         Canvas.SmoothZoom = Services.AppSettings.Instance.SmoothZoom;
         SmoothZoomMenuItem.IsChecked = Canvas.SmoothZoom;
+        Rendering.GpuLayerRenderer.LodEnabled = Services.AppSettings.Instance.CanvasLod;
+        CanvasLodMenuItem.IsChecked = Rendering.GpuLayerRenderer.LodEnabled;
         BuildFrameActions();
         Canvas.FrameTick += UpdateFrameActions;
         Canvas.ViewportChanged += () =>
@@ -2907,6 +2909,16 @@ public partial class MainWindow : Window
         Services.AppSettings.Instance.SmoothZoom = Canvas.SmoothZoom;
         Services.AppSettings.Instance.Save();
         Toasts.Show(Canvas.SmoothZoom ? "放大時平滑取樣：開（只影響顯示）" : "放大時平滑取樣：關（顯示真實像素）");
+    }
+
+    private void OnToggleCanvasLodClicked(object? sender, RoutedEventArgs e)
+    {
+        Rendering.GpuLayerRenderer.LodEnabled = CanvasLodMenuItem.IsChecked;
+        Services.AppSettings.Instance.CanvasLod = Rendering.GpuLayerRenderer.LodEnabled;
+        Services.AppSettings.Instance.Save();
+        Toasts.Show(Rendering.GpuLayerRenderer.LodEnabled
+            ? "縮小時用降取樣貼圖：開（只影響顯示）"
+            : "縮小時用降取樣貼圖：關（一律逐格畫全解析度）");
     }
 
     // ---- 快捷鍵 ----
