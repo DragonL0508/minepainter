@@ -99,7 +99,7 @@ public static class ImageCommands
     }
 
     /// <summary>圖層內容（含畫布外像素）整體縮放到 doc 座標的新表面（offset 併入）。</summary>
-    private static TileSurface ScaleSurface(RasterLayer layer, float sx, float sy, ResampleMode resample)
+    internal static TileSurface ScaleSurface(RasterLayer layer, float sx, float sy, ResampleMode resample)
     {
         var result = new TileSurface();
         var bounds = layer.Surface.ExactContentBounds();

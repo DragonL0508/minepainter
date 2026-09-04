@@ -20,6 +20,50 @@ public sealed class Document : IDisposable
     /// <summary>文件尺寸改變（裁切／旋轉／調整大小後）。UI 需重算 viewport 與捲動範圍。</summary>
     public event Action? SizeChanged;
 
+    private int _outputWidth;
+    private int _outputHeight;
+
+    /// <summary>
+    /// 這份專案「真正的」輸出解析度。0 = 與畫布相同（一般模式）。
+    ///
+    /// 快速模式（實驗）：畫布是 1080p 級的代理，所有編輯、合成、效果都在代理解析度上做，
+    /// 輸出時才整份放大重算成這個尺寸 —— 文字、形狀、效果都會以新尺寸重新算，
+    /// 筆刷畫上去的像素則是重新取樣（見 OutputRender）。
+    /// 專案本身沒有因此壞掉：以一般模式開啟就是把整份放大成這個尺寸再編輯。
+    /// </summary>
+    public int OutputWidth
+    {
+        get => _outputWidth > 0 ? _outputWidth : Width;
+        private set => _outputWidth = value;
+    }
+
+    public int OutputHeight
+    {
+        get => _outputHeight > 0 ? _outputHeight : Height;
+        private set => _outputHeight = value;
+    }
+
+    /// <summary>畫布比輸出小＝快速模式。</summary>
+    public bool IsFastMode => _outputWidth > Width || _outputHeight > Height;
+
+    /// <summary>輸出比畫布大幾倍（一般模式為 1）。</summary>
+    public float OutputScale => IsFastMode ? OutputWidth / (float)Width : 1f;
+
+    /// <summary>
+    /// 設定輸出解析度。與畫布相同（或更小）就是一般模式。
+    /// 傳 0 代表「跟著畫布」。
+    /// </summary>
+    public void SetOutputSize(int width, int height)
+    {
+        _outputWidth = width <= Width ? 0 : width;
+        _outputHeight = height <= Height ? 0 : height;
+        if (_outputWidth == 0 || _outputHeight == 0)
+        {
+            _outputWidth = 0;
+            _outputHeight = 0;
+        }
+    }
+
     /// <summary>改變畫布尺寸；只由幾何操作與其 undo 呼叫。</summary>
     internal void SetSize(int width, int height)
     {
@@ -27,8 +71,19 @@ public sealed class Document : IDisposable
             throw new ArgumentOutOfRangeException($"文件尺寸無效：{width}×{height}");
         if (width == Width && height == Height) return;
 
+        // 快速模式：畫布改了（裁切／調整大小），輸出解析度按同樣的比例跟著走，
+        // 不然裁一半之後輸出還是原來那麼大
+        if (IsFastMode && Width > 0 && Height > 0)
+        {
+            var sx = width / (float)Width;
+            var sy = height / (float)Height;
+            _outputWidth = Math.Max(1, (int)MathF.Round(OutputWidth * sx));
+            _outputHeight = Math.Max(1, (int)MathF.Round(OutputHeight * sy));
+        }
+
         Width = width;
         Height = height;
+        if (_outputWidth <= Width || _outputHeight <= Height) SetOutputSize(_outputWidth, _outputHeight);
         SizeChanged?.Invoke();
         NotifyChanged(Bounds);
     }

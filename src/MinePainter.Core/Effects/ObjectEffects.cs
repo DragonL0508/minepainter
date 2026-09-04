@@ -296,11 +296,11 @@ public sealed record ObjectOutlineEffect : IEffect
     private static readonly ParamDef[] Params =
     [
         new SliderParam("width", "寬度", 1, 60, o => ((ObjectOutlineEffect)o).Width,
-            (o, v) => ((ObjectOutlineEffect)o) with { Width = (int)v }),
+            (o, v) => ((ObjectOutlineEffect)o) with { Width = (int)v }) { Geometric = true },
         new SliderParam("softness", "柔邊", 0, 100, o => ((ObjectOutlineEffect)o).Softness,
             (o, v) => ((ObjectOutlineEffect)o) with { Softness = (int)v }),
         new SliderParam("smooth", "平滑", 0, 20, o => ((ObjectOutlineEffect)o).Smooth,
-            (o, v) => ((ObjectOutlineEffect)o) with { Smooth = (int)v }),
+            (o, v) => ((ObjectOutlineEffect)o) with { Smooth = (int)v }) { Geometric = true },
         new ColorParam("color", "顏色", o => ((ObjectOutlineEffect)o).Color,
             (o, v) => ((ObjectOutlineEffect)o) with { Color = v }) { UsePrimaryByDefault = true },
         new BoolParam("gradient", "漸層外框", o => ((ObjectOutlineEffect)o).Gradient,
@@ -431,13 +431,13 @@ public sealed record ObjectShadowEffect : IEffect
     private static readonly ParamDef[] Params =
     [
         new SliderParam("ox", "位移 X", -50, 50, o => ((ObjectShadowEffect)o).OffsetX,
-            (o, v) => ((ObjectShadowEffect)o) with { OffsetX = (int)v }),
+            (o, v) => ((ObjectShadowEffect)o) with { OffsetX = (int)v }) { Geometric = true },
         new SliderParam("oy", "位移 Y", -50, 50, o => ((ObjectShadowEffect)o).OffsetY,
-            (o, v) => ((ObjectShadowEffect)o) with { OffsetY = (int)v }),
+            (o, v) => ((ObjectShadowEffect)o) with { OffsetY = (int)v }) { Geometric = true },
         new SliderParam("thickness", "厚度", 0, 50, o => ((ObjectShadowEffect)o).Thickness,
-            (o, v) => ((ObjectShadowEffect)o) with { Thickness = (int)v }),
+            (o, v) => ((ObjectShadowEffect)o) with { Thickness = (int)v }) { Geometric = true },
         new SliderParam("blur", "模糊", 0, 50, o => ((ObjectShadowEffect)o).Blur,
-            (o, v) => ((ObjectShadowEffect)o) with { Blur = (int)v }),
+            (o, v) => ((ObjectShadowEffect)o) with { Blur = (int)v }) { Geometric = true },
         new SliderParam("opacity", "不透明度", 0, 100, o => ((ObjectShadowEffect)o).Opacity,
             (o, v) => ((ObjectShadowEffect)o) with { Opacity = (int)v }, "%"),
         new ColorParam("color", "顏色", o => ((ObjectShadowEffect)o).Color,
@@ -559,9 +559,9 @@ public sealed record ObjectGlowEffect : IEffect
     private static readonly ParamDef[] Params =
     [
         new SliderParam("size", "大小", 1, 50, o => ((ObjectGlowEffect)o).Size,
-            (o, v) => ((ObjectGlowEffect)o) with { Size = (int)v }),
+            (o, v) => ((ObjectGlowEffect)o) with { Size = (int)v }) { Geometric = true },
         new SliderParam("spread", "擴散", 0, 30, o => ((ObjectGlowEffect)o).Spread,
-            (o, v) => ((ObjectGlowEffect)o) with { Spread = (int)v }),
+            (o, v) => ((ObjectGlowEffect)o) with { Spread = (int)v }) { Geometric = true },
         new SliderParam("opacity", "不透明度", 0, 100, o => ((ObjectGlowEffect)o).Opacity,
             (o, v) => ((ObjectGlowEffect)o) with { Opacity = (int)v }, "%"),
         new ColorParam("color", "顏色", o => ((ObjectGlowEffect)o).Color,
@@ -795,7 +795,7 @@ public sealed record ObjectFeatherEffect : IEffect
     private static readonly ParamDef[] Params =
     [
         new SliderParam("radius", "半徑", 1, 50, o => ((ObjectFeatherEffect)o).Radius,
-            (o, v) => ((ObjectFeatherEffect)o) with { Radius = (int)v }, "px"),
+            (o, v) => ((ObjectFeatherEffect)o) with { Radius = (int)v }, "px") { Geometric = true },
         new SliderParam("strength", "強度", 0, 100, o => ((ObjectFeatherEffect)o).Strength,
             (o, v) => ((ObjectFeatherEffect)o) with { Strength = (int)v }, "%"),
         new BoolParam("canvasEdge", "畫布邊緣也羽化", o => ((ObjectFeatherEffect)o).FeatherCanvasEdge,
@@ -878,9 +878,9 @@ public sealed record InnerGlowEffect : IEffect
     private static readonly ParamDef[] Common =
     [
         new SliderParam("size", "大小", 1, 50, o => ((InnerGlowEffect)o).Size,
-            (o, v) => ((InnerGlowEffect)o) with { Size = (int)v }, "px"),
+            (o, v) => ((InnerGlowEffect)o) with { Size = (int)v }, "px") { Geometric = true },
         new SliderParam("spread", "擴散", 0, 30, o => ((InnerGlowEffect)o).Spread,
-            (o, v) => ((InnerGlowEffect)o) with { Spread = (int)v }, "px"),
+            (o, v) => ((InnerGlowEffect)o) with { Spread = (int)v }, "px") { Geometric = true },
         new SliderParam("opacity", "不透明度", 0, 100, o => ((InnerGlowEffect)o).Opacity,
             (o, v) => ((InnerGlowEffect)o) with { Opacity = (int)v }, "%"),
         new ColorParam("color", "顏色", o => ((InnerGlowEffect)o).Color,

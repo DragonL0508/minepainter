@@ -39,6 +39,15 @@ public static class MppFormat
         public int FormatVersion { get; set; } = MppFormat.FormatVersion;
         public int Width { get; set; }
         public int Height { get; set; }
+
+        /// <summary>
+        /// 快速模式：專案真正的輸出解析度（畫布是它的代理）。0 或與畫布相同＝一般模式。
+        /// 舊版程式讀到會忽略這兩個欄位，檔案照樣打得開 —— 只是會當成一般的 1080p 專案。
+        /// </summary>
+        public int OutputWidth { get; set; }
+
+        public int OutputHeight { get; set; }
+
         public Node Root { get; set; } = new();
     }
 
@@ -179,6 +188,8 @@ public static class MppFormat
             {
                 Width = doc.Width,
                 Height = doc.Height,
+                OutputWidth = doc.IsFastMode ? doc.OutputWidth : 0,
+                OutputHeight = doc.IsFastMode ? doc.OutputHeight : 0,
                 Root = BuildNode(doc.Root, rasters, masks, sources),
             };
             // 只有真的寫了原始高清來源才升版本，一般檔案照舊是 v1（舊版程式仍讀得到）
@@ -470,6 +481,7 @@ public static class MppFormat
             throw new InvalidDataException($"檔案版本 {manifest.FormatVersion} 過新，請更新程式。");
 
         var doc = new Document(manifest.Width, manifest.Height);
+        doc.SetOutputSize(manifest.OutputWidth, manifest.OutputHeight);
         lock (doc.SyncRoot)
         {
             foreach (var childNode in manifest.Root.Children ?? [])
@@ -900,13 +912,15 @@ public static class MppFormat
     {
         var ext = Path.GetExtension(path).ToLowerInvariant();
         var isJpeg = ext is ".jpg" or ".jpeg";
-        var outW = Math.Max(1, width ?? doc.Width);
-        var outH = Math.Max(1, height ?? doc.Height);
-        using var composite = Compositor.RenderComposite(doc);
+        // 預設輸出尺寸＝專案的輸出解析度：快速模式下畫布只是 1080p 的代理（見 OutputRender）
+        var outW = Math.Max(1, width ?? doc.OutputWidth);
+        var outH = Math.Max(1, height ?? doc.OutputHeight);
+        using var composite = Documents.OutputRender.Render(doc,
+            progress == null ? null : new Progress<double>(v => progress.Report(v * 0.4)));
         progress?.Report(0.4);
 
         SKData encoded;
-        if (isJpeg || outW != doc.Width || outH != doc.Height)
+        if (isJpeg || outW != composite.Width || outH != composite.Height)
         {
             var info = new SKImageInfo(outW, outH, SKColorType.Bgra8888, SKAlphaType.Premul);
             using var surface = SKSurface.Create(info);

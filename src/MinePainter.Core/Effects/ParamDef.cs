@@ -1,4 +1,4 @@
-namespace MinePainter.Core.Effects;
+﻿namespace MinePainter.Core.Effects;
 
 /// <summary>
 /// 參數描述：讓 UI 不必認識每一種調整／效果就能長出對話框。
@@ -26,6 +26,13 @@ public sealed record SliderParam(
 {
     public SliderTrack Track { get; init; } = SliderTrack.None;
     public bool IsSeed { get; init; }
+
+    /// <summary>
+    /// 這個值是「像素長度」（外框寬度、模糊半徑、陰影距離…）。
+    /// 整份文件縮放時要跟著縮，不然快速模式輸出成 4K 之後，外框還是 1080p 時的粗細
+    /// （見 Documents.OutputRender）。
+    /// </summary>
+    public bool Geometric { get; init; }
 }
 
 /// <summary>角度（度）：UI 用轉盤 + 數值。</summary>

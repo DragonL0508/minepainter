@@ -1,4 +1,4 @@
-using static MinePainter.Core.Effects.EffectMath;
+﻿using static MinePainter.Core.Effects.EffectMath;
 
 namespace MinePainter.Core.Effects;
 
@@ -81,7 +81,7 @@ public sealed record GaussianBlurEffect : IEffect
     private static readonly ParamDef[] Params =
     [
         new SliderParam("radius", "半徑", 0, 200, o => ((GaussianBlurEffect)o).Radius,
-            (o, v) => ((GaussianBlurEffect)o) with { Radius = (int)v }),
+            (o, v) => ((GaussianBlurEffect)o) with { Radius = (int)v }) { Geometric = true },
     ];
     public IReadOnlyList<ParamDef> Parameters => Params;
 
@@ -104,7 +104,7 @@ public sealed record UnfocusEffect : IEffect
     private static readonly ParamDef[] Params =
     [
         new SliderParam("radius", "半徑", 1, 200, o => ((UnfocusEffect)o).Radius,
-            (o, v) => ((UnfocusEffect)o) with { Radius = (int)v }),
+            (o, v) => ((UnfocusEffect)o) with { Radius = (int)v }) { Geometric = true },
     ];
     public IReadOnlyList<ParamDef> Parameters => Params;
 
@@ -128,7 +128,7 @@ public sealed record BokehEffect : IEffect
     private static readonly ParamDef[] Params =
     [
         new SliderParam("radius", "半徑", 1, 200, o => ((BokehEffect)o).Radius,
-            (o, v) => ((BokehEffect)o) with { Radius = (int)v }),
+            (o, v) => ((BokehEffect)o) with { Radius = (int)v }) { Geometric = true },
         new SliderParam("gamma", "高光", 1, 10, o => ((BokehEffect)o).Gamma,
             (o, v) => ((BokehEffect)o) with { Gamma = (float)v }, "", 1),
     ];
@@ -178,7 +178,7 @@ public sealed record MotionBlurEffect : IEffect
         new AngleParam("angle", "角度", 0, 360, o => ((MotionBlurEffect)o).Angle,
             (o, v) => ((MotionBlurEffect)o) with { Angle = (float)v }),
         new SliderParam("distance", "距離", 1, 200, o => ((MotionBlurEffect)o).Distance,
-            (o, v) => ((MotionBlurEffect)o) with { Distance = (int)v }),
+            (o, v) => ((MotionBlurEffect)o) with { Distance = (int)v }) { Geometric = true },
         new BoolParam("centered", "置中", o => ((MotionBlurEffect)o).Centered,
             (o, v) => ((MotionBlurEffect)o) with { Centered = v }),
     ];
@@ -354,7 +354,7 @@ public sealed record SurfaceBlurEffect : IEffect
     private static readonly ParamDef[] Params =
     [
         new SliderParam("radius", "半徑", 1, 100, o => ((SurfaceBlurEffect)o).Radius,
-            (o, v) => ((SurfaceBlurEffect)o) with { Radius = (int)v }),
+            (o, v) => ((SurfaceBlurEffect)o) with { Radius = (int)v }) { Geometric = true },
         new SliderParam("threshold", "門檻", 1, 100, o => ((SurfaceBlurEffect)o).Threshold,
             (o, v) => ((SurfaceBlurEffect)o) with { Threshold = (int)v }),
     ];
