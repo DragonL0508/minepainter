@@ -141,6 +141,10 @@ public partial class MainWindow : Window
         // 放開滑鼠才落地成一步 undo（拖色輪／滑桿途中的連續變化只做即時預覽）
         _paletteContent.ColorCommitted += _ => CommitTextEdit();
 
+        // 被 CrashLog 攔下來的例外：視窗還活著，至少讓使用者知道剛剛有事情出錯、紀錄在哪
+        Services.CrashLog.Caught += msg => Dispatcher.UIThread.Post(() =>
+            Toasts.Show("發生未預期的錯誤（已記錄到 crash.log）：" + msg));
+
         // 預設集面板：雙擊／右鍵套到目前圖層；拖到畫布的落點處理在 OnDrop
         _presetsContent.SessionProvider = () => Canvas.Session;
         _presetsContent.Notify += Toasts.Show;

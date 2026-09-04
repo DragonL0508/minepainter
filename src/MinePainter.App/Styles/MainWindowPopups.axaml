@@ -20,4 +20,20 @@
   <Style Selector="MenuItem /template/ Popup">
     <Setter Property="ShouldUseOverlayLayer" Value="False" />
   </Style>
+
+  <!--
+    選單項目的工具提示也要走原生 popup，否則滑過去就當掉。
+
+    ToolTip 開啟時會把自己的 Popup 掛在目標控制項底下（邏輯父＝那個 MenuItem），所以上面那條
+    「所有 popup 都畫在 overlay 層」也會套到它身上。但主選單本身已經是原生 popup 了，而
+    PopupRoot 的 VisualLayerManager 不提供 overlay 層 —— Popup.Open() 於是丟
+    InvalidOperationException("Unable to create IPopupImpl and no overlay layer is found")，
+    沒人接就整個 app 結束。使用者 2026-09-04 回報「滑到『下載 AI 去背模型…』還沒點就崩」。
+
+    這條只打到「掛在 MenuItem 底下的 popup」＝選單項目的工具提示，
+    其餘工具提示（工具列、面板…）維持 overlay 層。
+  -->
+  <Style Selector="MenuItem > Popup">
+    <Setter Property="ShouldUseOverlayLayer" Value="False" />
+  </Style>
 </Styles>

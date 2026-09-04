@@ -38,6 +38,9 @@ public partial class App : Application
 
     public override void OnFrameworkInitializationCompleted()
     {
+        // 平台已經起來了，這時才能碰 Dispatcher.UIThread（見 CrashLog.InstallUiHandler）
+        Services.CrashLog.InstallUiHandler();
+
         // 主視窗建立前先套使用者設定（主題／畫布背景圖），開起來就是對的樣子
         var settings = Services.AppSettings.Instance;
         AppTheme.Apply(settings.Theme);

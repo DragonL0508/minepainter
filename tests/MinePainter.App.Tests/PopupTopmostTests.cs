@@ -72,6 +72,24 @@ public class PopupTopmostTests
         Assert.True(popup!.ShouldUseOverlayLayer, "下拉改成原生 popup 會把每次開啟的成本加回來");
     }
 
+    /// <summary>
+    /// 主選單是原生 popup，而 PopupRoot 的 VisualLayerManager 不提供 overlay 層。
+    /// 工具提示開啟時會把自己的 popup 掛在目標控制項底下（邏輯父＝那個 MenuItem），
+    /// 要是它也被逼去用 overlay 層，Popup.Open() 就會丟
+    /// InvalidOperationException("Unable to create IPopupImpl and no overlay layer is found")
+    /// —— 滑鼠移到有工具提示的選單項目上、還沒點，整個 app 就沒了（使用者 2026-09-04 回報）。
+    /// </summary>
+    [AvaloniaFact]
+    public void 選單項目的工具提示不能走_overlay_層()
+    {
+        var (file, _) = BuildWindow(withMainWindowStyles: true);
+        // ToolTip.Open() 就是這樣掛 popup 的
+        var tip = new Popup();
+        ((ISetLogicalParent)tip).SetParent(file);
+        Assert.False(tip.ShouldUseOverlayLayer,
+            "選單項目的工具提示走 overlay 層＝滑過去就當掉（原生選單的 PopupRoot 沒有 overlay 層）");
+    }
+
     [AvaloniaFact]
     public void 彈出層一律置頂()
     {

@@ -23,6 +23,9 @@ internal static class Program
         // 不然使用者會看到兩次 splash）
         if (Services.AppInstaller.TryHandOff(args)) return;
 
+        // 沒人接的例外先留下紀錄，不要無聲消失（UI 執行緒那半要等平台起來才裝，見 CrashLog）
+        Services.CrashLog.InstallProcessHandlers();
+
         // 第一件事就是秀啟動畫面（純 Win32、自己的執行緒），Avalonia 初始化在它後面跑
         Platform.NativeSplash.Show();
 
