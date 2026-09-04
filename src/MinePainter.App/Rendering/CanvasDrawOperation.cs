@@ -297,7 +297,8 @@ public sealed class CanvasDrawOperation : ICustomDrawOperation
         // 縮放取樣與 tile 同調（見 QualityFor）
         var quality = QualityFor(_viewport.Scale);
 
-        if (_session.Ghost is { } ghost)
+        // GPU 路徑畫的就是當下的真實狀態，不需要殘影去蓋合成器的延遲
+        if (!gpuDrew && _session.Ghost is { } ghost)
         {
             using var paint = new SKPaint
             {
@@ -341,7 +342,8 @@ public sealed class CanvasDrawOperation : ICustomDrawOperation
             if (rotation != 0) canvas.Restore();
         }
 
-        if (_session.FloatingOverlay is not { } floating) return;
+        // 浮動內容在 GPU 路徑是照層序畫進去的（見 GpuLayerRenderer.DrawRaster）
+        if (gpuDrew || _session.FloatingOverlay is not { } floating) return;
         var rect = floating.TargetRect; // 只讀一次：UI thread 正在改它
         var scaled = rect.Width != floating.PixelSize.Width ||
                      rect.Height != floating.PixelSize.Height; // 續接時像素是原始那份，比像素不比 SourceBounds

@@ -149,6 +149,7 @@ public sealed class TileSurface : IDisposable
         if (tile != null)
         {
             tile.AddRef();
+            tile.BumpVersion(); // 換了內容就得換版本號，否則顯示端會沿用上一份貼圖（undo 後畫面不動）
             _tiles[idx] = tile;
         }
     }

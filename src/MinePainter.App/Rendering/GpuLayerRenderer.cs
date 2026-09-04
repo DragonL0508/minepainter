@@ -20,12 +20,12 @@ namespace MinePainter.App.Rendering;
 /// **處理不了就整份退回**（回傳 false，呼叫端畫原本的 tile）：進行中的筆劃／浮動內容／
 /// 拖曳覆疊／變形覆疊、調整圖層。那些都牽涉合成器內部的狀態，等這條路徑站穩再逐一接手。
 /// </summary>
-public sealed class GpuLayerRenderer : IDisposable
+public sealed unsafe class GpuLayerRenderer : IDisposable
 {
     /// <summary>每一格 tile 的 GPU 貼圖（key＝tile 索引；靠 Tile.Version 判斷要不要重建）。</summary>
     private sealed class LayerImages : IDisposable
     {
-        public readonly Dictionary<TileIndex, (int Version, SKImage Image)> Tiles = new();
+        public readonly Dictionary<TileIndex, (long Version, SKImage Image)> Tiles = new();
 
         public void Dispose()
         {
@@ -58,10 +58,6 @@ public sealed class GpuLayerRenderer : IDisposable
     /// <summary>這條路徑還沒接手的狀態：有任何一個就整份退回原本的合成器。</summary>
     private static bool CanHandle(EditorSession session)
     {
-        if (session.StrokeBuffer.IsActive) return false; // 進行中的筆劃
-        if (session.Floating != null) return false;      // 浮動內容
-        if (session.Ghost != null) return false;         // 落地殘影
-
         // 變形手勢的覆疊由 CanvasDrawOperation.DrawTransformOverlay 另外畫（在所有圖層之上，
         // 而覆疊本來就只在「上面沒有看得見的東西」時才成立），這裡照常畫圖層樹即可 ——
         // 被變形的那層此刻沒有像素（手勢開始時已經拆下來），畫出來也是空的。
@@ -183,7 +179,14 @@ public sealed class GpuLayerRenderer : IDisposable
         var source = filter != null ? raster.Surface : raster.DisplaySurface;
         var elementsInSource = filter == null && raster.EffectsRendered; // CPU 快取已含物件
 
-        var isolate = raster.Opacity < 1f || raster.BlendMode != BlendMode.Normal || filter != null;
+        var stroke = session.StrokeBuffer;
+        var strokeHere = stroke.IsActive && stroke.TargetLayerId == raster.Id && !stroke.DirtyBounds.IsEmpty;
+        var floating = session.Floating;
+        var floatingHere = floating != null && floating.LayerId == raster.Id;
+
+        // 橡皮擦的 DstOut 一定要在隔離層裡擦，否則會擦穿到下方圖層
+        var isolate = raster.Opacity < 1f || raster.BlendMode != BlendMode.Normal || filter != null ||
+                      (strokeHere && stroke.IsEraser);
         if (isolate)
         {
             using var paint = LayerPaint(raster, filter);
@@ -200,6 +203,9 @@ public sealed class GpuLayerRenderer : IDisposable
         {
             DrawTiles(canvas, raster, source, visibleDoc, isolate ? 1f : raster.Opacity);
         }
+        if (strokeHere) DrawStroke(canvas, stroke);
+        if (floatingHere) floating!.DrawInto(canvas, preview: true);
+
         if (!elementsInSource)
         {
             var overlay = session.ElementOverlay;
@@ -250,6 +256,28 @@ public sealed class GpuLayerRenderer : IDisposable
         canvas.Concat(ref m);
         canvas.DrawImage(item.Image, item.SrcBounds.Left, item.SrcBounds.Top, paint);
         canvas.Restore();
+    }
+
+    /// <summary>進行中的筆劃：遮罩本身就是一張張 Alpha8 的圖，照 doc 座標貼上去即可。</summary>
+    private static unsafe void DrawStroke(SKCanvas canvas, StrokeBuffer stroke)
+    {
+        using var paint = new SKPaint
+        {
+            Color = stroke.IsEraser
+                ? SKColors.White.WithAlpha((byte)(stroke.Opacity * 255))
+                : stroke.Color.WithAlpha((byte)(stroke.Color.Alpha * stroke.Opacity)),
+            BlendMode = stroke.IsEraser ? SKBlendMode.DstOut : SKBlendMode.SrcOver,
+        };
+        var info = new SKImageInfo(MaskTile.Size, MaskTile.Size, SKColorType.Alpha8, SKAlphaType.Premul);
+        foreach (var (idx, tile) in stroke.Mask.Tiles)
+        {
+            var rect = idx.ToPixelRect();
+            fixed (byte* ptr = tile.Alpha)
+            {
+                using var image = SKImage.FromPixels(info, (IntPtr)ptr, MaskTile.Size);
+                canvas.DrawImage(image, rect.Left, rect.Top, paint);
+            }
+        }
     }
 
     private SKPaint LayerPaint(LayerNode node, SKImageFilter? filter) => new()

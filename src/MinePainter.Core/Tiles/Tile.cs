@@ -33,13 +33,19 @@ public sealed unsafe class Tile
 
     public static Tile Rent(TilePool pool, bool zeroed = true) => new(pool, pool.Rent(zeroed));
 
-    /// <summary>
-    /// 內容版本：每次有人取得寫入權就 +1。顯示端（GPU 貼圖快取）靠它知道「這格要不要重傳」——
-    /// 不能用物件識別，就地寫入時 Tile 實例不會換。
-    /// </summary>
-    public int Version { get; private set; }
+    private static long _versionSeed;
 
-    internal void BumpVersion() => Version++;
+    /// <summary>
+    /// 內容版本：每次有人取得寫入權就換一個新號。顯示端（GPU 貼圖快取）靠它知道「這格要不要重傳」——
+    /// 不能用物件識別，就地寫入時 Tile 實例不會換。
+    ///
+    /// 號碼取自全域遞增的種子，**不是每格自己數**：同一格的 Tile 實例會換人
+    /// （寫時複製、undo 還原、從 pool 借新的），各數各的就會出現「不同內容、同一個號碼」，
+    /// 顯示端因此貼出上一份的畫面（提起選取後原處的洞不見、undo 後畫面沒跟著回去）。
+    /// </summary>
+    public long Version { get; private set; } = Interlocked.Increment(ref _versionSeed);
+
+    internal void BumpVersion() => Version = Interlocked.Increment(ref _versionSeed);
 
     public bool IsShared => Volatile.Read(ref _refCount) > 1;
     public bool IsAlive => Volatile.Read(ref _refCount) > 0;
