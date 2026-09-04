@@ -35,15 +35,25 @@ public sealed class LayerEffectCache : IDisposable
     /// <summary>已被取走、還沒寫回的工作數（worker 鎖外計算中）。同步等待者靠它判斷「真的算完了」。</summary>
     internal int InFlight;
 
+    /// <summary>
+    /// 每次被標髒就 +1。worker 在鎖外算的時候拿它比對：算到一半又被標髒，
+    /// 這份結果寫回去也是舊的（而且馬上會被重算），不如當場放棄、把髒區還回去重來。
+    /// </summary>
+    private int _generation;
+
+    internal int Generation => Volatile.Read(ref _generation);
+
     public void MarkDirty(SKRectI layerRect)
     {
         if (layerRect.Width <= 0 || layerRect.Height <= 0) return;
+        Interlocked.Increment(ref _generation);
         if (DirtyAll) return;
         Dirty = Dirty.IsEmpty ? layerRect : SKRectI.Union(Dirty, layerRect);
     }
 
     public void MarkAllDirty()
     {
+        Interlocked.Increment(ref _generation);
         DirtyAll = true;
         Dirty = SKRectI.Empty;
     }
@@ -87,6 +97,13 @@ public static class LayerEffectRenderer
         public required List<byte[]?> Masks; // 每個效果在 Compute 範圍內的遮罩（null = 整層）
         public required SKSizeI DocSize;
         public float ContentRotation;        // 這層唯一的文字物件的角度（見 EffectContext.ContentRotation）
+        public int Generation;               // 取這份工作時的髒區版本（見 LayerEffectCache.Generation）
+
+        /// <summary>只有「合成器排進來的」工作可以中途放棄；拖曳預覽那種一次性的算完就是要用。</summary>
+        public bool AbandonWhenStale;
+
+        /// <summary>取走之後又被標髒了：算完也是舊的，白算。</summary>
+        public bool IsStale => AbandonWhenStale && Layer.FxCache.Generation != Generation;
     }
 
     /// <summary>算完所有待處理的圖層；回傳是否有任何圖層被更新（呼叫端據此決定要不要再跑一輪）。</summary>
@@ -104,7 +121,7 @@ public static class LayerEffectRenderer
             }
             if (job == null) return any;
 
-            uint[] result;
+            uint[]? result;
             try
             {
                 result = Compute(job, ct);
@@ -113,6 +130,13 @@ public static class LayerEffectRenderer
             {
                 lock (doc.SyncRoot) AbandonLocked(doc, job); // 取消／炸掉：把工作還回去，等待者才不會卡死
                 throw;
+            }
+
+            if (result == null)
+            {
+                // 算到一半又被標髒：放棄這份，下一輪用新的髒區重算（省下寫回與一次多餘的重算）
+                lock (doc.SyncRoot) AbandonLocked(doc, job);
+                continue;
             }
 
             lock (doc.SyncRoot)
@@ -152,7 +176,7 @@ public static class LayerEffectRenderer
                     continue;
                 }
             }
-            uint[] result;
+            uint[]? result;
             try
             {
                 result = Compute(job, CancellationToken.None);
@@ -161,6 +185,11 @@ public static class LayerEffectRenderer
             {
                 lock (doc.SyncRoot) AbandonLocked(doc, job);
                 throw;
+            }
+            if (result == null)
+            {
+                lock (doc.SyncRoot) AbandonLocked(doc, job); // 被蓋過了，下一圈重算
+                continue;
             }
             lock (doc.SyncRoot)
             {
@@ -370,6 +399,8 @@ public static class LayerEffectRenderer
                 Masks = masks,
                 DocSize = new SKSizeI(doc.Width, doc.Height),
                 ContentRotation = ContentRotationOf(layer),
+                Generation = cache.Generation,
+                AbandonWhenStale = true,
             };
         }
         return null;
@@ -408,7 +439,8 @@ public static class LayerEffectRenderer
         return (groupReader ?? Compositing.Compositor.StaticGroupSourceLocked)(group, rect);
     }
 
-    private static uint[] Compute(Job job, CancellationToken ct)
+    /// <summary>回傳 null＝這份工作在計算途中就被新的髒區蓋過了（放棄，髒區由呼叫端還回去）。</summary>
+    private static uint[]? Compute(Job job, CancellationToken ct)
     {
         var w = job.Compute.Width;
         var h = job.Compute.Height;
@@ -417,6 +449,8 @@ public static class LayerEffectRenderer
         for (var i = 0; i < job.Effects.Count; i++)
         {
             ct.ThrowIfCancellationRequested();
+            // 一道效果算完就看一次：後面還有好幾道的話，早點放棄省下的是整整幾十毫秒
+            if (job.IsStale) return null;
             var entry = job.Effects[i];
             var ctx = new EffectContext(job.Compute, job.Compute, current, job.DocSize)
             {
@@ -545,7 +579,7 @@ public static class LayerEffectRenderer
             DocSize = docSize,
             ContentRotation = element is Vectors.TextElement rotated ? rotated.Rotation : 0f,
         };
-        return Compute(job, CancellationToken.None);
+        return Compute(job, CancellationToken.None) ?? pixels;
     }
 
     /// <summary>

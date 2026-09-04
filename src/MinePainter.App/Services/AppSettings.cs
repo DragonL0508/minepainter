@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 
 namespace MinePainter.App.Services;
 
@@ -21,6 +21,9 @@ public sealed class AppSettings
 
     /// <summary>調色盤「最近使用」（RRGGBB，最新在前）。</summary>
     public List<string> RecentColors { get; set; } = new();
+
+    /// <summary>最近開啟／儲存過的檔案（完整路徑，最新在前）。</summary>
+    public List<string> RecentFiles { get; set; } = new();
 
     /// <summary>效果／調整套用時記錄在圖層的效果堆疊（非破壞性），而不是直接改像素。</summary>
     public bool NonDestructiveEffects { get; set; } = true;

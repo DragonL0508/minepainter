@@ -46,6 +46,9 @@
             <MenuItem Header="另存新檔(_A)…" Click="OnSaveAsClicked" Tag="file.saveAs" />
             <MenuItem Header="匯出影像(_E)…" Click="OnExportClicked" Tag="file.export" />
             <Separator />
+            <!-- 內容由 MainWindow.RefreshRecentFilesMenu 填（最近開過的檔案，最新在最上面） -->
+            <MenuItem x:Name="RecentFilesMenu" Header="最近使用的檔案(_R)" />
+            <Separator />
             <MenuItem Header="關閉分頁(_W)" Click="OnCloseTabClicked" Tag="file.closeTab" />
             <Separator />
             <MenuItem Header="結束(_X)" Click="OnExitClicked" />

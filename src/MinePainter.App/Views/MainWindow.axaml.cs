@@ -184,6 +184,7 @@ public partial class MainWindow : Window
                 Dispatcher.UIThread.Post(() => OpenFilesFromOtherInstance(files)));
             PrepareBeforeShow(); // 正常流程 App 已先呼叫過（啟動畫面期間）；這裡是保險
             ShowPanels();
+            RefreshRecentFilesMenu();
             StartPerfLabelTimer();
             Canvas.Focus();
             // 字型下拉的字重列舉／GlyphTypeface 探測預熱（一秒後、閒置時做），切字型才不會第一次碰到就卡
@@ -1641,6 +1642,7 @@ public partial class MainWindow : Window
     {
         try
         {
+            RememberRecentFile(path);
             if (Path.GetExtension(path).Equals(".mpp", StringComparison.OrdinalIgnoreCase))
             {
                 var doc = MppFormat.Load(path);
@@ -1660,6 +1662,89 @@ public partial class MainWindow : Window
         {
             Title = $"MinePainter — 開啟失敗：{ex.Message}";
         }
+    }
+
+    // ---- 最近使用的檔案 ----
+
+    /// <summary>清單長度上限（paint.net 也是 10 個左右）。</summary>
+    private const int MaxRecentFiles = 10;
+
+    /// <summary>
+    /// 把一個檔案記進「最近使用」（最新在最前面、去重、去掉不存在的）。
+    /// 開啟與儲存都會走到這裡 —— 另存新檔之後那個新路徑才是使用者下次要找的。
+    /// </summary>
+    private void RememberRecentFile(string path)
+    {
+        string full;
+        try
+        {
+            full = Path.GetFullPath(path);
+        }
+        catch
+        {
+            return; // 路徑怪到 GetFullPath 都不行：不值得為了這個擋住開檔
+        }
+
+        var settings = Services.AppSettings.Instance;
+        settings.RecentFiles.RemoveAll(p => string.Equals(p, full, StringComparison.OrdinalIgnoreCase));
+        settings.RecentFiles.Insert(0, full);
+        if (settings.RecentFiles.Count > MaxRecentFiles)
+            settings.RecentFiles.RemoveRange(MaxRecentFiles, settings.RecentFiles.Count - MaxRecentFiles);
+        settings.Save();
+        RefreshRecentFilesMenu();
+    }
+
+    /// <summary>
+    /// 重建「最近使用的檔案」子選單。檔案被搬走／刪掉就從清單移除 ——
+    /// 點下去才發現開不了是最沒用的回饋。
+    /// </summary>
+    private void RefreshRecentFilesMenu()
+    {
+        var settings = Services.AppSettings.Instance;
+        var alive = settings.RecentFiles.Where(File.Exists).ToList();
+        if (alive.Count != settings.RecentFiles.Count)
+        {
+            settings.RecentFiles = alive;
+            settings.Save();
+        }
+
+        RecentFilesMenu.Items.Clear();
+        RecentFilesMenu.IsEnabled = alive.Count > 0;
+        if (alive.Count == 0)
+        {
+            RecentFilesMenu.Items.Add(new MenuItem { Header = "（沒有記錄）", IsEnabled = false });
+            return;
+        }
+
+        for (var i = 0; i < alive.Count; i++)
+        {
+            var path = alive[i];
+            // 前 9 個給數字快捷鍵（_1…_9），跟 Windows 的檔案選單一樣好按
+            var prefix = i < 9 ? $"_{i + 1}  " : "     ";
+            var item = new MenuItem { Header = prefix + Path.GetFileName(path) };
+            ToolTip.SetTip(item, path);
+            item.Click += (_, _) =>
+            {
+                if (!File.Exists(path))
+                {
+                    Toasts.Show($"找不到 {Path.GetFileName(path)}（已從清單移除）");
+                    RefreshRecentFilesMenu();
+                    return;
+                }
+                OpenFile(path);
+            };
+            RecentFilesMenu.Items.Add(item);
+        }
+
+        RecentFilesMenu.Items.Add(new Separator());
+        var clear = new MenuItem { Header = "清除清單(_C)" };
+        clear.Click += (_, _) =>
+        {
+            settings.RecentFiles.Clear();
+            settings.Save();
+            RefreshRecentFilesMenu();
+        };
+        RecentFilesMenu.Items.Add(clear);
     }
 
     /// <summary>.pdn 只能讀不能寫，所以當成匯入：不記成目前檔案，之後存檔會走「另存為 .mpp」。</summary>
@@ -1751,6 +1836,7 @@ public partial class MainWindow : Window
             await ProgressDialog.RunAsync(this, "儲存專案", p => MppFormat.Save(doc, path, p));
 
             tab.FilePath = path;
+            RememberRecentFile(path);
             tab.IsDirty = Volatile.Read(ref tab.ChangeCount) != changesAtStart;
             UpdateTitle();
             UpdateTabVisuals();
