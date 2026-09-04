@@ -155,7 +155,7 @@ public sealed class CanvasDrawOperation : ICustomDrawOperation
             var visible = new SKRectI((int)docL, (int)docT, (int)Math.Ceiling(docR), (int)Math.Ceiling(docB));
             lock (_session.Document.SyncRoot)
             {
-                gpuDrew = _gpuRenderer.TryDraw(canvas, _session, visible);
+                gpuDrew = _gpuRenderer.TryDraw(canvas, _session, visible, DeviceScale(canvas), lease.GrContext);
             }
         }
 
@@ -363,6 +363,19 @@ public sealed class CanvasDrawOperation : ICustomDrawOperation
         {
             canvas.DrawImage(floating.Pixels, rect, paint);
         }
+    }
+
+    /// <summary>
+    /// 「一個文件像素現在等於幾個螢幕像素」——GPU 路徑用它選 LOD 階（見 GpuLayerRenderer.LodLevelFor）。
+    ///
+    /// 不能直接拿 _viewport.Scale：那是 DIP 尺度，150% 顯示器上真正的取樣率還要再乘 1.5，
+    /// 少乘會選到太粗的一階、把畫面糊掉。這裡的 canvas 已經套完所有變換，量它最準。
+    /// </summary>
+    private double DeviceScale(SKCanvas canvas)
+    {
+        var m = canvas.TotalMatrix;
+        var det = Math.Abs(m.ScaleX * m.ScaleY - m.SkewX * m.SkewY);
+        return det > 0 && float.IsFinite(det) ? Math.Sqrt(det) : _viewport.Scale;
     }
 
     /// <summary>在 doc 座標系（canvas 已套 viewport 變換）畫螞蟻線與工具預覽。</summary>
