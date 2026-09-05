@@ -107,9 +107,7 @@ public sealed class ShortcutsSettingsPage : SettingsPage
             _capturing = null;
             _capturingWheel = null;
             ShortcutMap.ResetAll();
-            WheelMap.ResetAll();
-            RefreshAllButtons();
-            ApplyFilter(); // 重設後按鍵字串變了，過濾結果跟著更新
+            WheelMap.ResetAll(); // 兩張表的 Changed 會把畫面上的按鈕全部刷新（見 RefreshAll）
             _hint.Text = "已全部重設為預設值。";
         };
 
@@ -140,6 +138,31 @@ public sealed class ShortcutsSettingsPage : SettingsPage
         };
 
         AddHandler(PointerWheelChangedEvent, OnWheelTunnel, Avalonia.Interactivity.RoutingStrategies.Tunnel);
+    }
+
+    /// <summary>
+    /// 表一改，畫面就跟著刷新（「全部重設」按下去沒反應就是漏了這條：
+    /// 使用者 2026-09-05 回報）。訂閱的是靜態事件，所以離開視覺樹一定要解掉。
+    /// </summary>
+    protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnAttachedToVisualTree(e);
+        ShortcutMap.Changed += RefreshAll;
+        WheelMap.Changed += RefreshAll;
+    }
+
+    protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnDetachedFromVisualTree(e);
+        ShortcutMap.Changed -= RefreshAll;
+        WheelMap.Changed -= RefreshAll;
+    }
+
+    private void RefreshAll()
+    {
+        RefreshAllButtons();
+        RefreshAllWheelButtons();
+        ApplyFilter(); // 按鍵字串變了，過濾結果跟著更新
     }
 
     private Control BuildRow(ShortcutDef def)
@@ -249,7 +272,11 @@ public sealed class ShortcutsSettingsPage : SettingsPage
 
     private void RefreshAllWheelButtons()
     {
-        foreach (var id in _wheelButtons.Keys) RefreshWheelButton(id);
+        foreach (var id in _wheelButtons.Keys)
+        {
+            if (_capturingWheel == id) continue; // 正在等使用者滾的那格保持提示文字
+            RefreshWheelButton(id);
+        }
     }
 
     /// <summary>依搜尋字串顯示／隱藏列；一個分類底下全被濾掉時連標題一起收起來。</summary>
@@ -310,7 +337,11 @@ public sealed class ShortcutsSettingsPage : SettingsPage
 
     private void RefreshAllButtons()
     {
-        foreach (var (id, slot) in _gestureButtons.Keys) RefreshButton(id, slot);
+        foreach (var (id, slot) in _gestureButtons.Keys)
+        {
+            if (_capturing == (id, slot)) continue; // 正在等使用者按鍵的那格保持「按下組合鍵…」
+            RefreshButton(id, slot);
+        }
     }
 
     public override bool HandleKeyDown(KeyEventArgs e)
