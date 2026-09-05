@@ -238,8 +238,8 @@ public class RemoveBgTests : IDisposable
         Assert.True(AlphaAt(layer, 171, 128) < 60, $"outside {AlphaAt(layer, 171, 128)}");
         Assert.True(AlphaAt(layer, 128, 171) < 60, $"outside {AlphaAt(layer, 128, 171)}");
         Assert.Equal(0, AlphaAt(layer, 250, 250));
-        Assert.Contains("64×64", BackgroundRemover.LastPlanNote);
-        Assert.Contains("沒有點數", BackgroundRemover.LastPlanNote);
+        Assert.Contains("64×64", BackgroundRemover.LastNote);
+        Assert.Contains("沒有點數", BackgroundRemover.LastNote);
     }
 
     /// <summary>命令走 remove.bg：伺服器結果當遮罩乘到原圖、一步 undo；不需要本機模型。</summary>
@@ -259,7 +259,7 @@ public class RemoveBgTests : IDisposable
         Assert.Equal(255, AlphaAt(layer, 128, 128));
         Assert.Equal(0, AlphaAt(layer, 250, 250));
         Assert.Equal("AI 去背", session.History.UndoLabel);
-        Assert.Contains("1 點", BackgroundRemover.LastPlanNote);
+        Assert.Contains("1 點", BackgroundRemover.LastNote);
 
         session.Undo();
         Assert.Equal(255, AlphaAt(layer, 250, 250));

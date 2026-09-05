@@ -112,12 +112,8 @@
             <MenuItem Header="圖層文字平面化(_R)" Click="OnFlattenTextClicked" Tag="layer.flattenText"
                       ToolTip.Tip="把本圖層的文字物件烙成像素（之後不能再編輯文字內容）" />
             <Separator />
-            <MenuItem Header="AI 去背(_B)…" Click="OnRemoveBackgroundClicked" Tag="layer.removeBackground"
-                      ToolTip.Tip="用 AI 模型把背景變透明（會先把本圖層的效果與文字平面化成像素）" />
-            <MenuItem Header="下載 AI 去背模型…" Click="OnDownloadModelsClicked"
-                      ToolTip.Tip="從 rembg 官方發佈下載去背模型，每個都標了品質、速度與記憶體需求" />
-            <MenuItem Header="AI 去背模型資料夾…" Click="OnModelFolderClicked"
-                      ToolTip.Tip="把去背模型（.onnx：u2net、isnet、RMBG、BiRefNet…）放進這個資料夾" />
+            <MenuItem Header="AI 去背(_B)" Click="OnRemoveBackgroundClicked" Tag="layer.removeBackground"
+                      ToolTip.Tip="用 remove.bg 把背景變透明（同 paint.net 的 Remove Background 插件；會先把本圖層的效果與文字平面化成像素）。有選取範圍時只處理範圍內、範圍外一併清除。API Key 在 設定 → AI 去背" />
             <Separator />
             <MenuItem Header="圖層屬性(_P)…" Click="OnLayerPropertiesClicked" Tag="layer.properties" />
           </MenuItem>
@@ -152,6 +148,7 @@
             <MenuItem Header="一般(_G)…" Click="OnSettingsClicked" CommandParameter="General" />
             <MenuItem Header="外觀(_T)…" Click="OnSettingsClicked" CommandParameter="Appearance" />
             <MenuItem Header="快捷鍵(_K)…" Click="OnSettingsClicked" CommandParameter="Shortcuts" />
+            <MenuItem Header="AI 去背(_B)…" Click="OnSettingsClicked" CommandParameter="BackgroundRemoval" />
             <MenuItem Header="檔案關聯(_A)…" Click="OnSettingsClicked" CommandParameter="FileAssociations" />
             <Separator />
             <MenuItem Header="檢查更新(_U)…" Click="OnCheckUpdatesClicked" />

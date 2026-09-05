@@ -73,10 +73,6 @@ public partial class MainWindow : Window
     {
     }
 
-    /// <summary>AI 去背模型資料夾（使用者放 .onnx 的地方）；app 旁的 models 資料夾也會掃。</summary>
-    public static string ModelFolder => System.IO.Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MinePainter", "models");
-
     public MainWindow(string? initialFile)
     {
         InitializeComponent();
@@ -84,12 +80,6 @@ public partial class MainWindow : Window
         // 預設最大化（使用者上次是視窗模式就沿用）；要在 Show 之前設好，
         // 不然會先閃一下 1360×860 再放大，浮動面板也要跟著重排一次
         if (Services.AppSettings.Instance.WindowMaximized) WindowState = WindowState.Maximized;
-
-        OnnxModels.ModelDirectories.Clear();
-        OnnxModels.ModelDirectories.Add(ModelFolder);
-        OnnxModels.ModelDirectories.Add(System.IO.Path.Combine(AppContext.BaseDirectory, "models"));
-        var envModels = Environment.GetEnvironmentVariable("MINEPAINTER_MODELS");
-        if (!string.IsNullOrEmpty(envModels)) OnnxModels.ModelDirectories.Add(envModels);
 
         // 影像檔拖進視窗：問要「開啟」還是「加入圖層」
         DragDrop.SetAllowDrop(this, true);
@@ -2592,25 +2582,11 @@ public partial class MainWindow : Window
             : $"已匯入 {imported} 個圖層");
     }
 
-    private void OpenModelFolder()
-    {
-        System.IO.Directory.CreateDirectory(ModelFolder);
-        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(ModelFolder) { UseShellExecute = true });
-    }
-
-    private void OnModelFolderClicked(object? sender, RoutedEventArgs e) => OpenModelFolder();
-
-    private async void OnDownloadModelsClicked(object? sender, RoutedEventArgs e) => await ShowModelDownloadAsync();
-
-    /// <summary>開下載模型對話框；有裝好東西就重新掃資料夾。回傳現在掃得到的模型。</summary>
-    private async Task<IReadOnlyList<OnnxModelInfo>> ShowModelDownloadAsync()
-    {
-        var dialog = new ModelDownloadWindow(ModelFolder);
-        await dialog.ShowDialog(this);
-        return OnnxModels.Scan();
-    }
-
-    /// <summary>圖層 → AI 去背：對話框選模型與選項，處理完直接寫進圖層（先平面化；一步 undo）。</summary>
+    /// <summary>
+    /// 圖層 → AI 去背：按下去直接送 remove.bg（設定在 設定 → AI 去背），處理完直接寫進圖層
+    /// （先平面化；一步 undo）。有選取範圍就只處理範圍內、範圍外一併清除。
+    /// 還沒填 API Key 就先帶去設定頁填。
+    /// </summary>
     private async void OnRemoveBackgroundClicked(object? sender, RoutedEventArgs e)
     {
         var session = CommitPending();
@@ -2620,10 +2596,27 @@ public partial class MainWindow : Window
             Toasts.Show("請先選擇一個點陣圖層");
             return;
         }
-        // 沒有本機模型也能開：對話框裡有 remove.bg 線上模式，也有「下載模型…」
-        var models = OnnxModels.Scan();
+        var settings = Services.AppSettings.Instance;
+        if (string.IsNullOrWhiteSpace(settings.RemoveBgApiKey))
+        {
+            Toasts.Show("請先填 remove.bg 的 API Key");
+            await OpenSettingsAsync(Settings.SettingsWindow.Page.BackgroundRemoval);
+            if (string.IsNullOrWhiteSpace(settings.RemoveBgApiKey)) return;
+            session = CommitPending();
+            if (session?.Document.ActiveLayer is not RasterLayer stillLayer) return;
+            layer = stillLayer;
+        }
+        var options = new BackgroundRemovalOptions
+        {
+            RemoveBg = new RemoveBgOptions(settings.RemoveBgApiKey!.Trim(),
+                settings.RemoveBgPreview ? RemoveBgSize.Preview : RemoveBgSize.Auto),
+            SolidCore = settings.RemoveBgSolidCore,
+            Contrast = settings.RemoveBgContrast,
+            Shift = settings.RemoveBgShift,
+            Selection = session.Selection is { IsEmpty: false } sel ? sel : null,
+        };
         session.SelectedElement = null; // 平面化後物件不存在，把手框不能還指著它
-        var dialog = new BackgroundRemovalWindow(session, layer, models, ModelFolder);
+        var dialog = new BackgroundRemovalWindow(session, layer, options);
         await dialog.ShowDialog(this);
         if (dialog.Error != null) Toasts.Show("AI 去背失敗：" + dialog.Error);
         else if (dialog.Applied) Toasts.Show(dialog.Note == null ? "AI 去背完成" : "AI 去背完成：" + dialog.Note);
@@ -3318,7 +3311,12 @@ public partial class MainWindow : Window
         {
             page = parsed;
         }
+        await OpenSettingsAsync(page);
+    }
 
+    /// <summary>開設定視窗到指定頁；關窗時存檔。</summary>
+    private async Task OpenSettingsAsync(Settings.SettingsWindow.Page page)
+    {
         var window = new Settings.SettingsWindow(page);
         var checkUpdates = false;
         window.CheckUpdatesRequested += () =>

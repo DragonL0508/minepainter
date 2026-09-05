@@ -22,6 +22,7 @@ public sealed class SettingsWindow : ModalDialog
         General,
         Appearance,
         Shortcuts,
+        BackgroundRemoval,
         FileAssociations,
     }
 
@@ -56,6 +57,7 @@ public sealed class SettingsWindow : ModalDialog
             new Entry(Page.General, "一般", MaterialIconKind.TuneVariant, () => new GeneralSettingsPage(() => CheckUpdatesRequested?.Invoke())),
             new Entry(Page.Appearance, "外觀", MaterialIconKind.Palette, () => new AppearanceSettingsPage()),
             new Entry(Page.Shortcuts, "快捷鍵", MaterialIconKind.Keyboard, () => new ShortcutsSettingsPage()),
+            new Entry(Page.BackgroundRemoval, "AI 去背", MaterialIconKind.AutoFix, () => new BackgroundRemovalSettingsPage()),
             new Entry(Page.FileAssociations, "檔案關聯", MaterialIconKind.FileLink, () => new FileAssociationsSettingsPage()),
         };
 

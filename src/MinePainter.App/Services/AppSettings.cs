@@ -85,6 +85,15 @@ public sealed class AppSettings
     /// <summary>remove.bg 用預覽解析度（免費額度）而不是自動（最高解析度、扣點）。</summary>
     public bool RemoveBgPreview { get; set; }
 
+    /// <summary>去背後內部填實：離邊界夠遠的內部一律不透明，半透明只留在邊緣。</summary>
+    public bool RemoveBgSolidCore { get; set; } = true;
+
+    /// <summary>去背遮罩對比 0..100。</summary>
+    public int RemoveBgContrast { get; set; }
+
+    /// <summary>去背邊緣收縮（負）／擴張（正）px。</summary>
+    public int RemoveBgShift { get; set; }
+
     /// <summary>主視窗啟動時最大化（預設是）。</summary>
     public bool WindowMaximized { get; set; } = true;
 

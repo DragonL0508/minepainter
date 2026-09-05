@@ -9,15 +9,12 @@ namespace MinePainter.Core.History;
 
 public sealed record BackgroundRemovalOptions
 {
-    /// <summary>本機 ONNX 模型；用 remove.bg 時（<see cref="RemoveBg"/> 有值）可以是 null。</summary>
-    public OnnxModelInfo? Model { get; init; }
     /// <summary>
-    /// 走 remove.bg 線上服務（同 paint.net 的 Remove Background 插件）。有值時不用本機模型：
+    /// remove.bg 線上服務（同 paint.net 的 Remove Background 插件）。
     /// 伺服器結果只取 alpha 當遮罩，顏色仍是原圖（原解析度）；伺服器只回預覽尺寸時，
-    /// 遮罩放大後用原圖做引導濾波貼回真實邊緣。填實／對比／收縮照常套用。
+    /// 遮罩放大後用原圖做引導濾波貼回真實邊緣。
     /// </summary>
-    public RemoveBgOptions? RemoveBg { get; init; }
-    public bool UseGpu { get; init; } = true;
+    public required RemoveBgOptions RemoveBg { get; init; }
     /// <summary>引導濾波精修半徑（全解析度 px；一律精修，見 <see cref="GuidedFilter"/>）。</summary>
     public int RefineRadius { get; init; } = 16;
     /// <summary>
@@ -39,14 +36,14 @@ public sealed record BackgroundRemovalOptions
 
 /// <summary>
 /// 圖層 → AI 去背：把圖層先平面化（效果堆疊烙印、文字物件柵格化）成純像素，
-/// 再用模型算前景遮罩、乘到 alpha 上。整個是一步 undo。
+/// 送 remove.bg 算前景遮罩、乘到 alpha 上。整個是一步 undo。
 ///
-/// 模型只吃 1024（u2net 甚至 320）解析度，所以遮罩本身是低解析度放大回來的：
+/// 帳號沒點數時 remove.bg 只回預覽解析度，遮罩是低解析度放大回來的：
 /// 顏色像素一直都是原圖，糊掉的是 alpha 邊緣。「精修邊緣」用原圖當引導做引導濾波，
 /// 讓遮罩重新貼回高清像素的邊緣（等同「先留一份高清原圖、去背後再依不透明範圍回原圖取像素」，
 /// 但連半透明的髮絲邊也一起處理）。
 ///
-/// 只推論內容外接框（透明邊不送進模型），模型的 1024 解析度全用在物件上。
+/// 只上傳內容外接框（透明邊不送），有選取範圍時只上傳選取的外接框、範圍外清掉。
 /// </summary>
 public static class BackgroundRemovalCommand
 {
@@ -120,32 +117,22 @@ public static class BackgroundRemovalCommand
                 if (selection != null)
                 {
                     coverage = ReadCoverage(selection, crop, layer.Offset);
-                    // 範圍外的像素不給模型看（透明 = 黑），讓它只專心在圈出來的東西上
+                    // 範圍外的像素不送上去（透明），讓伺服器只專心在圈出來的東西上
                     for (var i = 0; i < pixels.Length; i++)
                         if (coverage[i] != 255) pixels[i] = Scale(pixels[i], coverage[i]);
                 }
             }
 
             // ---- 3. 推論 + 後處理（鎖外）----
-            // 前景機率圖（來源尺寸）：本機模型推論，或 remove.bg 結果的 alpha
-            byte[] model;
-            var refine = true; // 遮罩是低解析度放大來的才需要用原圖精修邊緣
-            if (options.RemoveBg is { } remote)
-            {
-                var result = RemoveBgClient.Cutout(pixels, crop.Width, crop.Height, remote, ct);
-                model = result.Alpha;
-                refine = result.Downscaled(crop.Width, crop.Height);
-                var charged = RemoveBgClient.LastCreditsCharged;
-                BackgroundRemover.LastPlanNote =
-                    $"remove.bg 回傳 {result.ServerWidth}×{result.ServerHeight}" +
-                    (refine ? $"（{(charged is 0 ? "帳號沒有點數，只給預覽解析度；" : "")}已用原圖精修放大回 {crop.Width}×{crop.Height}）" : "") +
-                    (charged is { } c ? $"，扣 {c:0.##} 點" : "");
-            }
-            else
-            {
-                var localModel = options.Model ?? throw new InvalidOperationException("沒有指定去背模型");
-                model = BackgroundRemover.Infer(localModel, pixels, crop.Width, crop.Height, options.UseGpu, ct);
-            }
+            // 前景機率圖（來源尺寸）＝ remove.bg 結果的 alpha；低解析度放大來的才需要用原圖精修邊緣
+            var result = RemoveBgClient.Cutout(pixels, crop.Width, crop.Height, options.RemoveBg, ct);
+            var model = result.Alpha;
+            var refine = result.Downscaled(crop.Width, crop.Height);
+            var charged = RemoveBgClient.LastCreditsCharged;
+            BackgroundRemover.LastNote =
+                $"remove.bg 回傳 {result.ServerWidth}×{result.ServerHeight}" +
+                (refine ? $"（{(charged is 0 ? "帳號沒有點數，只給預覽解析度；" : "")}已用原圖精修放大回 {crop.Width}×{crop.Height}）" : "") +
+                (charged is { } c ? $"，扣 {c:0.##} 點" : "");
             ct.ThrowIfCancellationRequested();
 
             // 精修半徑隨圖片大小放大：模型的一個像素在大圖上是好幾個像素

@@ -225,20 +225,7 @@ public class BackgroundRemovalAndFeatherTests
         Assert.Equal(0, grown[16 * w + 4]);
     }
 
-    // ---- 圖層命令（真的跑模型）----
-
-    /// <summary>MINEPAINTER_TEST_MODELS 資料夾裡第一個可用的輕量模型（u2netp 或 isnet-general-use）；沒有回 null。</summary>
-    private static OnnxModelInfo? TestModel()
-    {
-        var dir = Environment.GetEnvironmentVariable("MINEPAINTER_TEST_MODELS");
-        if (string.IsNullOrEmpty(dir)) return null;
-        foreach (var name in new[] { "u2netp", "isnet-general-use" })
-        {
-            var path = Path.Combine(dir, name + ".onnx");
-            if (File.Exists(path)) return new OnnxModelInfo(name, path);
-        }
-        return null;
-    }
+    // ---- 圖層命令 ----
 
     private static byte AlphaAt(RasterLayer layer, int x, int y)
     {
@@ -265,93 +252,6 @@ public class BackgroundRemovalAndFeatherTests
         }
     }
 
-    /// <summary>
-    /// 灰底＋深色圓（顯著物件）＋一個效果與一個文字物件：命令要先平面化再去背，
-    /// 圓內保留、角落透明；undo 後像素、效果堆疊、文字物件全部回來。
-    /// 只在 MINEPAINTER_TEST_MODELS 指到含 u2netp／isnet-general-use 的資料夾時執行。
-    /// </summary>
-    [Fact]
-    public void Command_FlattensThenRemovesBackground_OneUndoStep()
-    {
-        if (TestModel() is not { } testModel) return;
-
-        var doc = ImageCodec.CreateBlankDocument(256, 256, new SKColor(200, 200, 200));
-        using var session = new EditorSession(doc);
-        var layer = (RasterLayer)doc.ActiveLayer!;
-        lock (doc.SyncRoot)
-        {
-            FillCircle(layer, new SKPoint(128, 128), 60, new SKColor(30, 20, 200));
-            layer.SetEffects([LayerEffect.Create(new AdjustmentEffect(new InvertAdjustment()))]);
-            layer.AddElement(new TextElement { Text = "hi", Position = new SKPoint(10, 10), FontSize = 24, Color = SKColors.Black });
-        }
-        Assert.True(layer.HasActiveEffects);
-        Assert.True(layer.HasElements);
-
-        var ok = BackgroundRemovalCommand.Run(session, layer, new BackgroundRemovalOptions
-        {
-            Model = testModel,
-            UseGpu = Environment.GetEnvironmentVariable("MINEPAINTER_TEST_GPU") == "1",
-        });
-        Assert.True(ok);
-
-        Assert.False(layer.HasActiveEffects);      // 已平面化
-        Assert.Empty(layer.Effects);
-        Assert.False(layer.HasElements);
-        Assert.Equal(255, AlphaAt(layer, 128, 128)); // 內部填實：中心完全不透明
-        Assert.True(AlphaAt(layer, 250, 250) < 80, $"corner {AlphaAt(layer, 250, 250)}");
-        Assert.Equal("AI 去背", session.History.UndoLabel);
-
-        session.Undo();
-        Assert.Equal(255, AlphaAt(layer, 250, 250));
-        Assert.True(layer.HasActiveEffects);
-        Assert.True(layer.HasElements);
-        Assert.False(session.History.CanUndo);
-
-        session.Redo();
-        Assert.True(AlphaAt(layer, 250, 250) < 80);
-        Assert.False(layer.HasElements);
-    }
-
-    /// <summary>
-    /// 只處理選取範圍：左右兩個深色圓、只圈住左邊那個，去背後左圓中心保留、
-    /// 右圓（選取範圍外）整個被清掉；undo 後右圓回來。
-    /// 只在 MINEPAINTER_TEST_MODELS 指到含 u2netp／isnet-general-use 的資料夾時執行。
-    /// </summary>
-    [Fact]
-    public void Command_SelectionOnly_ClearsOutsideAndKeepsSelectedObject()
-    {
-        if (TestModel() is not { } testModel) return;
-
-        var doc = ImageCodec.CreateBlankDocument(512, 256, new SKColor(200, 200, 200));
-        using var session = new EditorSession(doc);
-        var layer = (RasterLayer)doc.ActiveLayer!;
-        lock (doc.SyncRoot)
-        {
-            FillCircle(layer, new SKPoint(128, 128), 60, new SKColor(30, 20, 200));
-            FillCircle(layer, new SKPoint(384, 128), 60, new SKColor(30, 20, 200));
-        }
-        using var path = new SKPath();
-        path.AddRect(SKRect.Create(20, 20, 216, 216));
-        var selection = SelectionMask.FromPath(path, doc.Bounds);
-
-        var ok = BackgroundRemovalCommand.Run(session, layer, new BackgroundRemovalOptions
-        {
-            Model = testModel,
-            UseGpu = Environment.GetEnvironmentVariable("MINEPAINTER_TEST_GPU") == "1",
-            Selection = selection,
-        });
-        Assert.True(ok);
-
-        Assert.Equal(255, AlphaAt(layer, 128, 128)); // 圈住的圓保留
-        Assert.Equal(0, AlphaAt(layer, 384, 128));   // 範圍外的圓整個清掉
-        Assert.Equal(0, AlphaAt(layer, 500, 250));
-        Assert.True(AlphaAt(layer, 30, 30) < 80, $"corner {AlphaAt(layer, 30, 30)}"); // 範圍內的背景照樣去掉
-
-        session.Undo();
-        Assert.Equal(255, AlphaAt(layer, 384, 128));
-        Assert.Equal(255, AlphaAt(layer, 500, 250));
-    }
-
     /// <summary>選取範圍內完全沒有內容：不動圖層、回傳 false。</summary>
     [Fact]
     public void Command_SelectionWithoutContent_ReturnsFalse()
@@ -365,7 +265,7 @@ public class BackgroundRemovalAndFeatherTests
 
         var ok = BackgroundRemovalCommand.Run(session, layer, new BackgroundRemovalOptions
         {
-            Model = new OnnxModelInfo("none", "missing.onnx"),
+            RemoveBg = new RemoveBgOptions("unused"), // 沒內容就不會上傳
             Selection = SelectionMask.FromPath(path, doc.Bounds),
         });
         Assert.False(ok);
