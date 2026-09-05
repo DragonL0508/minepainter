@@ -202,9 +202,21 @@
           <controls:BarSlider x:Name="ToleranceBar" Minimum="0" Maximum="100" Value="13" Width="120" Suffix="%" />
         </StackPanel>
 
+        <!-- 選取工具的模式（同移動工具的變形群組：互斥的圖示鈕） -->
         <StackPanel x:Name="ObjectSelectGroup" Orientation="Horizontal" Spacing="5" VerticalAlignment="Center" IsVisible="False">
-          <CheckBox x:Name="ObjectSelectCheck" Content="物件選取" FontSize="12" MinHeight="0" VerticalAlignment="Center"
-                    ToolTip.Tip="圈個大概，自動選出圈內的主體" />
+          <TextBlock Text="模式：" FontSize="12" VerticalAlignment="Center" />
+          <StackPanel Orientation="Horizontal" Spacing="1">
+            <ToggleButton x:Name="SelectModeShapeToggle" Width="28" Height="24" Padding="0" IsChecked="True"
+                          HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                          ToolTip.Tip="形狀：選取就是拖出來的形狀">
+              <mi:MaterialIcon Kind="Selection" Width="16" Height="16" />
+            </ToggleButton>
+            <ToggleButton x:Name="SelectModeObjectToggle" Width="28" Height="24" Padding="0"
+                          HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                          ToolTip.Tip="物件：圈個大概，自動選出圈內的主體">
+              <mi:MaterialIcon Kind="AutoFix" Width="16" Height="16" />
+            </ToggleButton>
+          </StackPanel>
         </StackPanel>
 
         <StackPanel x:Name="TextGroup" Orientation="Horizontal" Spacing="5" VerticalAlignment="Center" IsVisible="False">

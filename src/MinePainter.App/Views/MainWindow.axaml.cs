@@ -3427,7 +3427,8 @@ public partial class MainWindow : Window
         SmoothingBar.ValueChanged += _ => ApplyBrushOptions();
         OpacityBar.ValueChanged += _ => ApplyBrushOptions();
         ToleranceBar.ValueChanged += _ => ApplyBrushOptions();
-        ObjectSelectCheck.IsCheckedChanged += (_, _) => ApplyBrushOptions();
+        WireSelectModeToggle(SelectModeShapeToggle, objectMode: false);
+        WireSelectModeToggle(SelectModeObjectToggle, objectMode: true);
         SoftnessBar.ValueChanged += _ => ApplyBrushOptions();
         foreach (var k in new[] { "連續", "一次" }) BgSamplingCombo.Items.Add(k);
         foreach (var k in new[] { "連續", "不連續" }) BgLimitCombo.Items.Add(k);
@@ -3469,7 +3470,7 @@ public partial class MainWindow : Window
 
         session.Shape.StrokeWidth = Math.Max(1f, (float)SizeBox.Value / 4);
         session.Tolerance = (byte)Math.Round(ToleranceBar.Value * 2.55); // 滑桿 0..100%，工具吃 0..255
-        session.ObjectSelect = ObjectSelectCheck.IsChecked == true;
+        session.ObjectSelect = SelectModeObjectToggle.IsChecked == true;
 
         var bg = session.BackgroundEraser.Settings;
         bg.Radius = radius;
@@ -3621,6 +3622,35 @@ public partial class MainWindow : Window
         PenStrokeButton.Click += (_, _) => RunPenCommand(s => PenCommands.StrokePath(s, s.Pen.StrokeWidth), "已沿路徑描邊");
         PenFillButton.Click += (_, _) => RunPenCommand(PenCommands.FillPath, "已填滿路徑");
         PenClearButton.Click += (_, _) => RunPenCommand(s => { PenCommands.Clear(s); return true; }, "已清除路徑");
+    }
+
+    // ---- 選取模式（矩形／橢圓／套索的工具列群組：形狀／物件）----
+
+    private bool _suppressSelectModeToggle;
+
+    /// <summary>兩個互斥的選取模式鈕：選一個另一個自動關；點已選中的維持選中。</summary>
+    private void WireSelectModeToggle(ToggleButton button, bool objectMode)
+    {
+        button.IsCheckedChanged += (_, _) =>
+        {
+            if (_suppressSelectModeToggle) return;
+            if (button.IsChecked == true) SetSelectMode(objectMode);
+            else if ((SelectModeObjectToggle.IsChecked == true) == objectMode)
+            {
+                _suppressSelectModeToggle = true;
+                button.IsChecked = true;
+                _suppressSelectModeToggle = false;
+            }
+        };
+    }
+
+    private void SetSelectMode(bool objectMode)
+    {
+        _suppressSelectModeToggle = true;
+        SelectModeShapeToggle.IsChecked = !objectMode;
+        SelectModeObjectToggle.IsChecked = objectMode;
+        _suppressSelectModeToggle = false;
+        ApplyBrushOptions();
     }
 
     // ---- 變形模式（移動工具的工具列群組）----
