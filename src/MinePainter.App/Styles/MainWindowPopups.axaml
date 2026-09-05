@@ -1,5 +1,6 @@
 <Styles xmlns="https://github.com/avaloniaui"
-        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="using:MinePainter.App.Controls">
   <!--
     主視窗裡的彈出層（下拉、按鈕 flyout、工具提示）畫在主視窗自己的 overlay 層，不另開 OS 視窗。
     原生 popup 每開一次都要建 HWND＋GPU surface（第一次 100ms+、之後每次約 17ms，而且會卡住
@@ -18,6 +19,36 @@
     一次點擊付一次成本，感覺不出來。置頂由 Styles/Popups.axaml 那條負責。
   -->
   <Style Selector="MenuItem /template/ Popup">
+    <Setter Property="ShouldUseOverlayLayer" Value="False" />
+  </Style>
+
+  <!--
+    工具列的下拉（字型、形狀…）、按鈕的 flyout、數字框與拉條的常用值選單也一樣：
+    畫在 overlay 層就會被浮動面板蓋住（使用者 2026-09-06 回報「下拉式選單又被浮窗擋到」）。
+    這些都是點一下才開，一次點擊付一次原生 popup 的成本，感覺不出來。
+    只有工具提示（滑過就開、次數多）還留在 overlay 層 —— 選擇器對「掛在按鈕底下的 popup」會一起
+    打到按鈕的工具提示，那是可以接受的代價（按鈕的工具提示有延遲，17ms 看不出來）。
+  -->
+  <Style Selector="ComboBox /template/ Popup">
+    <Setter Property="ShouldUseOverlayLayer" Value="False" />
+  </Style>
+  <Style Selector="Button > Popup, ToggleButton > Popup, RepeatButton > Popup">
+    <Setter Property="ShouldUseOverlayLayer" Value="False" />
+  </Style>
+  <Style Selector="controls|NumberBox > Popup, controls|BarSlider > Popup">
+    <Setter Property="ShouldUseOverlayLayer" Value="False" />
+  </Style>
+  <!-- 效果參數的色票（Border）點開的調色盤 flyout -->
+  <Style Selector="Border > Popup">
+    <Setter Property="ShouldUseOverlayLayer" Value="False" />
+  </Style>
+
+  <!--
+    開在另一個 popup 裡面的 popup（下拉清單項目的工具提示、調色盤 flyout 裡的下拉…）：
+    外層已是原生 popup，PopupRoot 沒有 overlay 層，硬走 overlay 會丟例外讓整個 app 消失
+    （同上面選單工具提示的那條）。這裡一律原生，不管掛在哪種控制項底下。
+  -->
+  <Style Selector="Popup Popup">
     <Setter Property="ShouldUseOverlayLayer" Value="False" />
   </Style>
 

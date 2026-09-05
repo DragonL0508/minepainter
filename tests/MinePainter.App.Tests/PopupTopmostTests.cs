@@ -64,12 +64,56 @@ public class PopupTopmostTests
     }
 
     [AvaloniaFact]
-    public void 其他彈出層維持_overlay_層()
+    public void 下拉與按鈕的_flyout_也是原生_popup()
     {
+        // 使用者 2026-09-06 回報「下拉式選單又被浮窗擋到」：overlay 層畫在主視窗裡，浮動面板一定蓋住它
         var (_, combo) = BuildWindow(withMainWindowStyles: true);
         var popup = PopupIn(combo);
         Assert.NotNull(popup);
-        Assert.True(popup!.ShouldUseOverlayLayer, "下拉改成原生 popup 會把每次開啟的成本加回來");
+        Assert.False(popup!.ShouldUseOverlayLayer, "工具列的下拉畫在 overlay 層就會被浮動面板蓋住");
+
+        var button = new Button { Content = "▾" };
+        var window = new Window { Width = 200, Height = 100, Content = button };
+        window.Styles.Add(MainWindowPopupStyles());
+        window.Show();
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+        var flyoutPopup = new Popup();
+        ((ISetLogicalParent)flyoutPopup).SetParent(button);
+        Assert.False(flyoutPopup.ShouldUseOverlayLayer, "按鈕的 flyout（ClickSubmenuMenuFlyout）也會被浮動面板蓋住");
+        window.Close();
+    }
+
+    [AvaloniaFact]
+    public void 開在原生_popup_裡的_popup_不能走_overlay_層()
+    {
+        // 下拉清單項目的工具提示：外層下拉已是原生 popup，PopupRoot 沒有 overlay 層，走 overlay 就當掉
+        var item = new TextBlock { Text = "item" };
+        var outer = new Popup { Child = item };
+        var host = new Button { Content = "host" };
+        var window = new Window { Width = 200, Height = 100, Content = host };
+        window.Styles.Add(MainWindowPopupStyles());
+        window.Show();
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+        ((ISetLogicalParent)outer).SetParent(host);
+        var tip = new Popup();
+        ((ISetLogicalParent)tip).SetParent(item);
+        Assert.False(tip.ShouldUseOverlayLayer, "原生 popup 裡的工具提示走 overlay 層＝滑過去就當掉");
+        window.Close();
+    }
+
+    [AvaloniaFact]
+    public void 一般控制項的工具提示維持_overlay_層()
+    {
+        // 滑過就開的工具提示很多，每次都開原生 popup 會卡；不在按鈕上的維持 overlay 層
+        var text = new TextBlock { Text = "x" };
+        var window = new Window { Width = 200, Height = 100, Content = text };
+        window.Styles.Add(MainWindowPopupStyles());
+        window.Show();
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+        var tip = new Popup();
+        ((ISetLogicalParent)tip).SetParent(text);
+        Assert.True(tip.ShouldUseOverlayLayer);
+        window.Close();
     }
 
     /// <summary>
