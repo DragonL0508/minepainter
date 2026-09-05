@@ -1298,7 +1298,8 @@ public sealed class EditorSession : IDisposable
         // 提起後完全沒動過（例如只是在選取範圍內點了一下）：直接放回去，不記歷史。
         // 否則會留下一步「undo 了卻什麼都沒變」的空步驟 —— 使用者看起來就是 undo 壞掉。
         // 貼上的內容例外：沒動過也要落地（不落地就是把貼的東西丟掉）。
-        if (!floating.IsPasted && floating.TargetRect == new SKRect(
+        // Alt 複製又是例外的例外：按著 Alt 點一下沒拖，不該憑空多一個圖層。
+        if ((!floating.IsPasted || floating.IsCopy) && floating.TargetRect == new SKRect(
                 floating.SourceBounds.Left, floating.SourceBounds.Top,
                 floating.SourceBounds.Right, floating.SourceBounds.Bottom))
         {
@@ -1413,6 +1414,62 @@ public sealed class EditorSession : IDisposable
         return new CompositeHistoryEntry(label, pending.Entry, entry);
     }
 
+    /// <summary>
+    /// 在 <paramref name="anchor"/> 上面一格插一個新圖層，並切過去。
+    /// 這個圖層是「暫定的」：浮動內容落地時併進同一步 undo（<see cref="WithPasteLayer"/>），
+    /// 取消時整個收掉（<see cref="DropPasteLayer"/>）—— 不會留下一個空圖層。
+    /// 貼到文字圖層、Alt 拖曳複製選取像素都走這條。
+    /// </summary>
+    private RasterLayer InsertPendingLayerAbove(RasterLayer anchor, string name)
+    {
+        var parent = anchor.Parent ?? Document.Root;
+        var index = parent.IndexOf(anchor) + 1;
+        var inserted = new RasterLayer { Name = name, Offset = anchor.Offset };
+        lock (Document.SyncRoot)
+        {
+            parent.Insert(index, inserted);
+            Document.ActiveLayer = inserted;
+        }
+        _pasteLayerEntry = (inserted, new ActionHistoryEntry("新增圖層", Document.Bounds,
+            undo: d =>
+            {
+                if (ReferenceEquals(d.ActiveLayer, inserted)) d.ActiveLayer = anchor;
+                parent.Remove(inserted);
+            },
+            redo: _ => parent.Insert(Math.Min(index, parent.Children.Count), inserted),
+            onDispose: () =>
+            {
+                if (inserted.Document == null) inserted.Dispose();
+            }));
+        return inserted;
+    }
+
+    /// <summary>
+    /// 移動工具按住 Alt：把選取範圍的像素複製一份到「原圖層上面一格」的新圖層，
+    /// 浮動的是那一份 —— 原圖層一個像素都不動（Photoshop 的 Alt 拖曳）。
+    /// 新圖層是暫定的：落地時與複製併成同一步 undo，沒拖就取消時整個收掉。
+    /// </summary>
+    public FloatingSelection? LiftSelectionAsCopy()
+    {
+        if (Floating != null) return Floating;
+        if (Selection is not { IsEmpty: false } selection) return null;
+        if (Document.ActiveLayer is not RasterLayer source) return null;
+        if (source.IsTextLayer) return null; // 文字圖層沒有像素可複製
+
+        SKImage? pixels;
+        lock (Document.SyncRoot) pixels = FloatingSelection.RenderSelected(source, selection);
+        if (pixels == null) return null;
+
+        var target = InsertPendingLayerAbove(source, $"{source.Name} 複本");
+        lock (Document.SyncRoot)
+        {
+            Floating = FloatingSelection.CreateCopy(target, pixels, selection.Bounds, selection);
+        }
+        target.Invalidate(Floating.AffectedBounds);
+        Notify($"已複製到新圖層「{target.Name}」");
+        return Floating;
+    }
+
     /// <summary>貼上取消：貼上時臨時插入的圖層一起拿掉（沒進 history，直接釋放）。</summary>
     private void DropPasteLayer(RasterLayer layer)
     {
@@ -1446,26 +1503,7 @@ public sealed class EditorSession : IDisposable
             case RasterLayer { IsTextLayer: true } textLayer:
             {
                 // 文字圖層不收像素（不變式）：貼到它上方的新圖層，落地時與貼上合成同一步 undo
-                var parent = textLayer.Parent ?? Document.Root;
-                var index = parent.IndexOf(textLayer) + 1;
-                layer = new RasterLayer { Name = "貼上的圖層" };
-                var inserted = layer;
-                lock (Document.SyncRoot)
-                {
-                    parent.Insert(index, inserted);
-                    Document.ActiveLayer = inserted;
-                }
-                _pasteLayerEntry = (inserted, new ActionHistoryEntry("新增圖層", Document.Bounds,
-                    undo: d =>
-                    {
-                        if (ReferenceEquals(d.ActiveLayer, inserted)) d.ActiveLayer = textLayer;
-                        parent.Remove(inserted);
-                    },
-                    redo: _ => parent.Insert(Math.Min(index, parent.Children.Count), inserted),
-                    onDispose: () =>
-                    {
-                        if (inserted.Document == null) inserted.Dispose();
-                    }));
+                layer = InsertPendingLayerAbove(textLayer, "貼上的圖層");
                 Notify("文字圖層不能貼上像素，已貼到新圖層");
                 break;
             }

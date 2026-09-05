@@ -50,9 +50,15 @@ public sealed class FloatingSelection : IDisposable
     /// </summary>
     public bool IsWholeContent { get; private init; }
 
+    /// <summary>
+    /// Alt 拖曳複製出來的：與貼上一樣「原處沒有被挖走像素」（<see cref="IsPasted"/> 同時為 true），
+    /// 只是歷史標籤不同。
+    /// </summary>
+    public bool IsCopy { get; private init; }
+
     /// <summary>提交時的 history 標籤。</summary>
     public string CommitLabel =>
-        IsPasted ? "貼上" : IsWholeContent ? "縮放圖層內容" : "移動選取內容";
+        IsCopy ? "複製選取內容" : IsPasted ? "貼上" : IsWholeContent ? "縮放圖層內容" : "移動選取內容";
 
     private readonly SKPath? _sourceOutline;
     private bool _disposed;
@@ -96,6 +102,41 @@ public sealed class FloatingSelection : IDisposable
         _sourceOutline.Transform(TransformMatrix, result);
         return result;
     }
+
+    /// <summary>
+    /// 取出圖層在選取範圍內的樣子（原圖層不動）。無內容時回傳 null。
+    /// Alt 拖曳複製與 <see cref="Lift"/> 共用這段。須在 Document.SyncRoot 內呼叫。
+    /// </summary>
+    public static SKImage? RenderSelected(RasterLayer layer, SelectionMask selection)
+    {
+        var docBounds = selection.Bounds;
+        if (docBounds.Width <= 0 || docBounds.Height <= 0) return null;
+
+        var info = new SKImageInfo(docBounds.Width, docBounds.Height, SKColorType.Bgra8888, SKAlphaType.Premul);
+        using var surface = SKSurface.Create(info);
+        if (surface == null) return null;
+        var canvas = surface.Canvas;
+        canvas.Clear(SKColors.Transparent);
+
+        // 1) 先把圖層像素畫進來（doc 座標 → 影像座標）
+        canvas.Save();
+        canvas.Translate(-docBounds.Left, -docBounds.Top);
+        DrawLayerPixels(layer, canvas, docBounds);
+        canvas.Restore();
+
+        // 2) 以選取遮罩裁切（DstIn：只留選取內）
+        ApplySelectionMask(selection, canvas, docBounds);
+        canvas.Flush();
+        return surface.Snapshot();
+    }
+
+    /// <summary>
+    /// Alt 拖曳：把已經取好的一份複製像素包成浮動內容，掛在新圖層上。
+    /// 原圖層沒有被挖洞，所以行為與貼上一致（沒動過也要落地、取消＝丟掉）。
+    /// </summary>
+    public static FloatingSelection CreateCopy(RasterLayer layer, SKImage pixels,
+        SKRectI bounds, SelectionMask selection) =>
+        new(layer.Id, pixels, bounds, layer.Surface.Snapshot(), selection) { IsPasted = true, IsCopy = true };
 
     /// <summary>
     /// 從圖層提起選取範圍內的像素（原處清空）。無內容時回傳 null。

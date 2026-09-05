@@ -17,6 +17,10 @@ namespace MinePainter.Core.Tools;
 /// 　　 拖角＝提起整個內容縮放 —— 這是把畫布外像素整批抓回來的入口（GIMP 縮放圖層的對應）。
 /// 　4. 作用中是群組 → 平移整個群組：所有子孫點陣圖層的像素（Offset）與文字物件一起動，
 /// 　　 整趟一步 undo。整層平移時本層的文字物件也跟著走（像素與文字不拆散）。
+///
+/// 按住 Alt 拖曳＝複製（Photoshop 的 Alt 拖曳，使用者 2026-09-05 明示）：
+/// 要動的東西先複製一份到「原圖層上面一格」的新圖層並切過去，被拖走的是那一份。
+/// 物件、選取範圍的像素、整個圖層三種都比照辦理。
 /// </summary>
 /// <summary>
 /// 變形框的模式（工具列「變形」群組；Photoshop 編輯 → 變形 的對應）：
@@ -84,6 +88,7 @@ public sealed class MoveTool : ITool
     public void OnPointerDown(ToolPointerEvent e, EditorSession session)
     {
         var doc = session.Document;
+        var alt = e.Modifiers.HasFlag(ToolModifiers.Alt); // Alt 拖曳＝複製到新圖層
 
         // 1) 選取框把手（選取範圍／浮動內容／文字物件共用同一套）
         if (_handles.TryBegin(session, e.DocPosition, HandleTolerance, e.Modifiers))
@@ -134,7 +139,7 @@ public sealed class MoveTool : ITool
             session.BeginSnapDrag();
             if (selection.CoverageAt((int)e.DocPosition.X, (int)e.DocPosition.Y) > 0)
             {
-                var lifted = session.LiftSelection();
+                var lifted = alt ? session.LiftSelectionAsCopy() : session.LiftSelection();
                 if (lifted != null)
                 {
                     _mode = Mode.FloatingMove;
@@ -152,7 +157,27 @@ public sealed class MoveTool : ITool
             return;
         }
 
-        // 3) 本圖層的物件（把手/內部）
+        // 3) 本圖層的物件（把手/內部）。Alt＝點到哪個物件就複製哪個到新圖層，拖的是複本。
+        if (alt)
+        {
+            string? copied = null;
+            lock (doc.SyncRoot)
+            {
+                if (VectorHitTest.FindTextAt(doc, e.DocPosition) is { } altHit &&
+                    LayerCommands.DuplicateElementToNewLayer(doc, session.History, altHit.Layer, altHit.Element)
+                        is { } duplicated)
+                {
+                    _elementDrag.BeginMoveLocked(session, duplicated.Layer, duplicated.Element, e.DocPosition);
+                    copied = duplicated.Layer.Name;
+                }
+            }
+            if (copied != null)
+            {
+                session.Notify($"已複製物件到新圖層「{copied}」");
+                return;
+            }
+        }
+
         if (_elementDrag.TryBegin(session, e.DocPosition, HandleTolerance, allowInsideMove: true))
             return;
 
@@ -181,6 +206,13 @@ public sealed class MoveTool : ITool
         }
         if (onContent) session.LayerFrameDismissed = false;
         else _pressedOutsideSelection = true;
+
+        // Alt：拖整層＝拖它的複本（複製圖層本來就插在原圖層上面一格並切過去）
+        if (alt && doc.ActiveLayer is RasterLayer toDuplicate &&
+            LayerCommands.DuplicateLayer(doc, session.History, toDuplicate) is { } layerCopy)
+        {
+            session.Notify($"已複製圖層「{layerCopy.Name}」");
+        }
 
         _moveLayers.Clear();
         _startOffsets.Clear();
@@ -257,7 +289,9 @@ public sealed class MoveTool : ITool
         {
             if (SKPoint.Distance(e.DocPosition, _pressPoint) * ViewScale <= DragThreshold) return;
 
-            var lifted = session.LiftSelection();
+            var lifted = e.Modifiers.HasFlag(ToolModifiers.Alt)
+                ? session.LiftSelectionAsCopy()
+                : session.LiftSelection();
             if (lifted == null)
             {
                 _mode = Mode.None;

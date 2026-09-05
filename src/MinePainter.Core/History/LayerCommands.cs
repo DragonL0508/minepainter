@@ -243,6 +243,31 @@ public static class LayerCommands
     }
 
     /// <summary>
+    /// 把一個物件複製到「原圖層上面一格」的新圖層並切過去（移動工具 Alt 拖曳）。
+    /// 物件自己的座標不變，所以複本就疊在原件上，接著被拖走的是複本。
+    /// </summary>
+    public static (RasterLayer Layer, VectorElement Element)? DuplicateElementToNewLayer(
+        Document doc, HistoryManager history, RasterLayer source, VectorElement element)
+    {
+        var parent = source.Parent;
+        if (parent == null) return null;
+
+        var clone = element with { Id = Guid.NewGuid() };
+        var layer = new RasterLayer
+        {
+            Name = element is TextElement text
+                ? VectorCommands.TextLayerNameFor(text.Text)
+                : $"{source.Name} 複本",
+            Offset = source.Offset,
+        };
+        lock (doc.SyncRoot) layer.AddElement(clone);
+
+        InsertLayer(doc, history, parent, parent.IndexOf(source) + 1, layer, "複製物件到新圖層");
+        lock (doc.SyncRoot) doc.ActiveLayer = layer;
+        return (layer, clone);
+    }
+
+    /// <summary>
     /// 向下合併：把上層以自己的混合模式與不透明度烘進下層，
     /// 下層自己的混合模式與不透明度保持不變（相對於更下方圖層的關係不該改變）。
     /// </summary>
