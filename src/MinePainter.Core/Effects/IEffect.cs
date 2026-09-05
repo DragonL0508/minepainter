@@ -91,6 +91,7 @@ public static class EffectRegistry
         new("sharpen", "相片", "銳利化", () => new SharpenEffect()),
         new("softenPortrait", "相片", "柔化人像", () => new SoftenPortraitEffect()),
         new("vignette", "相片", "暈影", () => new VignetteEffect()),
+        new("focus", "相片", "聚焦", () => new FocusEffect()),
 
         new("clouds", "演算", "雲朵", () => new CloudsEffect()),
         new("julia", "演算", "茱莉亞碎形", () => new JuliaFractalEffect()),
