@@ -2679,7 +2679,8 @@ public partial class MainWindow : Window
 
     /// <summary>「調整」選單順序照 paint.net；我們自己加的（曝光度、色溫）接在後面。</summary>
     private static readonly string[] AdjustmentMenuOrder =
-        ["blackWhite", "brightnessContrast", "curves", "hueSaturation", "invert", "levels", "posterize", "sepia", "exposure", "temperatureTint"];
+        ["blackWhite", "brightnessContrast", "curves", "hueSaturation", "invert", "levels", "posterize", "sepia",
+         "exposure", "temperatureTint", "colorBalance", "photoFilter", "channelMixer", "threshold"];
 
     internal static IReadOnlyList<string> AdjustmentMenuOrderForTests => AdjustmentMenuOrder;
 

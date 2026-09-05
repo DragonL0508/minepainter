@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.IO.Compression;
 using System.Text;
 using MinePainter.Core.Documents;
+using MinePainter.Core.Effects;
 using MinePainter.Core.Layers;
 using MinePainter.Core.Vectors;
 using SkiaSharp;
@@ -231,6 +232,7 @@ public static class PsdFormat
         public byte MaskFlags;
         public int SectionType;     // lsct：0 一般、1／2 群組本體、3 群組底部界線
         public bool IsAdjustmentOrFill;
+        public readonly Dictionary<string, byte[]> ParameterBlocks = [];   // 調整／填色圖層的參數區塊（key → 原始位元組）
         public byte[]? StyleData;       // lfx2 原始位元組
         public byte[]? TextData;        // TySh 原始位元組
         public bool HasLegacyStyle;     // 只有舊版 lrFX、沒有 lfx2
@@ -422,7 +424,11 @@ public static class PsdFormat
                 record.HasLegacyStyle = true;
                 break;
             default:
-                if (AdjustmentAndFillKeys.Contains(key)) record.IsAdjustmentOrFill = true;
+                if (AdjustmentAndFillKeys.Contains(key) || PsdAdjustmentLayer.Keys.Contains(key))
+                {
+                    record.IsAdjustmentOrFill = true;
+                    record.ParameterBlocks[key] = reader.Bytes(length);
+                }
                 break;
         }
     }
@@ -619,6 +625,19 @@ public static class PsdFormat
                         break;
 
                     default:
+                        if ((record.Rect.Width <= 0 || record.Rect.Height <= 0) && record.ParameterBlocks.Count > 0)
+                        {
+                            // 沒有像素、靠參數呈現的圖層：調整圖層 → 我們的調整圖層；純色／漸層填色 → 整張畫布的像素
+                            var special = BuildParameterLayer(record, document, notes, out var fillBgra);
+                            if (special == null) break;
+                            Current().Add(special);
+                            if (special is RasterLayer fill && fillBgra != null)
+                            {
+                                if (fill.IsVisible) planes.Peek().Accumulate(fillBgra, new SKRectI(0, 0, document.Width, document.Height), fill.Opacity);
+                                if (!record.Clipped) clipBase = new ClipBase(fillBgra, new SKRectI(0, 0, document.Width, document.Height), null, fill.IsVisible);
+                            }
+                            break;
+                        }
                         var layer = BuildRasterLayer(record, header, palette, notes, record.Clipped ? clipBase : null, out var bgra);
                         if (layer == null) break;
                         Current().Add(layer);
@@ -653,6 +672,113 @@ public static class PsdFormat
         node.IsVisible = !record.Hidden;
         node.Opacity = record.Opacity / 255f * (record.FillOpacity / 255f);
         node.BlendMode = MapBlendMode(record.BlendKey, node.Name, isGroup, notes);
+    }
+
+    /// <summary>
+    /// 調整圖層（levl／curv／brit…）→ <see cref="AdjustmentLayer"/>；純色／漸層填色（SoCo／GdFl）→ 整張畫布的點陣圖層
+    /// （乘上它的遮色片）。對不上的提示後回 null。<paramref name="fillBgra"/> 是填色圖層的像素（剪裁／群組 alpha 用）。
+    /// </summary>
+    private static LayerNode? BuildParameterLayer(LayerRecord record, Document document, List<string> notes, out byte[]? fillBgra)
+    {
+        fillBgra = null;
+        var name = string.IsNullOrEmpty(record.Name) ? "圖層" : record.Name;
+        var blocks = record.ParameterBlocks;
+
+        if (blocks.Keys.Any(PsdAdjustmentLayer.Keys.Contains))
+        {
+            var adjustment = PsdAdjustmentLayer.TryBuild(blocks, notes, out var failure);
+            var kind = PsdAdjustmentLayer.DisplayName(blocks.Keys.First(PsdAdjustmentLayer.Keys.Contains));
+            if (adjustment == null)
+            {
+                notes.Add($"「{name}」是{kind}調整圖層，{failure}，已略過。");
+                return null;
+            }
+            var layer = new AdjustmentLayer(adjustment);
+            ApplyProperties(layer, record, notes, isGroup: false);
+            if (record.HasMask && record.Channels.Any(c => c.Id == -2 && c.Samples != null))
+                notes.Add($"調整圖層「{name}」的遮色片沒有對應，會影響整張。");
+            if (record.Clipped)
+                notes.Add($"「{name}」剪裁到下一層的調整改成影響下方所有圖層。");
+            return layer;
+        }
+
+        var canvas = new SKRectI(0, 0, document.Width, document.Height);
+        byte[]? bgra = null;
+        if (blocks.TryGetValue("SoCo", out var solid))
+        {
+            if (PsdAdjustmentLayer.SolidFillColor(solid) is { } color)
+            {
+                bgra = new byte[canvas.Width * canvas.Height * 4];
+                for (var i = 0; i < bgra.Length; i += 4)
+                {
+                    bgra[i] = color.Blue;
+                    bgra[i + 1] = color.Green;
+                    bgra[i + 2] = color.Red;
+                    bgra[i + 3] = 255;
+                }
+            }
+        }
+        else if (blocks.TryGetValue("GdFl", out var gradientBlock))
+        {
+            if (PsdAdjustmentLayer.GradientFill(gradientBlock) is { } gradient)
+                bgra = RenderGradientFill(canvas, gradient.Stops, gradient.AngleCcw, gradient.Radial);
+        }
+        else if (blocks.ContainsKey("PtFl"))
+        {
+            notes.Add($"「{name}」是圖樣填色圖層，沒有對應，已略過。");
+            return null;
+        }
+        if (bgra == null)
+        {
+            notes.Add($"「{name}」是填色圖層，參數無法解析，已略過。");
+            return null;
+        }
+
+        // 填色圖層的形狀就是它的遮色片（沒遮色片＝整張）；向量遮色片（形狀圖層）這裡讀不到
+        record.Rect = canvas;
+        if (record.HasMask) ApplyMask(bgra, record);
+        if (blocks.ContainsKey("vmsk") || blocks.ContainsKey("vsms"))
+            notes.Add($"「{name}」的向量遮色片沒有對應，填色會蓋滿整張。");
+
+        var raster = new RasterLayer();
+        ApplyProperties(raster, record, notes, isGroup: false);
+        if (!IsFullyTransparent(bgra)) CopyUnpremultiplied(raster, bgra, canvas);
+        fillBgra = bgra;
+        return raster;
+    }
+
+    /// <summary>用 Skia 把漸層填滿畫布（直通 alpha 的 BGRA）。PS 角度逆時針、90 = 由下往上。</summary>
+    private static byte[] RenderGradientFill(SKRectI canvas, GradientStops stops, float angleCcw, bool radial)
+    {
+        var info = new SKImageInfo(canvas.Width, canvas.Height, SKColorType.Bgra8888, SKAlphaType.Unpremul);
+        using var bitmap = new SKBitmap(info);
+        using var skCanvas = new SKCanvas(bitmap);
+        var colors = stops.Stops.Select(s => s.Color).ToArray();
+        var positions = stops.Stops.Select(s => s.Position).ToArray();
+        var cx = canvas.Width / 2f;
+        var cy = canvas.Height / 2f;
+        using var shader = radial
+            ? SKShader.CreateRadialGradient(new SKPoint(cx, cy), MathF.Max(cx, cy), colors, positions, SKShaderTileMode.Clamp)
+            : LinearAcrossCanvas(canvas, angleCcw, colors, positions);
+        using var paint = new SKPaint { Shader = shader };
+        skCanvas.DrawRect(SKRect.Create(canvas.Width, canvas.Height), paint);
+        skCanvas.Flush();
+        var result = new byte[info.BytesSize];
+        System.Runtime.InteropServices.Marshal.Copy(bitmap.GetPixels(), result, 0, result.Length);
+        return result;
+    }
+
+    private static SKShader LinearAcrossCanvas(SKRectI canvas, float angleCcw, SKColor[] colors, float[] positions)
+    {
+        var rad = angleCcw * MathF.PI / 180f;
+        var dx = MathF.Cos(rad);
+        var dy = -MathF.Sin(rad);   // 螢幕 y 往下
+        var half = (MathF.Abs(dx) * canvas.Width + MathF.Abs(dy) * canvas.Height) / 2f;
+        var cx = canvas.Width / 2f;
+        var cy = canvas.Height / 2f;
+        return SKShader.CreateLinearGradient(
+            new SKPoint(cx - dx * half, cy - dy * half), new SKPoint(cx + dx * half, cy + dy * half),
+            colors, positions, SKShaderTileMode.Clamp);
     }
 
     /// <summary>

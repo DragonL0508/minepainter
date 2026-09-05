@@ -62,6 +62,10 @@ public static class ShortcutMap
         new("adjust.posterize", "調整", "色調分離", new KeyGesture(Key.P, KeyModifiers.Control | KeyModifiers.Shift)),
         new("adjust.sepia", "調整", "懷舊", new KeyGesture(Key.E, KeyModifiers.Control | KeyModifiers.Shift)),
         new("adjust.temperatureTint", "調整", "色溫 / 色調", null),
+        new("adjust.colorBalance", "調整", "色彩平衡", null),
+        new("adjust.photoFilter", "調整", "相片濾鏡", null),
+        new("adjust.channelMixer", "調整", "通道混合器", null),
+        new("adjust.threshold", "調整", "臨界值", null),
         new("effect.repeat", "效果", "重複上次效果", new KeyGesture(Key.F, KeyModifiers.Control)),
 
         new("layer.add", "圖層", "新增圖層", new KeyGesture(Key.N, KeyModifiers.Control | KeyModifiers.Shift)),

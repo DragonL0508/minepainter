@@ -279,6 +279,15 @@ public class PsdStyleAndTextTests
             return new Obj("DrSh", all.ToArray());
         }
 
+        /// <summary>「描述子版本 16 + 描述子」的區塊（SoCo、GdFl、vibA 這類參數區塊的樣子）。</summary>
+        public static byte[] Descriptor16(params (string Key, object Value)[] items)
+        {
+            var s = new MemoryStream();
+            U32(s, 16);
+            WriteDescriptor(s, new Obj("null", items));
+            return s.ToArray();
+        }
+
         public static byte[] Lfx2(params (string Key, object Value)[] effects)
         {
             var s = new MemoryStream();
