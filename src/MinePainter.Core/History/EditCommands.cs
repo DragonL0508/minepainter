@@ -74,10 +74,24 @@ public static class EditCommands
             docRect.Left - layer.Offset.X, docRect.Top - layer.Offset.Y,
             docRect.Right - layer.Offset.X, docRect.Bottom - layer.Offset.Y);
 
-        TileDeltaEntry? entry;
+        IHistoryEntry? entry;
         lock (doc.SyncRoot)
         {
             using var before = layer.Surface.Snapshot();
+
+            // 清除：原始高清來源也把同一塊挖掉（快速模式輸出時才不會拿代理放大）；填色就只能作廢
+            var sourceBefore = color.HasValue ? null : layer.ValidPixelSource;
+            LayerPixelSource? sourceAfter = null;
+            if (sourceBefore != null)
+            {
+                var coverage = selection is { IsEmpty: false } sel
+                    ? BackgroundRemovalCommand.ReadCoverage(sel, layerRect, layer.Offset)
+                    : null;
+                var keep = new byte[layerRect.Width * layerRect.Height];
+                for (var i = 0; i < keep.Length; i++) keep[i] = (byte)(255 - (coverage?[i] ?? 255));
+                sourceAfter = sourceBefore.Masked(layerRect, keep, outside: 255);
+                layer.TakePixelSource(); // 舊的留給 undo
+            }
 
             var paint = new SKPaint
             {
@@ -121,6 +135,12 @@ public static class EditCommands
 
             paint.Dispose();
             entry = TileDeltaEntry.Capture(label, layer, before, layerRect);
+            if (sourceAfter != null)
+            {
+                sourceAfter.Revision = layer.Surface.Revision;
+                layer.SetPixelSource(sourceAfter);
+                if (entry != null) entry = new PixelSourceSwapEntry(entry, layer, sourceBefore, sourceAfter);
+            }
         }
 
         if (entry != null) session.History.Push(entry);

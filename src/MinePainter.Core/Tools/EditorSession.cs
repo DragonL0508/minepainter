@@ -1321,15 +1321,44 @@ public sealed class EditorSession : IDisposable
         var label = floating.CommitLabel;
         var affected = floating.AffectedBounds;
         var targetRect = floating.TargetRect;
-        TileDeltaEntry? pixelEntry;
+        IHistoryEntry? pixelEntry;
         lock (Document.SyncRoot)
         {
+            // 落地後這層的像素「就是」浮動內容（貼到空圖層、或整層內容縮放）且縮小過：
+            // 原始那份留成原始高清來源，快速模式輸出時從它重畫而不是拿縮過的放大
+            var keepSource = floating.IsScaled
+                && targetRect.Width < floating.PixelSize.Width && targetRect.Height < floating.PixelSize.Height
+                && (floating.IsWholeContent || (floating.IsPasted && !floating.BeforeSnapshot.Tiles.Any()))
+                && (long)floating.PixelSize.Width * floating.PixelSize.Height <= Documents.ScaleRules.MaxSourcePixels;
+            var sourceBefore = layer.ValidPixelSource;
+            if (sourceBefore != null) layer.TakePixelSource(); // 留給 undo（StampFloating 會讓它失效）
+
             StampFloating(layer, floating);
 
             var layerRect = new SKRectI(
                 affected.Left - layer.Offset.X, affected.Top - layer.Offset.Y,
                 affected.Right - layer.Offset.X, affected.Bottom - layer.Offset.Y);
             pixelEntry = TileDeltaEntry.Capture(label, layer, floating.BeforeSnapshot, layerRect);
+
+            LayerPixelSource? sourceAfter = null;
+            if (keepSource && floating.IsWholeContent && sourceBefore != null)
+            {
+                // 整層本來就有原圖：串在原圖上（不是拿代理像素當原圖）
+                sourceAfter = sourceBefore.Rebased(floating.TransformMatrix, layer.Offset, layer.Offset);
+            }
+            else if (keepSource)
+            {
+                var src = floating.SourceBounds;
+                sourceAfter = new LayerPixelSource(floating.DetachPixels(), src, floating.TransformMatrix, layer.Offset,
+                    targetRect, 0f, new SKSize(src.Width, src.Height), 0);
+            }
+            if (sourceAfter != null)
+            {
+                sourceAfter.Revision = layer.Surface.Revision;
+                layer.SetPixelSource(sourceAfter);
+            }
+            if (pixelEntry != null && (sourceBefore != null || sourceAfter != null))
+                pixelEntry = new PixelSourceSwapEntry(pixelEntry, layer, sourceBefore, sourceAfter);
         }
 
         if (floating.IsWholeContent)

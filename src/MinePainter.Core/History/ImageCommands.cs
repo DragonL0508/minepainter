@@ -261,8 +261,7 @@ public static class ImageCommands
         lock (doc.SyncRoot)
         {
             var transformed = GeometryTransform.Transform(layer.Surface, op, srcSize, layer.Offset);
-            layer.ReplaceSurface(transformed);
-            layer.Offset = SKPointI.Empty;
+            RebasePixelSource(layer, transformed, GeometryTransform.Matrix(op, srcSize));
             foreach (var element in layer.Elements.ToList())
             {
                 if (element is not TextElement text) continue;
@@ -271,6 +270,23 @@ public static class ImageCommands
             layer.ElementCache.MarkAllDirty();
         }
         layer.InvalidateAll();
+    }
+
+    /// <summary>
+    /// 換上經過仿射映射（翻轉、旋轉 90°、裁切平移）的新表面並把 Offset 歸零；
+    /// 「原始高清來源」跟著映射而不是丟掉（快速模式輸出時才還能從原圖重畫）。須在 SyncRoot 內。
+    /// </summary>
+    internal static void RebasePixelSource(RasterLayer layer, TileSurface transformed, SKMatrix docMap)
+    {
+        var source = layer.ValidPixelSource;
+        if (source != null) layer.TakePixelSource(); // ReplaceSurface 會釋放它
+        var offset = layer.Offset;
+        layer.ReplaceSurface(transformed);
+        layer.Offset = SKPointI.Empty;
+        if (source == null) return;
+        var rebased = source.Rebased(docMap, offset);
+        rebased.Revision = layer.Surface.Revision;
+        layer.SetPixelSource(rebased);
     }
 
     // ---- 從檔案匯入圖層 ----

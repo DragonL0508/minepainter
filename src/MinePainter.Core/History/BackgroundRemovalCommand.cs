@@ -97,8 +97,12 @@ public static class BackgroundRemovalCommand
             uint[] pixels;
             byte[]? coverage = null; // 選取覆蓋度（crop 內、圖層座標）
             var selection = options.Selection is { IsEmpty: false } s ? s : null;
+            LayerPixelSource? sourceBefore;
             lock (doc.SyncRoot)
             {
+                // 快速模式／變形留下的原始高清來源：平面化沒動到像素時它還有效，
+                // 去背要連它一起做（遮罩套到原圖上），輸出大圖時才不會拿代理解析度放大
+                sourceBefore = layer.ValidPixelSource;
                 crop = layer.Surface.ExactContentBounds();
                 if (selection != null)
                 {
@@ -153,10 +157,16 @@ public static class BackgroundRemovalCommand
                     if (coverage[i] != 255) mask[i] = (byte)(mask[i] * coverage[i] / 255);
             ct.ThrowIfCancellationRequested();
 
+            // 原始高清來源也套同一份遮罩（依來源矩陣反查、雙線性取樣），成為新的來源
+            var sourceAfter = sourceBefore?.Masked(crop, mask, ct: ct);
+
             // ---- 4. 套 alpha（鎖內）：顏色永遠是原圖的原解析度像素，只乘上遮罩 ----
             lock (doc.SyncRoot)
             {
-                if (layer.Document != doc) { Rollback(); return false; }
+                if (layer.Document != doc) { sourceAfter?.Dispose(); Rollback(); return false; }
+                // 舊來源留給 undo（ApplyMask 換了像素版本後它會被當失效釋放，先拿下來）
+                if (sourceBefore != null && !ReferenceEquals(layer.TakePixelSource(), sourceBefore))
+                    sourceBefore = null;
                 ApplyMask(layer.Surface, crop, mask);
                 affected = Union(affected, crop);
                 if (selection != null)
@@ -167,7 +177,15 @@ public static class BackgroundRemovalCommand
                     affected = Union(affected, content);
                 }
 
-                var pixelEntry = TileDeltaEntry.Capture("AI 去背", layer, before, affected);
+                if (sourceAfter != null)
+                {
+                    sourceAfter.Revision = layer.Surface.Revision;
+                    layer.SetPixelSource(sourceAfter);
+                }
+
+                IHistoryEntry? pixelEntry = TileDeltaEntry.Capture("AI 去背", layer, before, affected);
+                if (pixelEntry != null && (sourceBefore != null || sourceAfter != null))
+                    pixelEntry = new PixelSourceSwapEntry(pixelEntry, layer, sourceBefore, sourceAfter);
                 var stateEntry = new ActionHistoryEntry("AI 去背", doc.Bounds,
                     undo: d =>
                     {
@@ -210,6 +228,8 @@ public static class BackgroundRemovalCommand
             {
                 foreach (var idx in TileIndex.CoveringRect(affected))
                     layer.Surface.RestoreTile(idx, before.GetTile(idx));
+                if (layer.PixelSource is { } src && src.Revision != layer.Surface.Revision)
+                    src.Revision = layer.Surface.Revision; // 像素放回去了，來源仍對得上
                 layer.SetEffects(effectsBefore);
                 foreach (var el in elementsBefore)
                     if (layer.Elements.All(e => e.Id != el.Id)) layer.AddElement(el);
@@ -263,7 +283,7 @@ public static class BackgroundRemovalCommand
     }
 
     /// <summary>讀選取在 rect（圖層座標）內的覆蓋度；選取本身是 doc 座標，差一個圖層位移。</summary>
-    private static byte[] ReadCoverage(Selections.SelectionMask selection, SKRectI rect, SKPointI layerOffset)
+    internal static byte[] ReadCoverage(Selections.SelectionMask selection, SKRectI rect, SKPointI layerOffset)
     {
         var cov = new byte[rect.Width * rect.Height];
         for (var y = 0; y < rect.Height; y++)
@@ -309,17 +329,7 @@ public static class BackgroundRemovalCommand
     }
 
     /// <summary>premul 像素四通道乘上 m/255。</summary>
-    private static uint Scale(uint p, byte m)
-    {
-        if (m == 255) return p;
-        if (m == 0) return 0;
-        var mul = m + (m >> 7); // 0..256
-        var b = (int)(p & 0xFF) * mul >> 8;
-        var g = (int)((p >> 8) & 0xFF) * mul >> 8;
-        var r = (int)((p >> 16) & 0xFF) * mul >> 8;
-        var a = (int)(p >> 24) * mul >> 8;
-        return (uint)b | ((uint)g << 8) | ((uint)r << 16) | ((uint)a << 24);
-    }
+    private static uint Scale(uint p, byte m) => LayerPixelSource.ScalePremul(p, m);
 
     /// <summary>premul 像素四通道乘上 mask/255（rect 為圖層座標）。</summary>
     private static unsafe void ApplyMask(TileSurface surface, SKRectI rect, byte[] mask)

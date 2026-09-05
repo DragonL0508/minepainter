@@ -34,8 +34,8 @@ public static class DocumentCommands
             foreach (var layer in RasterLayers(doc.Root))
             {
                 var transformed = GeometryTransform.Transform(layer.Surface, op, srcSize, layer.Offset);
-                layer.ReplaceSurface(transformed);
-                layer.Offset = SKPointI.Empty; // 內容已重新對齊到文件原點
+                // 內容重新對齊到文件原點；原始高清來源跟著映射
+                ImageCommands.RebasePixelSource(layer, transformed, GeometryTransform.Matrix(op, srcSize));
 
                 // 物件跟著搬位置（文字本身不旋轉，維持可讀）
                 foreach (var element in layer.Elements.ToList())
@@ -102,24 +102,18 @@ public static class DocumentCommands
         if (rect.Width <= 0 || rect.Height <= 0) return;
 
         var oldSize = new SKSizeI(doc.Width, doc.Height);
-        var states = new List<(RasterLayer Layer, TileSurface Before, SKPointI BeforeOffset)>();
+        var states = new List<(RasterLayer Layer, TileSurface Before, SKPointI BeforeOffset, LayerPixelSource? BeforeSource)>();
 
         lock (doc.SyncRoot)
         {
             foreach (var layer in RasterLayers(doc.Root))
             {
                 var before = layer.Surface;
-                var cropped = CropSurface(layer, rect, selection);
-                states.Add((layer, before, layer.Offset));
-                layer.ReplaceSurface(cropped, disposeOld: false); // 舊的留給 undo
-                layer.Offset = SKPointI.Empty;
-
-                foreach (var element in layer.Elements.ToList())
-                {
-                    if (element is not TextElement text) continue;
-                    layer.ReplaceElement(text.Translated(-rect.Left, -rect.Top));
-                }
-                layer.ElementCache.MarkAllDirty();
+                var offset = layer.Offset;
+                var source = layer.ValidPixelSource;
+                if (source != null) layer.TakePixelSource(); // 留給 undo
+                states.Add((layer, before, offset, source));
+                CropLayerCore(layer, rect, selection, source);
             }
 
             doc.SetSize(rect.Width, rect.Height);
@@ -134,10 +128,15 @@ public static class DocumentCommands
             {
                 lock (d.SyncRoot)
                 {
-                    foreach (var (layer, before, offset) in states)
+                    foreach (var (layer, before, offset, source) in states)
                     {
                         layer.ReplaceSurface(before, disposeOld: true);
                         layer.Offset = offset;
+                        if (source != null)
+                        {
+                            source.Revision = layer.Surface.Revision;
+                            layer.SetPixelSource(source);
+                        }
                         foreach (var element in layer.Elements.ToList())
                         {
                             if (element is TextElement text)
@@ -154,27 +153,48 @@ public static class DocumentCommands
     }
 
     private static void CropToSelectionCore(EditorSession session, SKRectI rect,
-        SelectionMask selection, List<(RasterLayer Layer, TileSurface Before, SKPointI BeforeOffset)> states)
+        SelectionMask selection, List<(RasterLayer Layer, TileSurface Before, SKPointI BeforeOffset, LayerPixelSource? BeforeSource)> states)
     {
         var doc = session.Document;
         lock (doc.SyncRoot)
         {
-            foreach (var (layer, _, _) in states)
+            foreach (var (layer, _, _, source) in states)
             {
-                var cropped = CropSurface(layer, rect, selection);
-                layer.ReplaceSurface(cropped, disposeOld: false);
-                layer.Offset = SKPointI.Empty;
-                foreach (var element in layer.Elements.ToList())
-                {
-                    if (element is TextElement text)
-                        layer.ReplaceElement(text.Translated(-rect.Left, -rect.Top));
-                }
-                layer.ElementCache.MarkAllDirty();
+                if (source != null) layer.TakePixelSource(); // redo：undo 剛接回去的那份，仍歸 states 持有
+                CropLayerCore(layer, rect, selection, source);
             }
             doc.SetSize(rect.Width, rect.Height);
         }
         session.ApplySelection(null);
         InvalidateAll(doc);
+    }
+
+    /// <summary>
+    /// 一層裁切到 rect（以選取形狀裁）並把 Offset 歸零。
+    /// 有原始高清來源時：原圖依選取形狀去掉範圍外、再平移到新原點，輸出大圖仍能從它重畫。
+    /// 須在 SyncRoot 內；呼叫端已把舊來源從圖層拿下來。
+    /// </summary>
+    private static void CropLayerCore(RasterLayer layer, SKRectI rect, SelectionMask selection, LayerPixelSource? source)
+    {
+        var cropped = CropSurface(layer, rect, selection);
+        var offset = layer.Offset;
+        layer.ReplaceSurface(cropped, disposeOld: false); // 舊的留給 undo
+        layer.Offset = SKPointI.Empty;
+        foreach (var element in layer.Elements.ToList())
+        {
+            if (element is TextElement text)
+                layer.ReplaceElement(text.Translated(-rect.Left, -rect.Top));
+        }
+        layer.ElementCache.MarkAllDirty();
+
+        if (source == null) return;
+        // 選取覆蓋度（rect 內、圖層座標）當遮罩，rect 外一律去掉，再把 doc 原點搬到 rect 左上
+        var layerRect = new SKRectI(rect.Left - offset.X, rect.Top - offset.Y, rect.Right - offset.X, rect.Bottom - offset.Y);
+        var coverage = BackgroundRemovalCommand.ReadCoverage(selection, layerRect, offset);
+        var masked = source.Masked(layerRect, coverage);
+        var rebased = masked.Rebased(SKMatrix.CreateTranslation(-rect.Left, -rect.Top), offset);
+        rebased.Revision = layer.Surface.Revision;
+        layer.SetPixelSource(rebased);
     }
 
     /// <summary>把圖層在 rect 內的像素搬到新表面的原點，並以選取形狀裁切。</summary>

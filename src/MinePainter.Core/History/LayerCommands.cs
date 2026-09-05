@@ -234,6 +234,14 @@ public static class LayerCommands
             // 非破壞性效果堆疊也跟著複製（LayerEffect 與 IEffect 都是不可變的，遮罩共用同一份即可）
             if (source.HasEffects)
                 copy.SetEffects([.. source.Effects.Select(fx => fx with { Id = Guid.NewGuid() })]);
+
+            // 原始高清來源也複製一份（快速模式輸出時複本才能一樣從原圖重畫）
+            if (source.ValidPixelSource is { } pixelSource)
+            {
+                var own = pixelSource.Copy();
+                own.Revision = copy.Surface.Revision;
+                copy.SetPixelSource(own);
+            }
         }
 
         var index = parent.IndexOf(source) + 1;

@@ -58,6 +58,126 @@ public sealed class LayerPixelSource : IDisposable
     /// <summary>像素的擁有權已交給別人（變形 session 接手），本物件不再釋放它。</summary>
     public void Detach() => _detached = true;
 
+    /// <summary>
+    /// 整份文件經過一個仿射映射（翻轉、旋轉 90°、裁切平移…）之後的來源：同一張原圖，
+    /// 矩陣多串一段、呈現框跟著映射、圖層位移歸零（呼叫端會把 Offset 設成 0）。
+    /// 像素的擁有權轉給新來源（本物件之後不再釋放）；本物件若只是借用，新來源也只是借用。
+    /// 回傳的 Revision 未對齊，呼叫端要設。
+    /// </summary>
+    /// <param name="docMap">文件座標的映射（舊 doc 座標 → 新 doc 座標）。</param>
+    /// <param name="layerOffset">映射前圖層的 Offset。</param>
+    /// <param name="newBaseOffset">映射後圖層的 Offset（翻轉、裁切歸零；整層縮放落地維持原位移）。</param>
+    internal LayerPixelSource Rebased(SKMatrix docMap, SKPointI layerOffset, SKPointI newBaseOffset = default)
+    {
+        var delta = new SKPointI(layerOffset.X - BaseOffset.X, layerOffset.Y - BaseOffset.Y);
+        var matrix = SKMatrix.Concat(docMap, SKMatrix.Concat(SKMatrix.CreateTranslation(delta.X, delta.Y), Matrix));
+        matrix = SKMatrix.Concat(SKMatrix.CreateTranslation(-newBaseOffset.X, -newBaseOffset.Y), matrix);
+        var target = TargetRect;
+        target.Offset(delta.X, delta.Y);
+        target = docMap.MapRect(target).Standardized;
+        target.Offset(-newBaseOffset.X, -newBaseOffset.Y);
+
+        // 鏡射會把框的角度反過來；旋轉直接加上映射本身的角度
+        var det = docMap.ScaleX * docMap.ScaleY - docMap.SkewX * docMap.SkewY;
+        var turn = MathF.Atan2(docMap.SkewY, docMap.ScaleX) * 180f / MathF.PI;
+        var rotation = (det < 0 ? -RotationDeg : RotationDeg) + turn;
+
+        var owner = !_detached;
+        Detach();
+        var result = new LayerPixelSource(Pixels, Bounds, matrix, newBaseOffset, target, rotation, OriginalSize, 0);
+        if (!owner) result.Detach();
+        return result;
+    }
+
+    /// <summary>複製一份（獨立擁有像素）；Revision 未對齊。</summary>
+    internal LayerPixelSource Copy()
+    {
+        using var bitmap = SKBitmap.FromImage(Pixels);
+        var image = SKImage.FromBitmap(bitmap) ?? throw new InvalidOperationException("複製原始像素失敗");
+        return new LayerPixelSource(image, Bounds, Matrix, BaseOffset, TargetRect, RotationDeg, OriginalSize, 0);
+    }
+
+    /// <summary>
+    /// 把圖層座標的遮罩套到原圖上，產生新的來源（原圖像素 × 遮罩；獨立擁有像素）。
+    /// 原始像素每一點依矩陣算出它在圖層上的位置，雙線性取遮罩值；
+    /// 落在 <paramref name="crop"/> 外的用 <paramref name="outside"/>。
+    /// 去背、清除選取、裁切到選取都靠這個讓原圖跟著變。回傳的 Revision 未對齊，呼叫端要設。
+    /// </summary>
+    internal unsafe LayerPixelSource Masked(SKRectI crop, byte[] mask, byte outside = 0, CancellationToken ct = default)
+    {
+        using var raw = SKBitmap.FromImage(Pixels);
+        SKBitmap bmp;
+        if (raw.ColorType != SKColorType.Bgra8888 || raw.AlphaType != SKAlphaType.Premul)
+        {
+            bmp = new SKBitmap(new SKImageInfo(raw.Width, raw.Height, SKColorType.Bgra8888, SKAlphaType.Premul));
+            using var canvas = new SKCanvas(bmp);
+            canvas.DrawBitmap(raw, 0, 0);
+        }
+        else bmp = raw;
+
+        try
+        {
+            var w = bmp.Width;
+            var h = bmp.Height;
+            var m = Matrix;
+            // 原始像素中心（BaseOffset 基準的 doc 座標）→ 矩陣 → 現在的 doc 座標（同基準）
+            // → 圖層座標（− BaseOffset）→ 遮罩座標（− crop 左上）；再 −0.5 對齊遮罩像素中心
+            var ox = Bounds.Left + 0.5f;
+            var oy = Bounds.Top + 0.5f;
+            var tx = m.TransX - BaseOffset.X - crop.Left - 0.5f;
+            var ty = m.TransY - BaseOffset.Y - crop.Top - 0.5f;
+            var px = (uint*)bmp.GetPixels();
+            for (var y = 0; y < h; y++)
+            {
+                if ((y & 63) == 0) ct.ThrowIfCancellationRequested();
+                var row = px + y * w;
+                var sy = oy + y;
+                for (var x = 0; x < w; x++)
+                {
+                    ref var p = ref row[x];
+                    if (p == 0) continue;
+                    var sx = ox + x;
+                    var mx = m.ScaleX * sx + m.SkewX * sy + tx;
+                    var my = m.SkewY * sx + m.ScaleY * sy + ty;
+                    p = ScalePremul(p, SampleMask(mask, crop.Width, crop.Height, mx, my, outside));
+                }
+            }
+            var image = SKImage.FromBitmap(bmp) ?? throw new InvalidOperationException("複製原始像素失敗");
+            return new LayerPixelSource(image, Bounds, Matrix, BaseOffset, TargetRect, RotationDeg, OriginalSize, 0);
+        }
+        finally
+        {
+            if (!ReferenceEquals(bmp, raw)) bmp.Dispose();
+        }
+    }
+
+    /// <summary>雙線性取遮罩；範圍外視為 outside。</summary>
+    private static byte SampleMask(byte[] mask, int w, int h, float x, float y, byte outside)
+    {
+        if (x <= -1 || y <= -1 || x >= w || y >= h) return outside;
+        var x0 = (int)MathF.Floor(x);
+        var y0 = (int)MathF.Floor(y);
+        var fx = x - x0;
+        var fy = y - y0;
+        float At(int xi, int yi) => xi < 0 || yi < 0 || xi >= w || yi >= h ? outside : mask[yi * w + xi];
+        var top = At(x0, y0) * (1 - fx) + At(x0 + 1, y0) * fx;
+        var bottom = At(x0, y0 + 1) * (1 - fx) + At(x0 + 1, y0 + 1) * fx;
+        return (byte)Math.Clamp(MathF.Round(top * (1 - fy) + bottom * fy), 0, 255);
+    }
+
+    /// <summary>premul 像素四通道乘上 m/255。</summary>
+    internal static uint ScalePremul(uint p, byte m)
+    {
+        if (m == 255) return p;
+        if (m == 0) return 0;
+        var mul = m + (m >> 7); // 0..256
+        var b = (int)(p & 0xFF) * mul >> 8;
+        var g = (int)((p >> 8) & 0xFF) * mul >> 8;
+        var r = (int)((p >> 16) & 0xFF) * mul >> 8;
+        var a = (int)(p >> 24) * mul >> 8;
+        return (uint)b | ((uint)g << 8) | ((uint)r << 16) | ((uint)a << 24);
+    }
+
     public void Dispose()
     {
         if (_detached) return;

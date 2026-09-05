@@ -42,6 +42,16 @@ public static class GeometryTransform
     };
 
     /// <summary>把來源座標映射到目的座標（點/物件位置用）。</summary>
+    /// <summary>op 在文件座標上的仿射矩陣（與 <see cref="MapForward"/> 一致）。</summary>
+    public static SKMatrix Matrix(GeometryOp op, SKSizeI srcSize) => op switch
+    {
+        GeometryOp.FlipHorizontal => new SKMatrix(-1, 0, srcSize.Width, 0, 1, 0, 0, 0, 1),
+        GeometryOp.FlipVertical => new SKMatrix(1, 0, 0, 0, -1, srcSize.Height, 0, 0, 1),
+        GeometryOp.Rotate180 => new SKMatrix(-1, 0, srcSize.Width, 0, -1, srcSize.Height, 0, 0, 1),
+        GeometryOp.Rotate90CW => new SKMatrix(0, -1, srcSize.Height, 1, 0, 0, 0, 0, 1),
+        _ => new SKMatrix(0, 1, 0, -1, 0, srcSize.Width, 0, 0, 1),
+    };
+
     public static SKPoint MapForward(GeometryOp op, SKPoint p, SKSizeI srcSize) => op switch
     {
         GeometryOp.FlipHorizontal => new SKPoint(srcSize.Width - p.X, p.Y),
