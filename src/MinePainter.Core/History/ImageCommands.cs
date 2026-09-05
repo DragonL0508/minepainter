@@ -41,16 +41,18 @@ public static class ImageCommands
 
         var sx = width / (float)oldW;
         var sy = height / (float)oldH;
-        var states = new List<(RasterLayer Layer, TileSurface Before, SKPointI BeforeOffset,
-            List<VectorElement> BeforeElements, IReadOnlyList<Effects.LayerEffect> BeforeEffects)>();
+        var states = new List<(RasterLayer Layer, TileSurface Before, LayerPixelSource? BeforeSource,
+            SKPointI BeforeOffset, List<VectorElement> BeforeElements, IReadOnlyList<Effects.LayerEffect> BeforeEffects)>();
         var beforeOutput = (doc.OutputWidth, doc.OutputHeight);
 
         lock (doc.SyncRoot)
         {
+            var budget = new ScaleRules.Budget();
             foreach (var layer in DocumentCommands.RasterLayers(doc.Root))
             {
-                states.Add((layer, layer.Surface, layer.Offset, layer.Elements.ToList(), layer.Effects));
-                ScaleLayerCore(layer, sx, sy, resample);
+                var (before, offset, elements, effects) = (layer.Surface, layer.Offset, layer.Elements.ToList(), layer.Effects);
+                var beforeSource = ScaleLayerCore(layer, sx, sy, resample, doc.Bounds, budget);
+                states.Add((layer, before, beforeSource, offset, elements, effects));
             }
             doc.SetSize(width, height);
             doc.SetOutputSize(outputWidth, outputHeight);
@@ -65,9 +67,10 @@ public static class ImageCommands
             {
                 lock (d.SyncRoot)
                 {
-                    foreach (var (layer, before, offset, elements, effects) in states)
+                    foreach (var (layer, before, source, offset, elements, effects) in states)
                     {
                         layer.ReplaceSurface(before, disposeOld: true);
+                        if (source != null) layer.SetPixelSource(source); // 原始高清那份接回去（縮放時只是借用）
                         layer.Offset = offset;
                         RestoreElements(layer, elements);
                         if (layer.HasEffects || effects.Count > 0) layer.SetEffects(effects);
@@ -82,7 +85,8 @@ public static class ImageCommands
             {
                 lock (d.SyncRoot)
                 {
-                    foreach (var (layer, _, _, _, _) in states) ScaleLayerCore(layer, sx, sy, resample);
+                    var budget = new ScaleRules.Budget();
+                    foreach (var (layer, _, _, _, _, _) in states) ScaleLayerCore(layer, sx, sy, resample, d.Bounds, budget);
                     d.SetSize(width, height);
                     d.SetOutputSize(outputWidth, outputHeight);
                 }
@@ -91,13 +95,20 @@ public static class ImageCommands
             }));
     }
 
-    private static void ScaleLayerCore(RasterLayer layer, float sx, float sy, ResampleMode resample)
+    /// <summary>
+    /// 一層跟著整份文件縮放：像素（有原始高清來源就從原圖重畫）、物件、效果堆疊與遮罩。
+    /// 回傳縮放前的原始高清來源（若有）—— 沒釋放、只是從圖層拿下來，undo 時要接回去。
+    /// 新來源與它共用同一張原圖（不擁有），所以 undo 把舊的接回去、新的被釋放時原圖不會死。
+    /// </summary>
+    private static LayerPixelSource? ScaleLayerCore(RasterLayer layer, float sx, float sy, ResampleMode resample,
+        SKRectI docBounds, ScaleRules.Budget budget)
     {
-        // 縮小時先把現在的高清像素拍下來，之後輸出（快速模式）能從它重畫而不是再放大一次
-        var keep = Documents.ScaleRules.CaptureSource(layer, sx, sy, 0);
+        // 新畫布範圍（doc 座標）：從原圖重畫時畫布外只留效果吃得到的一圈
+        var clip = SKRectI.Round(new SKRect(0, 0, docBounds.Width * sx, docBounds.Height * sy));
+        var (scaled, keep) = ScaleRules.ScaleLayerPixels(layer, sx, sy, resample, clip, budget, shareSource: true);
 
-        var scaled = ScaleSurface(layer, sx, sy, resample);
-        layer.ReplaceSurface(scaled, disposeOld: false); // 舊的留給 undo
+        var before = layer.TakePixelSource(); // ReplaceSurface 會把它釋放，先拿下來留給 undo
+        layer.ReplaceSurface(scaled, disposeOld: false); // 舊表面留給 undo
         if (keep != null)
         {
             keep.Revision = layer.Surface.Revision;
@@ -105,18 +116,16 @@ public static class ImageCommands
         }
         layer.Offset = SKPointI.Empty;
 
-        // 物件與效果都跟著縮（文字重新排版、外框／陰影／光暈與效果堆疊的像素長度一起縮）——
+        // 物件與效果都跟著縮（文字重新排版、外框／陰影／光暈與效果堆疊的像素長度、遮罩一起縮）——
         // 與快速模式的輸出共用同一套規則，兩條路的結果才會一樣（見 Documents.ScaleRules）
         var matrix = SKMatrix.CreateScale(sx, sy);
         foreach (var element in layer.Elements.ToList())
-            layer.ReplaceElement(Documents.ScaleRules.ScaleElement(element, matrix, sx, sy));
+            layer.ReplaceElement(ScaleRules.ScaleElement(element, matrix, sx, sy));
 
         if (layer.HasEffects)
-        {
-            var k = (Math.Abs(sx) + Math.Abs(sy)) / 2f;
-            layer.SetEffects([.. layer.Effects.Select(fx => Documents.ScaleRules.ScaleEffect(fx, k))]);
-        }
+            layer.SetEffects([.. layer.Effects.Select(fx => ScaleRules.ScaleEffect(fx, sx, sy))]);
         layer.ElementCache.MarkAllDirty();
+        return before;
     }
 
     /// <summary>圖層內容（含畫布外像素）整體縮放到 doc 座標的新表面（offset 併入）。</summary>

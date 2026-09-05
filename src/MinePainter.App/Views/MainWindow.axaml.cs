@@ -1743,7 +1743,7 @@ public partial class MainWindow : Window
     {
         Core.Documents.Document? result = null;
         await ProgressDialog.RunAsync(this, title,
-            _ => result = Core.Documents.OutputRender.CloneScaled(doc, width, height));
+            p => result = Core.Documents.OutputRender.CloneScaled(doc, width, height, progress: p));
         result!.SetOutputSize(outputWidth, outputHeight);
         doc.Dispose();
         return result;

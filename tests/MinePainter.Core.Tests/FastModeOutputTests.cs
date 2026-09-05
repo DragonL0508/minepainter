@@ -416,4 +416,111 @@ public class FastModeOutputTests
             Assert.Equal(960, scaled.Width);
         }
     }
+    /// <summary>效果的選取遮罩是 doc 座標的，放大時要跟著重取樣，不然遮罩只蓋到左上角。</summary>
+    [Fact]
+    public void 效果的遮罩會跟著放大()
+    {
+        using var doc = ImageCodec.CreateBlankDocument(480, 270, SKColors.Transparent);
+        var layer = new RasterLayer { Name = "圖" };
+        layer.Surface.Fill(new SKRectI(0, 0, 480, 270), SKColors.Red);
+
+        // 遮罩：左半邊（0..240）
+        var mask = new Tiles.MaskSurface();
+        var rect = new SKRectI(0, 0, 240, 270);
+        foreach (var idx in Tiles.TileIndex.CoveringRect(rect))
+        {
+            var tile = mask.GetForWrite(idx);
+            var tileRect = idx.ToPixelRect();
+            var inter = SKRectI.Intersect(tileRect, rect);
+            for (var y = inter.Top; y < inter.Bottom; y++)
+                tile.Alpha.AsSpan((y - tileRect.Top) * Tiles.MaskTile.Size + (inter.Left - tileRect.Left), inter.Width).Fill(255);
+        }
+        mask.ExtendBounds(rect);
+
+        lock (doc.SyncRoot)
+        {
+            doc.Root.Add(layer);
+            layer.SetEffects([LayerEffect.Create(new GaussianBlurEffect { Radius = 8 }) with { Mask = mask }]);
+        }
+
+        using var scaled = OutputRender.CloneScaled(doc, 1920, 1080);
+        var copy = Assert.IsType<RasterLayer>(scaled.Root.Children.First(c => c.Name == "圖"));
+        var scaledMask = copy.Effects[0].Mask;
+        Assert.NotNull(scaledMask);
+        Assert.Equal(new SKRectI(0, 0, 960, 1080), scaledMask.Bounds);
+
+        static byte Alpha(Tiles.MaskSurface m, int x, int y)
+        {
+            var idx = Tiles.TileIndex.FromPixel(x, y);
+            var tile = m.GetForRead(idx);
+            if (tile == null) return 0;
+            var r = idx.ToPixelRect();
+            return tile.Alpha[(y - r.Top) * Tiles.MaskTile.Size + (x - r.Left)];
+        }
+        Assert.Equal(255, Alpha(scaledMask, 900, 1000)); // 原本 225,250 在遮罩內
+        Assert.Equal(0, Alpha(scaledMask, 1200, 500));   // 右半邊沒遮罩
+    }
+
+    /// <summary>調整影像大小之後復原：原始高清來源要接回去（縮放時只是借用，不是釋放）。</summary>
+    [Fact]
+    public void 調整影像大小復原後_原始高清來源還在()
+    {
+        const int side = 256;
+        using var session = new Tools.EditorSession(ImageCodec.CreateBlankDocument(side, side, SKColors.White));
+        var doc = session.Document;
+        var layer = Assert.IsType<RasterLayer>(doc.ActiveLayer);
+        lock (doc.SyncRoot) layer.Surface.Fill(new SKRectI(0, 0, side, side), SKColors.Black);
+
+        // 第一次縮小：留下原始來源
+        History.ImageCommands.ResizeImage(session, 128, 128);
+        var first = layer.ValidPixelSource;
+        Assert.NotNull(first);
+
+        // 再縮一次：新來源要串在同一張原圖上（不是拿 128 的再拍一次）
+        History.ImageCommands.ResizeImage(session, 64, 64);
+        var second = layer.ValidPixelSource;
+        Assert.NotNull(second);
+        Assert.Same(first.Pixels, second.Pixels);
+        Assert.Equal(side, second.Bounds.Width);
+
+        session.History.Undo();
+        Assert.Equal(128, doc.Width);
+        Assert.Same(first, layer.ValidPixelSource);
+        Assert.Equal(side, first.Bounds.Width); // 原圖沒被釋放：還讀得到
+
+        session.History.Undo();
+        Assert.Equal(side, doc.Width);
+        Assert.Null(layer.ValidPixelSource);
+    }
+
+    /// <summary>復原一次再放大回去（重做）：從原圖重畫，細節要回來。</summary>
+    [Fact]
+    public void 縮小再放大回去_是從原始像素重畫的()
+    {
+        const int side = 512;
+        using var session = new Tools.EditorSession(ImageCodec.CreateBlankDocument(side, side, SKColors.White));
+        var doc = session.Document;
+        var layer = Assert.IsType<RasterLayer>(doc.ActiveLayer);
+        lock (doc.SyncRoot)
+        {
+            for (var y = 0; y < side; y += 4)
+            for (var x = 0; x < side; x += 4)
+                layer.Surface.Fill(new SKRectI(x, y, x + 4, y + 4), ((x / 4) + (y / 4)) % 2 == 0 ? SKColors.Black : SKColors.White);
+        }
+
+        History.ImageCommands.ResizeImage(session, 128, 128);
+        History.ImageCommands.ResizeImage(session, side, side);
+        Assert.Equal(side, doc.Width);
+
+        using var bitmap = History.ImageCommands.ReadRegion(layer.Surface, new SKRectI(0, 0, side, side));
+        var crisp = 0;
+        for (var y = 0; y < side; y += 2)
+        for (var x = 0; x < side; x += 2)
+        {
+            var p = bitmap.GetPixel(x, y);
+            if (p.Red < 30 || p.Red > 225) crisp++;
+        }
+        var sampled = (side / 2) * (side / 2);
+        Assert.True(crisp > sampled * 0.8, $"只有 {crisp}/{sampled} 個像素銳利 —— 是拿 128 的放大，不是從原圖重畫");
+    }
 }

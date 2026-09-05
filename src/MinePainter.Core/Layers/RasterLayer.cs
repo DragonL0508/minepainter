@@ -55,6 +55,17 @@ public sealed class RasterLayer : LayerNode, IDisposable
         }
     }
 
+    /// <summary>
+    /// 把原始高清來源從圖層拿走但不釋放（undo 要留著它、或要把它接到別的表面上時用）。
+    /// 之後 <see cref="ReplaceSurface"/> 就不會把它 Dispose 掉。
+    /// </summary>
+    internal LayerPixelSource? TakePixelSource()
+    {
+        var source = _pixelSource;
+        _pixelSource = null;
+        return source;
+    }
+
     /// <summary>換掉（或清掉）原始高清來源；舊的就地釋放。</summary>
     public void SetPixelSource(LayerPixelSource? source)
     {
