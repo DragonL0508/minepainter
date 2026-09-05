@@ -2,7 +2,11 @@ using SkiaSharp;
 
 namespace MinePainter.Core.Layers;
 
-/// <summary>使用者可見的混合模式；合成時映射到 SKBlendMode。</summary>
+/// <summary>
+/// 使用者可見的混合模式；合成時映射到 SKBlendMode。Additive 之後的是 Photoshop 專有、Skia 沒有的模式，
+/// 由 <see cref="Compositing.CustomBlend"/> 自己逐像素算（GPU 路徑遇到就退回 CPU 合成）。
+/// .mpp 存的是名稱：舊版程式讀到不認得的名稱會退成一般（Enum.TryParse 失敗），檔案照樣開得起來。
+/// </summary>
 public enum BlendMode
 {
     Normal,
@@ -22,6 +26,15 @@ public enum BlendMode
     Color,
     Luminosity,
     Additive,
+    LinearBurn,
+    LinearLight,
+    VividLight,
+    PinLight,
+    HardMix,
+    DarkerColor,
+    LighterColor,
+    Subtract,
+    Divide,
 }
 
 public static class BlendModeExtensions
@@ -45,6 +58,6 @@ public static class BlendModeExtensions
         BlendMode.Color => SKBlendMode.Color,
         BlendMode.Luminosity => SKBlendMode.Luminosity,
         BlendMode.Additive => SKBlendMode.Plus,
-        _ => SKBlendMode.SrcOver,
+        _ => SKBlendMode.SrcOver,   // 自訂模式：Skia 這裡當一般，真正的混合在 CustomBlend
     };
 }

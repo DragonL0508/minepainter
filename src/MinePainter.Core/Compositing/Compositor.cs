@@ -785,7 +785,7 @@ public sealed class Compositor : IDisposable
                         break;
                     }
 
-                    if (!strokeHere && elementTile == null && !floatingHere)
+                    if (!strokeHere && elementTile == null && !floatingHere && !CustomBlend.IsCustom(raster.BlendMode))
                     {
                         drew |= CompositeRaster(raster, canvas, tileRect);
                         break;
@@ -798,11 +798,16 @@ public sealed class Compositor : IDisposable
                     // 但 SrcOver 有結合律：正常混合 + 不透明度 100% + 不是橡皮擦時，
                     // 直接畫在同一張 canvas 上的結果完全相同 —— 省下的那張 256KB 離屏緩衝
                     // （配置 + 清空 + 疊回）是拖曳大片浮動內容時每格最貴的一筆。
+                    var custom = CustomBlend.IsCustom(raster.BlendMode);
                     var isolate = raster.Opacity < 1f ||
                                   raster.BlendMode != BlendMode.Normal ||
                                   (strokeHere && stroke!.IsEraser);
 
-                    if (isolate)
+                    // Skia 沒有的混合模式：內容先隔離畫到一格暫存 tile，再由 CustomBlend 逐像素疊上去
+                    using var scratch = custom ? SKSurface.Create(Tile.Info) : null;
+                    var target = scratch?.Canvas ?? canvas;
+                    if (custom) target.Clear(SKColors.Transparent);
+                    else if (isolate)
                     {
                         using var layerPaint = new SKPaint
                         {
@@ -812,23 +817,29 @@ public sealed class Compositor : IDisposable
                         canvas.SaveLayer(layerPaint);
                     }
 
-                    CompositeRasterContent(raster, canvas, tileRect, isolate ? 1f : raster.Opacity);
-                    if (strokeHere) DrawStrokeOverlay(stroke!, canvas, tileRect);
+                    CompositeRasterContent(raster, target, tileRect, isolate ? 1f : raster.Opacity);
+                    if (strokeHere) DrawStrokeOverlay(stroke!, target, tileRect);
                     if (floatingHere)
                     {
-                        canvas.Save();
-                        canvas.Translate(-tileRect.Left, -tileRect.Top);
-                        floating!.DrawInto(canvas, preview: true);
-                        canvas.Restore();
+                        target.Save();
+                        target.Translate(-tileRect.Left, -tileRect.Top);
+                        floating!.DrawInto(target, preview: true);
+                        target.Restore();
                     }
                     if (elementTile != null)
                     {
                         using var pixmap = elementTile.AsPixmap();
                         using var img = SKImage.FromPixels(pixmap);
-                        canvas.DrawImage(img, 0, 0);
+                        target.DrawImage(img, 0, 0);
                     }
 
-                    if (isolate) canvas.Restore();
+                    if (custom)
+                    {
+                        target.Flush();
+                        using var content = scratch!.Snapshot();
+                        CustomBlend.DrawImage(surface, content, 0, 0, raster.Opacity, raster.BlendMode);
+                    }
+                    else if (isolate) canvas.Restore();
                     drew = true;
                     break;
                 }
@@ -844,14 +855,21 @@ public sealed class Compositor : IDisposable
                         : RenderGroupTile(nested, tileRect, strokeBuffer, floating, detachedLayer);
                     if (contentTile != null)
                     {
-                        using var paint = new SKPaint
-                        {
-                            Color = new SKColor(255, 255, 255, (byte)(nested.Opacity * 255)),
-                            BlendMode = nested.BlendMode.ToSkia(),
-                        };
                         using var pixmap = contentTile.AsPixmap();
                         using var img = SKImage.FromPixels(pixmap);
-                        canvas.DrawImage(img, 0, 0, paint);
+                        if (CustomBlend.IsCustom(nested.BlendMode))
+                        {
+                            CustomBlend.DrawImage(surface, img, 0, 0, nested.Opacity, nested.BlendMode);
+                        }
+                        else
+                        {
+                            using var paint = new SKPaint
+                            {
+                                Color = new SKColor(255, 255, 255, (byte)(nested.Opacity * 255)),
+                                BlendMode = nested.BlendMode.ToSkia(),
+                            };
+                            canvas.DrawImage(img, 0, 0, paint);
+                        }
                         drew = true;
                     }
                     break;

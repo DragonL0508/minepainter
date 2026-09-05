@@ -335,7 +335,7 @@ public class PsdFormatTests
             new PsdWriter.Layer("title", new SKRectI(0, 0, 2, 2))
             {
                 ExtraKeys = { "TySh" },
-                BlendKey = "vLit",
+                BlendKey = "diss",   // 溶解：Skia 與我們都沒有，退回一般並提示
                 Channels = { [0] = Solid(2, 2, 1), [1] = Solid(2, 2, 1), [2] = Solid(2, 2, 1), [-1] = Solid(2, 2, 255) },
             },
         ]);
@@ -344,10 +344,10 @@ public class PsdFormatTests
 
         var layer = Assert.IsType<RasterLayer>(Assert.Single(doc.Root.Children));
         Assert.Equal("title", layer.Name);
-        Assert.Equal(BlendMode.HardLight, layer.BlendMode);
+        Assert.Equal(BlendMode.Normal, layer.BlendMode);
         Assert.Contains(warnings, w => w.Contains("levels") && w.Contains("略過"));
         Assert.Contains(warnings, w => w.Contains("文字圖層"));
-        Assert.Contains(warnings, w => w.Contains("強烈光源"));
+        Assert.Contains(warnings, w => w.Contains("溶解"));
     }
 
     [Fact]

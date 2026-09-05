@@ -153,7 +153,19 @@ public sealed unsafe class GpuLayerRenderer : IDisposable
         // 而覆疊本來就只在「上面沒有看得見的東西」時才成立），這裡照常畫圖層樹即可 ——
         // 被變形的那層此刻沒有像素（手勢開始時已經拆下來），畫出來也是空的。
 
-        return true;
+        // Skia 沒有的混合模式（Photoshop 專有）要逐像素算，GPU 這條路畫不出來：整份退回 CPU 合成器
+        return !HasCustomBlend(session.Document.Root);
+    }
+
+    private static bool HasCustomBlend(GroupLayer group)
+    {
+        foreach (var child in group.Children)
+        {
+            if (!child.IsVisible) continue;
+            if (Core.Compositing.CustomBlend.IsCustom(child.BlendMode)) return true;
+            if (child is GroupLayer nested && HasCustomBlend(nested)) return true;
+        }
+        return false;
     }
 
     /// <summary>

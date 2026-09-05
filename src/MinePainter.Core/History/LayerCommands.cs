@@ -481,20 +481,35 @@ public static class LayerCommands
                 if (el.Bounds.IntersectsWith(tileDoc)) el.Render(canvas);
             }
 
-            // 2) 上層（像素＋文字）以上層的 opacity/blend 整體疊上（隔離層：物件與像素重疊處不算兩次）
-            canvas.SaveLayer(paint);
+            // 2) 上層（像素＋文字）以上層的 opacity/blend 整體疊上（隔離層：物件與像素重疊處不算兩次）。
+            //    Skia 沒有的混合模式：先畫到暫存 tile，再由 CustomBlend 疊上去。
+            var custom = Compositing.CustomBlend.IsCustom(source.BlendMode);
+            using var scratch = custom ? SKSurface.Create(Tile.Info) : null;
+            var drawInto = scratch?.Canvas ?? canvas;
+            if (custom)
+            {
+                drawInto.Clear(SKColors.Transparent);
+                drawInto.Translate(-tileRect.Left - target.Offset.X, -tileRect.Top - target.Offset.Y);   // 與 canvas 同一套座標
+            }
+            else canvas.SaveLayer(paint);
             foreach (var (srcIdx, srcTile) in source.Surface.Tiles)
             {
                 var srcRect = srcIdx.ToPixelRect();
                 using var pixmap = srcTile.AsPixmap();
                 using var img = SKImage.FromPixels(pixmap);
-                canvas.DrawImage(img, srcRect.Left + source.Offset.X, srcRect.Top + source.Offset.Y);
+                drawInto.DrawImage(img, srcRect.Left + source.Offset.X, srcRect.Top + source.Offset.Y);
             }
             foreach (var el in sourceElements)
             {
-                if (el.Bounds.IntersectsWith(tileDoc)) el.Render(canvas);
+                if (el.Bounds.IntersectsWith(tileDoc)) el.Render(drawInto);
             }
-            canvas.Restore();
+            if (custom)
+            {
+                drawInto.Flush();
+                using var content = scratch!.Snapshot();
+                Compositing.CustomBlend.DrawImage(surface, content, 0, 0, source.Opacity, source.BlendMode);
+            }
+            else canvas.Restore();
             canvas.Flush();
             if (tile.IsBlank()) target.Surface.RemoveTile(idx);
         }

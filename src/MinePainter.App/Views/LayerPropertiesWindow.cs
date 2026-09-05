@@ -36,6 +36,9 @@ public sealed class LayerPropertiesWindow : Window
         (BlendMode.Difference, "差異化"), (BlendMode.Exclusion, "排除"),
         (BlendMode.Hue, "色相"), (BlendMode.Saturation, "飽和度"),
         (BlendMode.Color, "顏色"), (BlendMode.Luminosity, "明度"), (BlendMode.Additive, "線性加亮"),
+        (BlendMode.LinearBurn, "線性加深"), (BlendMode.LinearLight, "線性光源"), (BlendMode.VividLight, "強烈光源"),
+        (BlendMode.PinLight, "小光源"), (BlendMode.HardMix, "實色疊印混合"), (BlendMode.DarkerColor, "顏色變暗"),
+        (BlendMode.LighterColor, "顏色變亮"), (BlendMode.Subtract, "減去"), (BlendMode.Divide, "分割"),
     ];
 
     private readonly EditorSession _session;

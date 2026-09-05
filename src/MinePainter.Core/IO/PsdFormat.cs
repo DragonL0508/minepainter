@@ -1102,21 +1102,21 @@ public static class PsdFormat
             case "colr": return BlendMode.Color;
             case "lum ": return BlendMode.Luminosity;
             case "lddg": return BlendMode.Additive;
+            case "lbrn": return BlendMode.LinearBurn;
+            case "lLit": return BlendMode.LinearLight;
+            case "vLit": return BlendMode.VividLight;
+            case "pLit": return BlendMode.PinLight;
+            case "hMix": return BlendMode.HardMix;
+            case "dkCl": return BlendMode.DarkerColor;
+            case "lgCl": return BlendMode.LighterColor;
+            case "fsub": return BlendMode.Subtract;
+            case "fdiv": return BlendMode.Divide;
         }
 
         // Skia 沒有的算式，挑最接近的頂著並提示
         var (fallback, label) = key switch
         {
             "diss" => (BlendMode.Normal, "溶解"),
-            "lbrn" => (BlendMode.Multiply, "線性加深"),
-            "dkCl" => (BlendMode.Darken, "顏色變暗"),
-            "lgCl" => (BlendMode.Lighten, "顏色變亮"),
-            "vLit" => (BlendMode.HardLight, "強烈光源"),
-            "lLit" => (BlendMode.HardLight, "線性光源"),
-            "pLit" => (BlendMode.HardLight, "小光源"),
-            "hMix" => (BlendMode.HardLight, "實色疊印混合"),
-            "fsub" => (BlendMode.Difference, "減去"),
-            "fdiv" => (BlendMode.ColorDodge, "分割"),
             _ => (BlendMode.Normal, key.Trim()),
         };
         notes.Add($"{(isGroup ? "群組" : "圖層")}「{name}」的混合模式「{label}」沒有對應，已改為{Describe(fallback)}。");
