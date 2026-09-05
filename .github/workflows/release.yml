@@ -38,8 +38,8 @@ jobs:
           "version=$v" >> $env:GITHUB_OUTPUT
           "tag=v$v" >> $env:GITHUB_OUTPUT
 
-      - name: 跑測試
-        run: dotnet test tests/MinePainter.Core.Tests -c Release --nologo
+      - name: 跑測試（Core＋App headless）
+        run: dotnet test MinePainter.sln -c Release --nologo
 
       # 沿用本機那支 publish.bat：發佈參數只有一份，CI 產出的 exe 與本機一模一樣
       - name: 建置自包含版（對方不必裝 .NET）

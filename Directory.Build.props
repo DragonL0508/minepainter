@@ -8,6 +8,8 @@
     <InvariantGlobalization>false</InvariantGlobalization>
     <!-- 只出 x64（Windows 優先；原生相依都是 x64） -->
     <PlatformTarget>x64</PlatformTarget>
+    <!-- 建置必須零警告（README「開發」的守則）：本機、CI、publish 一律當錯誤 -->
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
 
   <!--
