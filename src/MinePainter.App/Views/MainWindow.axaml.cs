@@ -106,6 +106,7 @@ public partial class MainWindow : Window
         Services.ShortcutMap.Changed += SyncMenuGestures; // 重新綁定後選單顯示跟著換
 
         Canvas.StateChanged += RefreshUiState;
+        Canvas.ToolWheel += OnToolWheel;
         Canvas.TextEditRequested += StartCanvasTextEdit;
         Canvas.SmoothZoom = Services.AppSettings.Instance.SmoothZoom;
         SmoothZoomMenuItem.IsChecked = Canvas.SmoothZoom;
@@ -1061,6 +1062,26 @@ public partial class MainWindow : Window
         UpdateToolOptions(key);
         if (changed) Toasts.Show($"工具：{session.ActiveTool.Name}");
         if (key != "text") Canvas.Focus();
+    }
+
+    /// <summary>
+    /// 畫布上的滾輪手勢落到工具選項（設定 → 快捷鍵 → 滾輪，預設 Alt + 滾輪＝筆刷大小）：
+    /// 動的就是工具列上那個控制項，級距、上下限、連動都與直接在上面滾一樣。
+    /// 目前工具沒有那個選項時（移動工具沒有筆刷大小）什麼都不做。
+    /// </summary>
+    private void OnToolWheel(string id, int direction, int notches)
+    {
+        switch (id)
+        {
+            case "wheel.brushSize" when SizeGroup.IsVisible:
+                SizeBox.StepBy(direction, notches);
+                Toasts.Show($"大小：{SizeBox.Value:0}");
+                break;
+            case "wheel.brushOpacity" when OpacityGroup.IsVisible:
+                OpacityBar.StepBy(direction, notches);
+                Toasts.Show($"不透明度：{OpacityBar.Value:0}%");
+                break;
+        }
     }
 
     /// <summary>依工具顯示對應的選項群組（單行內切換，不改變工具列高度）。</summary>

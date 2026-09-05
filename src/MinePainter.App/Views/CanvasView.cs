@@ -519,6 +519,12 @@ public sealed class CanvasView : Control
     /// <summary>滾輪平移一格走多少「檢視像素」（與縮放無關，手感固定）。</summary>
     private const double WheelPanStep = 60;
 
+    /// <summary>
+    /// 畫布以外的滾輪動作（筆刷大小之類）：工具選項列在主視窗，交給它處理。
+    /// 參數＝動作 id、方向（+1 變大／−1 變小，已照全專案的滾輪約定換算）、格數。
+    /// </summary>
+    public event Action<string, int, int>? ToolWheel;
+
     protected override void OnPointerWheelChanged(PointerWheelEventArgs e)
     {
         base.OnPointerWheelChanged(e);
@@ -526,20 +532,25 @@ public sealed class CanvasView : Control
         // 垂直滾輪為主；橫向滾輪（傾斜輪/觸控板）沒有 Y 時退而取 X
         var delta = e.Delta.Y != 0 ? e.Delta.Y : e.Delta.X;
 
-        // 平移改的也是目標值，跟縮放共用同一套插值，滾起來一樣是連續的。
-        // 往上滾 = 內容往下/往右走（跟捲軸同向）。
-        if (e.KeyModifiers.HasFlag(KeyModifiers.Control))
+        // 哪組修飾鍵做什麼是可設定的（設定 → 快捷鍵 → 滾輪）
+        switch (Services.WheelMap.Match(e.KeyModifiers))
         {
-            var factor = Math.Pow(1.18, delta);
-            _targetViewport = _targetViewport.ZoomAt(e.GetPosition(this), factor);
-        }
-        else if (e.KeyModifiers.HasFlag(KeyModifiers.Shift))
-        {
-            _targetViewport = _targetViewport.PanBy(delta * WheelPanStep, 0);
-        }
-        else
-        {
-            _targetViewport = _targetViewport.PanBy(0, delta * WheelPanStep);
+            // 平移改的也是目標值，跟縮放共用同一套插值，滾起來一樣是連續的。
+            // 往上滾 = 內容往下/往右走（跟捲軸同向）。
+            case "wheel.zoom":
+                _targetViewport = _targetViewport.ZoomAt(e.GetPosition(this), Math.Pow(1.18, delta));
+                break;
+            case "wheel.panHorizontal":
+                _targetViewport = _targetViewport.PanBy(delta * WheelPanStep, 0);
+                break;
+            case "wheel.panVertical":
+                _targetViewport = _targetViewport.PanBy(0, delta * WheelPanStep);
+                break;
+            case { } id:
+                ToolWheel?.Invoke(id, Controls.WheelInput.Direction(e), Controls.WheelInput.Notches(e));
+                break;
+            default:
+                return; // 這組修飾鍵沒綁任何動作：讓事件繼續往上跑
         }
         e.Handled = true;
     }

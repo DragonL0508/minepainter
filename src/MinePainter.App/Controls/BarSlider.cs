@@ -353,10 +353,20 @@ public sealed class BarSlider : Control
     protected override void OnPointerWheelChanged(PointerWheelEventArgs e)
     {
         base.OnPointerWheelChanged(e);
-        var step = Decimals > 0 ? Math.Pow(10, -Decimals) : Math.Max(1, (Maximum - Minimum) / 100);
-        SetAndNotify(Value + WheelInput.Direction(e) * WheelInput.Notches(e) * step); // 往下滾＝變大
-        DragCompleted?.Invoke(Value);
+        StepBy(WheelInput.Direction(e), WheelInput.Notches(e));
         e.Handled = true;
+    }
+
+    /// <summary>
+    /// 走一格（direction：+1 變大、−1 變小）。畫布上的滾輪手勢要動的是工具列上這條拉條，
+    /// 級距與通知都該與直接在拉條上滾一樣。
+    /// </summary>
+    public void StepBy(int direction, int notches = 1)
+    {
+        if (direction == 0) return;
+        var step = Decimals > 0 ? Math.Pow(10, -Decimals) : Math.Max(1, (Maximum - Minimum) / 100);
+        SetAndNotify(Value + direction * Math.Max(1, notches) * step); // 往下滾＝變大
+        DragCompleted?.Invoke(Value);
     }
 
     /// <summary>右鍵輸入數值：小視窗一個文字框，Enter 套用（夾在範圍內）、Esc 關閉。</summary>

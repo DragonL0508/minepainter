@@ -133,16 +133,21 @@ public sealed class NumberBox : UserControl
     protected override void OnPointerWheelChanged(PointerWheelEventArgs e)
     {
         base.OnPointerWheelChanged(e);
-        var up = WheelInput.Direction(e); // 往下滾＝變大
-        if (up != 0)
-        {
-            var notches = WheelInput.Notches(e);
-            var v = _value;
-            for (var i = 0; i < notches; i++)
-                v = AdaptiveStep ? NextAdaptive(v, up > 0) : v + up * Step;
-            SetAndNotify(v);
-        }
+        StepBy(WheelInput.Direction(e), WheelInput.Notches(e));
         e.Handled = true;
+    }
+
+    /// <summary>
+    /// 走一格（direction：+1 變大、−1 變小）。畫布上的滾輪手勢（Alt + 滾輪＝筆刷大小）
+    /// 要動的是工具列上這個框，級距、上下限、通知都該與直接在框上滾一模一樣。
+    /// </summary>
+    public void StepBy(int direction, int notches = 1)
+    {
+        if (direction == 0) return;
+        var v = _value;
+        for (var i = 0; i < Math.Max(1, notches); i++)
+            v = AdaptiveStep ? NextAdaptive(v, direction > 0) : v + direction * Step;
+        SetAndNotify(v);
     }
 
     /// <summary>數值越大，一格的級距越大：1、2、5、10、20、50、100…</summary>

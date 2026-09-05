@@ -16,8 +16,14 @@ public sealed class AppSettings
     /// <summary>背景圖不透明度（%），預設 10。</summary>
     public int BackdropOpacity { get; set; } = 10;
 
-    /// <summary>快捷鍵覆寫：指令 id → 手勢字串（"" = 已清除）。沒列的用預設值。</summary>
+    /// <summary>
+    /// 快捷鍵覆寫：指令 id → 手勢字串（"" = 已清除）。沒列的用預設值。
+    /// 副鍵的鍵是「id#alt」（見 <see cref="ShortcutMap"/>）。
+    /// </summary>
     public Dictionary<string, string> Shortcuts { get; set; } = new();
+
+    /// <summary>滾輪手勢覆寫：動作 id → 修飾鍵（"" = 沒綁）。沒列的用預設值（見 <see cref="WheelMap"/>）。</summary>
+    public Dictionary<string, string> WheelGestures { get; set; } = new();
 
     /// <summary>調色盤「最近使用」（RRGGBB，最新在前）。</summary>
     public List<string> RecentColors { get; set; } = new();

@@ -11,12 +11,17 @@ namespace MinePainter.App.Views.Settings;
 /// 設定 → 快捷鍵：所有指令依分類列出，每個指令兩格（主鍵／副鍵）——
 /// 點一格的按鍵鈕後直接按下新組合鍵重新綁定（Esc 取消、Backspace 清除）。
 /// 撞到別的指令會自動解除對方並提示。
-/// 上方搜尋框可依指令名稱／分類／按鍵過濾（同 VS Code 的快捷鍵頁）。
+///
+/// 最後一段是「滾輪」：滾輪手勢錄不進按鍵表（沒有 Key 可以填），所以另外一張表
+/// （<see cref="WheelMap"/>），綁定方式是「按下按鈕之後直接在上面滾一下滑鼠」。
+///
+/// 上方搜尋框可依名稱／分類／按鍵過濾（同 VS Code 的快捷鍵頁）。
 /// 變更立即生效（MainWindow 與 CanvasView 查同一張表）；設定視窗關窗後 Save。
 /// </summary>
 public sealed class ShortcutsSettingsPage : SettingsPage
 {
-    public override string Description => "點一列右邊的按鍵鈕，然後直接按下新的組合鍵。每個指令可以綁兩組鍵。";
+    public override string Description =>
+        "點一列右邊的按鍵鈕，然後直接按下新的組合鍵；每個指令可以綁兩組。最下面是滾輪手勢。";
 
     private readonly Dictionary<(string Id, int Slot), Button> _gestureButtons = new();
     private readonly List<(ShortcutDef Def, Control Row)> _rows = [];
@@ -36,7 +41,15 @@ public sealed class ShortcutsSettingsPage : SettingsPage
         Text = "",
     };
 
+    private readonly Dictionary<string, Button> _wheelButtons = new();
+    private readonly List<(WheelDef Def, Control Row)> _wheelRows = [];
+
     private (string Id, int Slot)? _capturing;
+
+    /// <summary>正在等使用者滾一下滑鼠的滾輪動作 id（null = 沒在錄）。</summary>
+    private string? _capturingWheel;
+
+    private const string WheelCategory = "滾輪";
 
     public ShortcutsSettingsPage()
     {
@@ -63,13 +76,38 @@ public sealed class ShortcutsSettingsPage : SettingsPage
             list.Children.Add(row);
         }
 
+        // ---- 滾輪 ----
+        var wheelHeader = new TextBlock
+        {
+            Text = WheelCategory,
+            FontSize = 12,
+            FontWeight = FontWeight.Bold,
+            Margin = new Thickness(0, 10, 0, 3),
+        };
+        _headers.Add((WheelCategory, wheelHeader));
+        list.Children.Add(wheelHeader);
+
+        var wheelNote = SettingsUi.Hint("按下按鈕之後，壓著想要的修飾鍵在按鈕上滾一下滑鼠即可綁定。");
+        wheelNote.Margin = new Thickness(0, 0, 0, 4);
+        _headers.Add((WheelCategory, wheelNote));
+        list.Children.Add(wheelNote);
+
+        foreach (var def in WheelMap.Defs)
+        {
+            var row = BuildWheelRow(def);
+            _wheelRows.Add((def, row));
+            list.Children.Add(row);
+        }
+
         _search.TextChanged += (_, _) => ApplyFilter();
 
         var resetButton = new Button { Content = "全部重設", FontSize = 12, Padding = new Thickness(14, 6) };
         resetButton.Click += (_, _) =>
         {
             _capturing = null;
+            _capturingWheel = null;
             ShortcutMap.ResetAll();
+            WheelMap.ResetAll();
             RefreshAllButtons();
             ApplyFilter(); // 重設後按鍵字串變了，過濾結果跟著更新
             _hint.Text = "已全部重設為預設值。";
@@ -100,6 +138,8 @@ public sealed class ShortcutsSettingsPage : SettingsPage
         {
             Children = { _search, footer, SettingsUi.Scroll(list) },
         };
+
+        AddHandler(PointerWheelChangedEvent, OnWheelTunnel, Avalonia.Interactivity.RoutingStrategies.Tunnel);
     }
 
     private Control BuildRow(ShortcutDef def)
@@ -140,6 +180,78 @@ public sealed class ShortcutsSettingsPage : SettingsPage
         };
     }
 
+    private Control BuildWheelRow(WheelDef def)
+    {
+        var name = new TextBlock
+        {
+            Text = def.Name,
+            FontSize = 12,
+            VerticalAlignment = VerticalAlignment.Center,
+            [ToolTip.TipProperty] = def.Hint,
+        };
+
+        var button = new Button
+        {
+            FontSize = 11,
+            MinWidth = 236, // 與上面兩格按鍵鈕（116×2 + 間距）對齊
+            Height = 24,
+            Padding = new Thickness(8, 2),
+            HorizontalContentAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            [ToolTip.TipProperty] = def.Hint,
+        };
+        button.Click += (_, _) => BeginWheelCapture(def.Id);
+        _wheelButtons[def.Id] = button;
+        RefreshWheelButton(def.Id);
+
+        DockPanel.SetDock(button, Dock.Right);
+        return new DockPanel
+        {
+            Margin = new Thickness(8, 0, 0, 0),
+            Children = { button, name },
+        };
+    }
+
+    private void BeginWheelCapture(string id)
+    {
+        if (_capturing is { } previous) RefreshButton(previous.Id, previous.Slot);
+        if (_capturingWheel != null) RefreshWheelButton(_capturingWheel);
+        _capturing = null;
+        _capturingWheel = id;
+        _wheelButtons[id].Content = "在這裡滾一下滑鼠…";
+        _hint.Text = "壓著想要的修飾鍵（可以都不壓）在按鈕上滾一下；Esc 取消、Backspace 取消綁定。";
+    }
+
+    /// <summary>
+    /// 錄製中的滾動＝這次的修飾鍵就是新綁定。
+    ///
+    /// 走 Tunnel（由外往內）而不是覆寫 OnPointerWheelChanged：按鈕外面就是清單的
+    /// ScrollViewer，冒泡的話會先被它吃掉去捲畫面，這裡永遠收不到。
+    /// </summary>
+    private void OnWheelTunnel(object? sender, PointerWheelEventArgs e)
+    {
+        if (_capturingWheel is not { } id) return;
+
+        _capturingWheel = null;
+        var displaced = WheelMap.Set(id, e.KeyModifiers);
+        RefreshAllWheelButtons();
+        e.Handled = true;
+
+        var name = WheelMap.Defs.First(d => d.Id == id).Name;
+        var gesture = WheelMap.Describe(e.KeyModifiers);
+        _hint.Text = displaced != null
+            ? $"「{name}」已綁定 {gesture}；原本用這組的「{displaced.Name}」已取消綁定。"
+            : $"「{name}」已綁定 {gesture}。";
+    }
+
+    private void RefreshWheelButton(string id) =>
+        _wheelButtons[id].Content = WheelMap.Describe(WheelMap.Get(id));
+
+    private void RefreshAllWheelButtons()
+    {
+        foreach (var id in _wheelButtons.Keys) RefreshWheelButton(id);
+    }
+
     /// <summary>依搜尋字串顯示／隱藏列；一個分類底下全被濾掉時連標題一起收起來。</summary>
     private void ApplyFilter()
     {
@@ -157,6 +269,16 @@ public sealed class ShortcutsSettingsPage : SettingsPage
             if (match) visibleCategories.Add(def.Category);
         }
 
+        foreach (var (def, row) in _wheelRows)
+        {
+            var match = query.Length == 0
+                || def.Name.Contains(query, StringComparison.OrdinalIgnoreCase)
+                || WheelCategory.Contains(query, StringComparison.OrdinalIgnoreCase)
+                || WheelMap.Describe(WheelMap.Get(def.Id)).Contains(query, StringComparison.OrdinalIgnoreCase);
+            row.IsVisible = match;
+            if (match) visibleCategories.Add(WheelCategory);
+        }
+
         foreach (var (category, header) in _headers)
             header.IsVisible = visibleCategories.Contains(category);
     }
@@ -165,6 +287,11 @@ public sealed class ShortcutsSettingsPage : SettingsPage
     {
         // 點另一格會先放掉上一個
         if (_capturing is { } previous) RefreshButton(previous.Id, previous.Slot);
+        if (_capturingWheel != null)
+        {
+            RefreshWheelButton(_capturingWheel);
+            _capturingWheel = null;
+        }
         _capturing = (id, slot);
         _gestureButtons[(id, slot)].Content = "按下組合鍵…";
         _hint.Text = "按下新的組合鍵；Esc 取消、Backspace 清除綁定。";
@@ -188,6 +315,26 @@ public sealed class ShortcutsSettingsPage : SettingsPage
 
     public override bool HandleKeyDown(KeyEventArgs e)
     {
+        // 滾輪錄製中：只認 Esc（取消）與 Backspace（取消綁定），其餘等滾輪
+        if (_capturingWheel is { } wheelId)
+        {
+            switch (e.Key)
+            {
+                case Key.Escape:
+                    _capturingWheel = null;
+                    RefreshWheelButton(wheelId);
+                    _hint.Text = "已取消。";
+                    return true;
+                case Key.Back:
+                    _capturingWheel = null;
+                    WheelMap.Set(wheelId, null);
+                    RefreshWheelButton(wheelId);
+                    _hint.Text = "已取消綁定。";
+                    return true;
+            }
+            return true;
+        }
+
         if (_capturing is not { } capturing)
         {
             // 沒在錄鍵時，Esc 先用來清搜尋（有東西可清才攔，不然照常關窗）
