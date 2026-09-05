@@ -159,4 +159,37 @@ public class AltDuplicateOnMoveTests
         Assert.Equal(layersBefore, doc.Root.Children.Count);
         Assert.Same(source, doc.ActiveLayer);
     }
+
+    [Fact]
+    public void 文字工具_Alt_拖文字也一樣複製到新圖層()
+    {
+        using var session = new EditorSession(ImageCodec.CreateBlankDocument(400, 300, SKColors.White));
+        var doc = session.Document;
+        var source = (RasterLayer)doc.ActiveLayer!;
+        var text = new TextElement
+        {
+            Text = "MinePainter",
+            FontSize = 48,
+            Color = SKColors.Black,
+            Position = new SKPoint(60, 120),
+        };
+        lock (doc.SyncRoot) source.AddElement(text);
+        var layersBefore = doc.Root.Children.Count;
+
+        // 先點一下選起來（最常見的情境：拖的就是現在選著的那個字）
+        session.Text.OnPointerDown(new ToolPointerEvent(new SKPoint(90, 100), 1f), session);
+        session.Text.OnPointerUp(new ToolPointerEvent(new SKPoint(90, 100), 1f), session);
+
+        session.Text.OnPointerDown(new ToolPointerEvent(new SKPoint(90, 100), 1f, ToolModifiers.Alt), session);
+        session.Text.OnPointerMove(new ToolPointerEvent(new SKPoint(190, 160), 1f, ToolModifiers.Alt), session);
+        session.Text.OnPointerUp(new ToolPointerEvent(new SKPoint(190, 160), 1f, ToolModifiers.Alt), session);
+
+        Assert.Equal(layersBefore + 1, doc.Root.Children.Count);
+        var copyLayer = (RasterLayer)doc.ActiveLayer!;
+        Assert.NotSame(source, copyLayer);
+        Assert.Equal(IndexOf(source) + 1, IndexOf(copyLayer));
+
+        Assert.Equal(text.Position, ((TextElement)source.Elements.Single()).Position);      // 原件沒動
+        Assert.NotEqual(text.Position, ((TextElement)copyLayer.Elements.Single()).Position); // 複本被拖走
+    }
 }

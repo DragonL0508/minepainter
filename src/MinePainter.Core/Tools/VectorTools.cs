@@ -8,6 +8,7 @@ namespace MinePainter.Core.Tools;
 /// <summary>
 /// 文字工具基底：把手縮放 / 點中元素移動（統一走 ElementDragHelper），
 /// 空白處交由子類建立新元素。
+/// 按住 Alt 拖曳＝複製到「原圖層上面一格」的新圖層再拖複本（與移動工具同一套）。
 /// </summary>
 public abstract class VectorToolBase : ITool
 {
@@ -28,12 +29,39 @@ public abstract class VectorToolBase : ITool
     public void OnPointerDown(ToolPointerEvent e, EditorSession session)
     {
         var doc = session.Document;
+        var alt = e.Modifiers.HasFlag(ToolModifiers.Alt); // Alt 拖曳＝複製（同移動工具）
 
-        // 1) 已選元素的把手/內部
+        // 1) 已選元素的把手（縮放）：Alt 在這裡沒有別的意思，先攔下來
+        if (_drag.TryBegin(session, e.DocPosition, HandleTolerance, allowInsideMove: false))
+            return;
+
+        // 2) Alt：點到哪個文字就複製哪個到「原圖層上面一格」的新圖層，拖走的是複本。
+        //    要擺在「已選元素內部」之前 —— 最常見的情境就是拖現在選著的那個文字。
+        if (alt)
+        {
+            string? copied = null;
+            lock (doc.SyncRoot)
+            {
+                if (VectorHitTest.FindTextAt(doc, e.DocPosition) is { } altHit &&
+                    LayerCommands.DuplicateElementToNewLayer(doc, session.History, altHit.Layer, altHit.Element)
+                        is { } duplicated)
+                {
+                    _drag.BeginMoveLocked(session, duplicated.Layer, duplicated.Element, e.DocPosition);
+                    copied = duplicated.Layer.Name;
+                }
+            }
+            if (copied != null)
+            {
+                session.Notify($"已複製物件到新圖層「{copied}」");
+                return;
+            }
+        }
+
+        // 3) 已選元素內部 → 移動
         if (_drag.TryBegin(session, e.DocPosition, HandleTolerance, allowInsideMove: true))
             return;
 
-        // 2) 點中任何可見文字元素 → 選取 + 移動
+        // 4) 點中任何可見文字元素 → 選取 + 移動
         lock (doc.SyncRoot)
         {
             if (VectorHitTest.FindTextAt(doc, e.DocPosition) is { } hit)
@@ -43,7 +71,7 @@ public abstract class VectorToolBase : ITool
             }
         }
 
-        // 3) 空白處 → 由子類決定（建立新元素）
+        // 5) 空白處 → 由子類決定（建立新元素）
         _creating = true;
         DragStart = e.DocPosition;
         OnCreateStart(e, session);
