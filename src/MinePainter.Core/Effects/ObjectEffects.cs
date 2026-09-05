@@ -334,6 +334,10 @@ public sealed record ObjectOutlineEffect : IEffect
     }
 
 
+    /// <summary>角度跟著物件轉（預設）：文字轉了 45°，這個方向也跟著轉；關掉＝以畫布為準。
+    /// 與傾斜、漸層的同名選項是同一件事（見 <see cref="EffectContext.ContentRotation"/>）。</summary>
+    public bool RelativeToObject { get; init; } = true;
+
     public string Name => "外框";
     public string Category => "物件";
 
@@ -366,6 +370,8 @@ public sealed record ObjectOutlineEffect : IEffect
             { LegacyStartKey = "color", LegacyEndKey = "gradientEnd" },
         new AngleParam("gradientAngle", "漸層角度", 0, 360, o => ((ObjectOutlineEffect)o).GradientAngle,
             (o, v) => ((ObjectOutlineEffect)o) with { GradientAngle = (float)v }),
+        new BoolParam("relative", "角度跟著物件轉", o => ((ObjectOutlineEffect)o).RelativeToObject,
+            (o, v) => ((ObjectOutlineEffect)o) with { RelativeToObject = v }),
     ];
     public IReadOnlyList<ParamDef> Parameters => Params;
 
@@ -387,7 +393,8 @@ public sealed record ObjectOutlineEffect : IEffect
             if (!bbox.IsEmpty)
             {
                 bbox.Inflate(width, width);
-                ramp = new GradientRamp(bbox, GradientAngle, radial: false, GradientStops);
+                ramp = new GradientRamp(bbox, ctx.FollowedAngleCw(GradientAngle, RelativeToObject),
+                    radial: false, GradientStops);
             }
         }
 
@@ -479,10 +486,22 @@ public sealed record ObjectShadowEffect : IEffect
     public int Opacity { get; init; } = 60;    // 0..100
     public SKColor Color { get; init; } = SKColors.Black;
 
+    /// <summary>方向跟著物件轉（預設）：文字轉了 45°，陰影也甩到 45° 那一側；關掉＝以畫布為準。
+    /// 與傾斜、漸層的同名選項是同一件事（見 <see cref="EffectContext.ContentRotation"/>）。</summary>
+    public bool RelativeToObject { get; init; } = true;
 
     public string Name => "陰影";
     public string Category => "物件";
-    public int SourceMargin => Math.Max(Math.Abs(OffsetX), Math.Abs(OffsetY)) + Thickness + GaussianMargin(Blur);
+
+    /// <summary>
+    /// 位移在單一軸上可能達到的最大值。跟著物件轉時方向會變、長度不變，
+    /// 所以餘裕要用向量長度算 —— 用 max(|X|,|Y|) 的話，轉 45° 的陰影會被裁掉一角。
+    /// </summary>
+    private int OffsetReach => RelativeToObject
+        ? (int)MathF.Ceiling(MathF.Sqrt((float)OffsetX * OffsetX + (float)OffsetY * OffsetY))
+        : Math.Max(Math.Abs(OffsetX), Math.Abs(OffsetY));
+
+    public int SourceMargin => OffsetReach + Thickness + GaussianMargin(Blur);
 
     private static readonly ParamDef[] Params =
     [
@@ -498,12 +517,17 @@ public sealed record ObjectShadowEffect : IEffect
             (o, v) => ((ObjectShadowEffect)o) with { Opacity = (int)v }, "%"),
         new ColorParam("color", "顏色", o => ((ObjectShadowEffect)o).Color,
             (o, v) => ((ObjectShadowEffect)o) with { Color = v }),
+        new BoolParam("relative", "方向跟著物件轉", o => ((ObjectShadowEffect)o).RelativeToObject,
+            (o, v) => ((ObjectShadowEffect)o) with { RelativeToObject = v }),
     ];
     public IReadOnlyList<ParamDef> Parameters => Params;
 
     public void Render(EffectContext ctx)
     {
-        var shadow = ShadowMask(ctx, OffsetX, OffsetY, 0, Blur, Color, Opacity / 100f, Thickness);
+        // 位移方向跟著物件轉：厚度是沿位移方向擠出的，所以擠出方向也一起跟著轉
+        var (ox, oy) = ctx.FollowedOffset(OffsetX, OffsetY, RelativeToObject);
+        var shadow = ShadowMask(ctx, (int)MathF.Round(ox), (int)MathF.Round(oy), 0, Blur,
+            Color, Opacity / 100f, Thickness);
         ctx.ForRows(y =>
         {
             for (var x = 0; x < ctx.Width; x++)
@@ -955,6 +979,10 @@ public sealed record InnerGlowEffect : IEffect
     /// <summary>畫布邊界也算物件邊（貼齊畫布邊的物件那一側要不要也發光）。</summary>
     public bool GlowCanvasEdge { get; init; }
 
+    /// <summary>角度跟著物件轉（預設）：文字轉了 45°，這個方向也跟著轉；關掉＝以畫布為準。
+    /// 與傾斜、漸層的同名選項是同一件事（見 <see cref="EffectContext.ContentRotation"/>）。</summary>
+    public bool RelativeToObject { get; init; } = true;
+
 
     public string Name => "內光暈";
     public string Category => "物件";
@@ -968,6 +996,9 @@ public sealed record InnerGlowEffect : IEffect
     private static readonly ParamDef AngleDef =
         new AngleParam("angle", "光源角度", 0, 360, o => ((InnerGlowEffect)o).Angle,
             (o, v) => ((InnerGlowEffect)o) with { Angle = (float)v });
+    private static readonly ParamDef RelativeDef =
+        new BoolParam("relative", "角度跟著物件轉", o => ((InnerGlowEffect)o).RelativeToObject,
+            (o, v) => ((InnerGlowEffect)o) with { RelativeToObject = v });
     private static readonly ParamDef[] Common =
     [
         new SliderParam("size", "大小", 1, 50, o => ((InnerGlowEffect)o).Size,
@@ -982,7 +1013,7 @@ public sealed record InnerGlowEffect : IEffect
             (o, v) => ((InnerGlowEffect)o) with { GlowCanvasEdge = v }),
     ];
     private static readonly ParamDef[] UniformParams = [ModeParam, .. Common];
-    private static readonly ParamDef[] DirectionalParams = [ModeParam, AngleDef, .. Common];
+    private static readonly ParamDef[] DirectionalParams = [ModeParam, AngleDef, RelativeDef, .. Common];
 
     // 角度轉盤只在「指定角度」時出現（ChoiceParam 改動會讓 ParamEditor 重建）
     public IReadOnlyList<ParamDef> Parameters => Directional ? DirectionalParams : UniformParams;
@@ -1001,7 +1032,7 @@ public sealed record InnerGlowEffect : IEffect
         var reach = spread + size;
 
         // 朝光源走的單位向量（螢幕座標 y 朝下，所以 sin 取負：90° = 往上找邊）
-        var rad = Angle * MathF.PI / 180f;
+        var rad = ctx.FollowedAngleCcw(Angle, RelativeToObject) * MathF.PI / 180f;
         var ux = MathF.Cos(rad);
         var uy = -MathF.Sin(rad);
 

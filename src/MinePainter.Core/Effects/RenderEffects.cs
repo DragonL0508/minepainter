@@ -113,6 +113,10 @@ public sealed record JuliaFractalEffect : IEffect
     public float Zoom { get; init; } = 1f;  // 0.1..50
     public float Angle { get; init; } = 0f;
 
+    /// <summary>角度跟著物件轉（預設）：文字轉了 45°，這個方向也跟著轉；關掉＝以畫布為準。
+    /// 與傾斜、漸層的同名選項是同一件事（見 <see cref="EffectContext.ContentRotation"/>）。</summary>
+    public bool RelativeToObject { get; init; } = true;
+
     public string Name => "茱莉亞碎形";
     public bool IsPositionIndependent => false;
     public string Category => "演算";
@@ -128,6 +132,8 @@ public sealed record JuliaFractalEffect : IEffect
             (o, v) => ((JuliaFractalEffect)o) with { Zoom = (float)v }, "", 1),
         new AngleParam("angle", "角度", -180, 180, o => ((JuliaFractalEffect)o).Angle,
             (o, v) => ((JuliaFractalEffect)o) with { Angle = (float)v }),
+        new BoolParam("relative", "角度跟著物件轉", o => ((JuliaFractalEffect)o).RelativeToObject,
+            (o, v) => ((JuliaFractalEffect)o) with { RelativeToObject = v }),
     ];
     public IReadOnlyList<ParamDef> Parameters => Params;
 
@@ -137,7 +143,7 @@ public sealed record JuliaFractalEffect : IEffect
         var cRe = -0.7f + Factor * 0.02f;
         var cIm = 0.27015f + Factor * 0.01f;
         var zoom = Math.Max(0.1f, Zoom);
-        var rad = Angle * MathF.PI / 180f;
+        var rad = ctx.FollowedAngleCcw(Angle, RelativeToObject) * MathF.PI / 180f;
         var cos = MathF.Cos(rad);
         var sin = MathF.Sin(rad);
         var half = Math.Max(ctx.Width, ctx.Height) / 2f;
@@ -173,6 +179,10 @@ public sealed record MandelbrotFractalEffect : IEffect
     public float Angle { get; init; } = 0f;
     public bool Invert { get; init; }
 
+    /// <summary>角度跟著物件轉（預設）：文字轉了 45°，這個方向也跟著轉；關掉＝以畫布為準。
+    /// 與傾斜、漸層的同名選項是同一件事（見 <see cref="EffectContext.ContentRotation"/>）。</summary>
+    public bool RelativeToObject { get; init; } = true;
+
     public string Name => "曼德博碎形";
     public bool IsPositionIndependent => false;
     public string Category => "演算";
@@ -190,6 +200,8 @@ public sealed record MandelbrotFractalEffect : IEffect
             (o, v) => ((MandelbrotFractalEffect)o) with { Angle = (float)v }),
         new BoolParam("invert", "反轉顏色", o => ((MandelbrotFractalEffect)o).Invert,
             (o, v) => ((MandelbrotFractalEffect)o) with { Invert = v }),
+        new BoolParam("relative", "角度跟著物件轉", o => ((MandelbrotFractalEffect)o).RelativeToObject,
+            (o, v) => ((MandelbrotFractalEffect)o) with { RelativeToObject = v }),
     ];
     public IReadOnlyList<ParamDef> Parameters => Params;
 
@@ -197,7 +209,7 @@ public sealed record MandelbrotFractalEffect : IEffect
     {
         var maxIter = 48 * Math.Clamp(Quality, 1, 5) + Factor * 8;
         var zoom = Math.Max(0.1f, Zoom) / 10f;
-        var rad = Angle * MathF.PI / 180f;
+        var rad = ctx.FollowedAngleCcw(Angle, RelativeToObject) * MathF.PI / 180f;
         var cos = MathF.Cos(rad);
         var sin = MathF.Sin(rad);
         var half = Math.Max(ctx.Width, ctx.Height) / 2f;

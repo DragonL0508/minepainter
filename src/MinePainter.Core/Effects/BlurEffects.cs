@@ -169,6 +169,10 @@ public sealed record MotionBlurEffect : IEffect
     public int Distance { get; init; } = 10;   // 1..200
     public bool Centered { get; init; } = true;
 
+    /// <summary>角度跟著物件轉（預設）：文字轉了 45°，這個方向也跟著轉；關掉＝以畫布為準。
+    /// 與傾斜、漸層的同名選項是同一件事（見 <see cref="EffectContext.ContentRotation"/>）。</summary>
+    public bool RelativeToObject { get; init; } = true;
+
     public string Name => "動態模糊";
     public string Category => "模糊";
     public int SourceMargin => Distance + 1;
@@ -181,12 +185,14 @@ public sealed record MotionBlurEffect : IEffect
             (o, v) => ((MotionBlurEffect)o) with { Distance = (int)v }) { Geometric = true },
         new BoolParam("centered", "置中", o => ((MotionBlurEffect)o).Centered,
             (o, v) => ((MotionBlurEffect)o) with { Centered = v }),
+        new BoolParam("relative", "角度跟著物件轉", o => ((MotionBlurEffect)o).RelativeToObject,
+            (o, v) => ((MotionBlurEffect)o) with { RelativeToObject = v }),
     ];
     public IReadOnlyList<ParamDef> Parameters => Params;
 
     public void Render(EffectContext ctx)
     {
-        var rad = Angle * MathF.PI / 180f;
+        var rad = ctx.FollowedAngleCcw(Angle, RelativeToObject) * MathF.PI / 180f;
         var dx = MathF.Cos(rad);
         var dy = -MathF.Sin(rad);
         var n = Math.Max(2, Distance);
@@ -399,6 +405,10 @@ public sealed record FragmentEffect : IEffect
     public int Distance { get; init; } = 8;   // 0..100
     public float Rotation { get; init; } = 0f;
 
+    /// <summary>角度跟著物件轉（預設）：文字轉了 45°，這個方向也跟著轉；關掉＝以畫布為準。
+    /// 與傾斜、漸層的同名選項是同一件事（見 <see cref="EffectContext.ContentRotation"/>）。</summary>
+    public bool RelativeToObject { get; init; } = true;
+
     public string Name => "碎片";
     public string Category => "模糊";
     public int SourceMargin => Distance + 1;
@@ -411,6 +421,8 @@ public sealed record FragmentEffect : IEffect
             (o, v) => ((FragmentEffect)o) with { Distance = (int)v }),
         new AngleParam("rotation", "旋轉", 0, 360, o => ((FragmentEffect)o).Rotation,
             (o, v) => ((FragmentEffect)o) with { Rotation = (float)v }),
+        new BoolParam("relative", "角度跟著物件轉", o => ((FragmentEffect)o).RelativeToObject,
+            (o, v) => ((FragmentEffect)o) with { RelativeToObject = v }),
     ];
     public IReadOnlyList<ParamDef> Parameters => Params;
 
@@ -418,9 +430,10 @@ public sealed record FragmentEffect : IEffect
     {
         var n = Math.Clamp(Fragments, 2, 50);
         var offsets = new (float X, float Y)[n];
+        var baseAngle = ctx.FollowedAngleCw(Rotation, RelativeToObject) * MathF.PI / 180f;
         for (var i = 0; i < n; i++)
         {
-            var a = Rotation * MathF.PI / 180f + MathF.Tau * i / n;
+            var a = baseAngle + MathF.Tau * i / n;
             offsets[i] = (MathF.Cos(a) * Distance, MathF.Sin(a) * Distance);
         }
         ctx.ForRows(y =>

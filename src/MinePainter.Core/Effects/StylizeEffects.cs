@@ -40,6 +40,10 @@ public sealed record EdgeDetectEffect : IEffect
 {
     public float Angle { get; init; } = 45f;
 
+    /// <summary>角度跟著物件轉（預設）：文字轉了 45°，這個方向也跟著轉；關掉＝以畫布為準。
+    /// 與傾斜、漸層的同名選項是同一件事（見 <see cref="EffectContext.ContentRotation"/>）。</summary>
+    public bool RelativeToObject { get; init; } = true;
+
     public string Name => "邊緣偵測";
     public string Category => "風格化";
     public int SourceMargin => 1;
@@ -48,12 +52,14 @@ public sealed record EdgeDetectEffect : IEffect
     [
         new AngleParam("angle", "角度", 0, 360, o => ((EdgeDetectEffect)o).Angle,
             (o, v) => ((EdgeDetectEffect)o) with { Angle = (float)v }),
+        new BoolParam("relative", "角度跟著物件轉", o => ((EdgeDetectEffect)o).RelativeToObject,
+            (o, v) => ((EdgeDetectEffect)o) with { RelativeToObject = v }),
     ];
     public IReadOnlyList<ParamDef> Parameters => Params;
 
     public void Render(EffectContext ctx)
     {
-        var k = DirectionalKernel.Build(Angle);
+        var k = DirectionalKernel.Build(ctx.FollowedAngleCcw(Angle, RelativeToObject));
         ctx.ForRows(y =>
         {
             for (var x = 0; x < ctx.Width; x++)
@@ -71,6 +77,10 @@ public sealed record EmbossEffect : IEffect
 {
     public float Angle { get; init; } = 0f;
 
+    /// <summary>角度跟著物件轉（預設）：文字轉了 45°，這個方向也跟著轉；關掉＝以畫布為準。
+    /// 與傾斜、漸層的同名選項是同一件事（見 <see cref="EffectContext.ContentRotation"/>）。</summary>
+    public bool RelativeToObject { get; init; } = true;
+
     public string Name => "浮雕";
     public string Category => "風格化";
     public int SourceMargin => 1;
@@ -79,12 +89,14 @@ public sealed record EmbossEffect : IEffect
     [
         new AngleParam("angle", "角度", 0, 360, o => ((EmbossEffect)o).Angle,
             (o, v) => ((EmbossEffect)o) with { Angle = (float)v }),
+        new BoolParam("relative", "角度跟著物件轉", o => ((EmbossEffect)o).RelativeToObject,
+            (o, v) => ((EmbossEffect)o) with { RelativeToObject = v }),
     ];
     public IReadOnlyList<ParamDef> Parameters => Params;
 
     public void Render(EffectContext ctx)
     {
-        var k = DirectionalKernel.Build(Angle);
+        var k = DirectionalKernel.Build(ctx.FollowedAngleCcw(Angle, RelativeToObject));
         ctx.ForRows(y =>
         {
             for (var x = 0; x < ctx.Width; x++)
@@ -103,6 +115,10 @@ public sealed record ReliefEffect : IEffect
 {
     public float Angle { get; init; } = 45f;
 
+    /// <summary>角度跟著物件轉（預設）：文字轉了 45°，這個方向也跟著轉；關掉＝以畫布為準。
+    /// 與傾斜、漸層的同名選項是同一件事（見 <see cref="EffectContext.ContentRotation"/>）。</summary>
+    public bool RelativeToObject { get; init; } = true;
+
     public string Name => "浮雕效果";
     public string Category => "風格化";
     public int SourceMargin => 1;
@@ -111,12 +127,14 @@ public sealed record ReliefEffect : IEffect
     [
         new AngleParam("angle", "角度", 0, 360, o => ((ReliefEffect)o).Angle,
             (o, v) => ((ReliefEffect)o) with { Angle = (float)v }),
+        new BoolParam("relative", "角度跟著物件轉", o => ((ReliefEffect)o).RelativeToObject,
+            (o, v) => ((ReliefEffect)o) with { RelativeToObject = v }),
     ];
     public IReadOnlyList<ParamDef> Parameters => Params;
 
     public void Render(EffectContext ctx)
     {
-        var k = DirectionalKernel.Build(Angle);
+        var k = DirectionalKernel.Build(ctx.FollowedAngleCcw(Angle, RelativeToObject));
         ctx.ForRows(y =>
         {
             for (var x = 0; x < ctx.Width; x++)

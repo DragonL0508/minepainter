@@ -35,12 +35,41 @@ public sealed class EffectContext
     public CancellationToken Cancellation { get; init; }
 
     /// <summary>
-    /// 來源內容自己的旋轉角度（度，逆時針為正；不知道或不適用時為 0）。
-    /// 「物件」類的效果要跟著物件轉 —— 文字轉了 45°，它的漸層角度也該跟著轉，
-    /// 不然使用者調好的角度會在轉動物件的瞬間變成另一個方向（使用者 2026-09-04 明示）。
+    /// 來源內容自己的旋轉角度（度，畫面上順時針為正 —— 與 <c>SKCanvas.RotateDegrees</c>
+    /// 同一套，因為它就是文字物件的 Rotation；不知道或不適用時為 0）。
+    /// 有角度／方向的效果要跟著物件轉 —— 文字轉了 45°，它的漸層、陰影方向也該跟著轉，
+    /// 不然使用者調好的方向會在轉動物件的瞬間變成另一個方向（使用者 2026-09-04 明示）。
     /// 由 LayerEffectRenderer 依這層唯一的文字物件填入。
     /// </summary>
     public float ContentRotation { get; init; }
+
+    /// <summary>
+    /// 「角度跟著物件轉」——角度是**畫面順時針為正**的效果用
+    /// （方向向量算成 (cos, +sin)，y 朝下：漸層、碎片、拼貼反射）。
+    /// </summary>
+    public float FollowedAngleCw(float angle, bool follow) =>
+        follow ? angle + ContentRotation : angle;
+
+    /// <summary>
+    /// 「角度跟著物件轉」——角度是**數學慣例**（0＝右、90＝上，逆時針為正）的效果用
+    /// （方向向量算成 (cos, −sin)：動態模糊、內光暈、浮雕那類方向核，以及碎形）。
+    /// 物件順時針轉，逆時針量的角度就要減掉同樣的量。
+    /// </summary>
+    public float FollowedAngleCcw(float angle, bool follow) =>
+        follow ? angle - ContentRotation : angle;
+
+    /// <summary>
+    /// 「方向跟著物件轉」——沒有角度、直接給位移向量的效果用（陰影的位移 X/Y）。
+    /// 螢幕座標（y 朝下），把向量繞原點轉 <see cref="ContentRotation"/>（順時針）。
+    /// </summary>
+    public (float X, float Y) FollowedOffset(float x, float y, bool follow)
+    {
+        if (!follow || Math.Abs(ContentRotation) < 0.01f) return (x, y);
+        var rad = ContentRotation * MathF.PI / 180f;
+        var cos = MathF.Cos(rad);
+        var sin = MathF.Sin(rad);
+        return (x * cos - y * sin, x * sin + y * cos);
+    }
 
     public EffectContext(SKRectI region, SKRectI srcRect, uint[] src, SKSizeI docSize)
     {

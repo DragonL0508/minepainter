@@ -345,6 +345,10 @@ public sealed record TileReflectionEffect : IEffect
     public int TileSize { get; init; } = 40;    // 2..800
     public int Curvature { get; init; } = 8;    // -100..100
 
+    /// <summary>角度跟著物件轉（預設）：文字轉了 45°，這個方向也跟著轉；關掉＝以畫布為準。
+    /// 與傾斜、漸層的同名選項是同一件事（見 <see cref="EffectContext.ContentRotation"/>）。</summary>
+    public bool RelativeToObject { get; init; } = true;
+
     public string Name => "拼貼反射";
     public string Category => "扭曲";
     public int SourceMargin => EffectContext.WholeLayer;
@@ -357,12 +361,14 @@ public sealed record TileReflectionEffect : IEffect
             (o, v) => ((TileReflectionEffect)o) with { TileSize = (int)v }),
         new SliderParam("curvature", "曲率", -100, 100, o => ((TileReflectionEffect)o).Curvature,
             (o, v) => ((TileReflectionEffect)o) with { Curvature = (int)v }),
+        new BoolParam("relative", "角度跟著物件轉", o => ((TileReflectionEffect)o).RelativeToObject,
+            (o, v) => ((TileReflectionEffect)o) with { RelativeToObject = v }),
     ];
     public IReadOnlyList<ParamDef> Parameters => Params;
 
     public void Render(EffectContext ctx)
     {
-        var rad = Angle * MathF.PI / 180f;
+        var rad = ctx.FollowedAngleCw(Angle, RelativeToObject) * MathF.PI / 180f;
         var sin = MathF.Sin(rad);
         var cos = MathF.Cos(rad);
         var scale = MathF.PI / Math.Max(2, TileSize);
