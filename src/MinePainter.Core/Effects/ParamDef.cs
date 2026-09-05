@@ -89,6 +89,15 @@ public sealed record GradientParam(
     public string? LegacyEndKey { get; init; }
 }
 
+/// <summary>
+/// 檔案（LUT 的 .cube）：UI 是「目前檔名＋瀏覽按鈕」。Get 回目前的名字（沒有＝空字串），
+/// With 收路徑、由參數物件自己讀檔（格式錯丟 InvalidDataException，UI 接成 toast）。
+/// 不進存檔 —— 讀進來的內容由 <c>SaveData</c> 之類的機制另外存。
+/// </summary>
+public sealed record FileParam(
+    string Key, string Label, string[] Patterns,
+    Func<object, string> Get, Func<object, string, object> With) : ParamDef(Key, Label);
+
 /// <summary>核取方塊。</summary>
 public sealed record BoolParam(
     string Key, string Label,

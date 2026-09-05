@@ -54,6 +54,11 @@ public sealed record AdjustmentEffect(IAdjustment Adjustment) : IEffect
             Get = o => cv.Get(((AdjustmentEffect)o).Adjustment),
             With = (o, v) => new AdjustmentEffect((IAdjustment)cv.With(((AdjustmentEffect)o).Adjustment, v)),
         },
+        FileParam f => f with
+        {
+            Get = o => f.Get(((AdjustmentEffect)o).Adjustment),
+            With = (o, v) => new AdjustmentEffect((IAdjustment)f.With(((AdjustmentEffect)o).Adjustment, v)),
+        },
         _ => def,
     };
 
@@ -62,6 +67,12 @@ public sealed record AdjustmentEffect(IAdjustment Adjustment) : IEffect
         if (ctx.Width <= 0 || ctx.Height <= 0) return;
         ctx.CopySrcToDst();
         ctx.Cancellation.ThrowIfCancellationRequested();
+
+        if (Adjustment.RequiresPixelPath)
+        {
+            Adjustment.ApplyPixels(ctx.Dst, ctx.Dst.Length);
+            return;
+        }
 
         var info = new SKImageInfo(ctx.Width, ctx.Height, SKColorType.Bgra8888, SKAlphaType.Premul);
         fixed (uint* ptr = ctx.Dst)

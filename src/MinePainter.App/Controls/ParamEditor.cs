@@ -3,6 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Layout;
 using Avalonia.Media.Imaging;
+using Avalonia.Platform.Storage;
 using MinePainter.Core.Effects;
 
 namespace MinePainter.App.Controls;
@@ -137,6 +138,9 @@ public sealed class ParamEditor : StackPanel
                     break;
                 case GradientParam gr:
                     Children.Add(BuildGradient(gr));
+                    break;
+                case FileParam f:
+                    Children.Add(BuildFile(f));
                     break;
             }
         }
@@ -413,6 +417,52 @@ public sealed class ParamEditor : StackPanel
             Foreground = AppTheme.TextMutedBrush,
         };
         return new StackPanel { Spacing = 3, Children = { label, picker } };
+    }
+
+    private Control BuildFile(FileParam f)
+    {
+        var name = new TextBlock
+        {
+            FontSize = 12,
+            VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = Avalonia.Media.TextTrimming.CharacterEllipsis,
+            Foreground = AppTheme.TextMutedBrush,
+        };
+        void Refresh()
+        {
+            var n = f.Get(Current);
+            name.Text = n.Length > 0 ? n : "（未載入）";
+            name.Foreground = AppTheme.TextMutedBrush;
+        }
+        Refresh();
+        var browse = new Button { Content = f.Label + "…", FontSize = 12, Padding = new Thickness(10, 3) };
+        browse.Click += async (_, _) =>
+        {
+            if (_suppress) return;
+            var top = TopLevel.GetTopLevel(this);
+            if (top == null) return;
+            var files = await top.StorageProvider.OpenFilePickerAsync(new Avalonia.Platform.Storage.FilePickerOpenOptions
+            {
+                AllowMultiple = false,
+                FileTypeFilter = [new Avalonia.Platform.Storage.FilePickerFileType(f.Label) { Patterns = f.Patterns }],
+            });
+            var path = files.Count > 0 ? files[0].TryGetLocalPath() : null;
+            if (path == null) return;
+            try
+            {
+                Update(f.With(Current, path), commit: true);
+                Rebuild(); // 換了檔案，預設集下拉要跳到「自訂」、名字要更新
+            }
+            catch (Exception e)
+            {
+                // 這裡搆不到主視窗的 toast：錯誤就寫在按鈕旁邊，使用者的視線本來就在這
+                name.Text = "讀不了這個檔：" + e.Message;
+                name.Foreground = new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.FromRgb(0xE5, 0x6B, 0x6B));
+            }
+        };
+        DockPanel.SetDock(browse, Dock.Right);
+        name.Margin = new Thickness(0, 0, 8, 0);
+        return new DockPanel { Children = { browse, name } };
     }
 
     private void SyncSliders()

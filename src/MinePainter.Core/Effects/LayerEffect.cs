@@ -41,6 +41,7 @@ public static class EffectSerializer
         {
             foreach (var (k, v) in adj.Adjustment.SaveParams())
                 dict[k] = v.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            if (adj.Adjustment.SaveData() is { } data) dict["data"] = data;
             return dict;
         }
 
@@ -84,8 +85,9 @@ public static class EffectSerializer
         {
             var floats = new Dictionary<string, float>();
             foreach (var (k, v) in parameters)
-                if (float.TryParse(v, System.Globalization.NumberStyles.Float, inv, out var f)) floats[k] = f;
-            return new AdjustmentEffect(AdjustmentRegistry.Load(typeId[AdjustmentPrefix.Length..], floats));
+                if (k != "data" && float.TryParse(v, System.Globalization.NumberStyles.Float, inv, out var f)) floats[k] = f;
+            return new AdjustmentEffect(AdjustmentRegistry.Load(typeId[AdjustmentPrefix.Length..], floats,
+                parameters.GetValueOrDefault("data")));
         }
 
         var entry = EffectRegistry.All.FirstOrDefault(e => e.Id == typeId)

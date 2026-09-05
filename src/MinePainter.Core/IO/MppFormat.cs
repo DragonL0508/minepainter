@@ -90,6 +90,8 @@ public static class MppFormat
         // adjustment
         public string? AdjustmentType { get; set; }
         public Dictionary<string, float>? AdjustmentParams { get; set; }
+        /// <summary>參數之外的大塊資料（LUT 表；見 IAdjustment.SaveData）。舊版沒有這欄，null 照讀。</summary>
+        public string? AdjustmentData { get; set; }
 
         // raster 的非破壞性效果堆疊（由先到後）
         public List<EffectDto>? Effects { get; set; }
@@ -317,6 +319,7 @@ public static class MppFormat
                 node.Type = "adjustment";
                 node.AdjustmentType = adj.Adjustment.TypeId;
                 node.AdjustmentParams = adj.Adjustment.SaveParams();
+                node.AdjustmentData = adj.Adjustment.SaveData();
                 break;
 
             default:
@@ -904,7 +907,7 @@ public static class MppFormat
     private static AdjustmentLayer BuildAdjustment(Node node)
     {
         var adjustment = AdjustmentRegistry.Load(
-            node.AdjustmentType ?? throw new InvalidDataException("調整圖層缺少類型"), node.AdjustmentParams);
+            node.AdjustmentType ?? throw new InvalidDataException("調整圖層缺少類型"), node.AdjustmentParams, node.AdjustmentData);
         return new AdjustmentLayer(adjustment);
     }
 

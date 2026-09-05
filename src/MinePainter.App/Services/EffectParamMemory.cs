@@ -34,7 +34,9 @@ public static class EffectParamMemory
         try
         {
             var id = EffectSerializer.TypeIdOf(effect);
-            AppSettings.Instance.EffectParams[id] = EffectSerializer.Save(effect);
+            var parameters = EffectSerializer.Save(effect);
+            if (parameters.ContainsKey("data")) return; // 自訂 LUT 表有幾百 KB，不進設定檔
+            AppSettings.Instance.EffectParams[id] = parameters;
             AppSettings.Instance.Save();
         }
         catch

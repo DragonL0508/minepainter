@@ -20,6 +20,21 @@ public interface IAdjustment : IParameterized
 
     /// <summary>存檔用參數（與 <see cref="AdjustmentRegistry.Load"/> 對稱）。</summary>
     Dictionary<string, float> SaveParams();
+
+    /// <summary>
+    /// 參數之外的大塊資料（LUT 表）：一行文字，存進 .mpp 的 AdjustmentData／效果堆疊的 "data"。
+    /// 大多數調整沒有。
+    /// </summary>
+    string? SaveData() => null;
+
+    /// <summary>
+    /// true = Skia 色彩濾鏡表達不了（3D LUT），所有 CPU 路徑改呼叫 <see cref="ApplyPixels"/>，
+    /// GPU 路徑整份退回合成器。<see cref="CreateColorFilter"/> 只剩近似用途。
+    /// </summary>
+    bool RequiresPixelPath => false;
+
+    /// <summary>逐像素套用（premul BGRA，就地改）；只有 <see cref="RequiresPixelPath"/> 的調整需要實作。</summary>
+    void ApplyPixels(uint[] pixels, int count) => throw new NotSupportedException($"{DisplayName} 沒有像素路徑");
 }
 
 /// <summary>調整類型目錄：選單、調整圖層新增、.mpp 載入都查這裡。</summary>
@@ -30,7 +45,11 @@ public static class AdjustmentRegistry
         string DisplayName,
         Func<IAdjustment> CreateDefault,
         Func<IReadOnlyDictionary<string, float>, IAdjustment> Load,
-        bool HasDialog);
+        bool HasDialog)
+    {
+        /// <summary>要吃附加資料（<see cref="IAdjustment.SaveData"/>）的調整用這個載入；有就優先於 Load。</summary>
+        public Func<IReadOnlyDictionary<string, float>, string?, IAdjustment>? LoadWithData { get; init; }
+    }
 
     public static readonly Entry[] All =
     [
@@ -55,13 +74,16 @@ public static class AdjustmentRegistry
         new("blackWhite", "黑白", () => new BlackWhiteAdjustment(), _ => new BlackWhiteAdjustment(), false),
         new("invert", "負片效果", () => new InvertAdjustment(), _ => new InvertAdjustment(), false),
         new("sepia", "懷舊", () => new SepiaAdjustment(), _ => new SepiaAdjustment(), false),
+        new("lut", "LUT 調色", () => new LutAdjustment(), p => LutAdjustment.Load(p, null), true)
+            { LoadWithData = LutAdjustment.Load },
     ];
 
     public static Entry? Find(string typeId) => Array.Find(All, e => e.TypeId == typeId);
 
-    public static IAdjustment Load(string typeId, IReadOnlyDictionary<string, float>? parameters)
+    public static IAdjustment Load(string typeId, IReadOnlyDictionary<string, float>? parameters, string? data = null)
     {
         var entry = Find(typeId) ?? throw new InvalidDataException($"未知調整類型：{typeId}");
-        return entry.Load(parameters ?? new Dictionary<string, float>());
+        parameters ??= new Dictionary<string, float>();
+        return entry.LoadWithData != null ? entry.LoadWithData(parameters, data) : entry.Load(parameters);
     }
 }

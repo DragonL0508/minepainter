@@ -714,6 +714,19 @@ public sealed class Compositor : IDisposable
         return full.Snapshot();
     }
 
+    /// <summary>走像素路徑的調整：快照讀成 premul BGRA、就地套、包成新影像（呼叫端 Dispose）。</summary>
+    private static unsafe SKImage ApplyPixelAdjustment(SKImage snap, Adjustments.IAdjustment adjustment)
+    {
+        var info = new SKImageInfo(snap.Width, snap.Height, SKColorType.Bgra8888, SKAlphaType.Premul);
+        var pixels = new uint[snap.Width * snap.Height];
+        fixed (uint* ptr = pixels)
+        {
+            snap.ReadPixels(info, (IntPtr)ptr, info.RowBytes, 0, 0);
+            adjustment.ApplyPixels(pixels, pixels.Length);
+            return SKImage.FromPixelCopy(info, (IntPtr)ptr, info.RowBytes);
+        }
+    }
+
     /// <summary>離線路徑（匯出／縮圖／烙印）用的群組來源：不含進行中的筆劃與浮動內容。</summary>
     internal static uint[] StaticGroupSourceLocked(GroupLayer group, SKRectI docRect) =>
         ReadGroupPixelsLocked(group, docRect, null, null, (null, false));
@@ -745,14 +758,21 @@ public sealed class Compositor : IDisposable
                     // Opacity 作為調整強度：filtered 以該 alpha 疊回原圖。
                     canvas.Flush();
                     using var snap = surface.Snapshot();
-                    using var filter = adj.Adjustment.CreateColorFilter();
                     var full = adj.Opacity >= 1f;
                     using var paint = new SKPaint
                     {
-                        ColorFilter = filter,
                         BlendMode = full ? SKBlendMode.Src : SKBlendMode.SrcOver,
                         Color = SKColors.White.WithAlpha((byte)(adj.Opacity * 255)),
                     };
+                    if (adj.Adjustment.RequiresPixelPath)
+                    {
+                        // 色彩濾鏡做不到的調整（3D LUT）：讀出來逐像素算，再當一張圖畫回去
+                        using var filtered = ApplyPixelAdjustment(snap, adj.Adjustment);
+                        canvas.DrawImage(filtered, 0, 0, paint);
+                        break;
+                    }
+                    using var filter = adj.Adjustment.CreateColorFilter();
+                    paint.ColorFilter = filter;
                     canvas.DrawImage(snap, 0, 0, paint);
                     break;
                 }

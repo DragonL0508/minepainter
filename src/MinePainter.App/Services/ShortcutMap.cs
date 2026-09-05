@@ -66,6 +66,7 @@ public static class ShortcutMap
         new("adjust.photoFilter", "調整", "相片濾鏡", null),
         new("adjust.channelMixer", "調整", "通道混合器", null),
         new("adjust.threshold", "調整", "臨界值", null),
+        new("adjust.lut", "調整", "LUT 調色", null),
         new("effect.repeat", "效果", "重複上次效果", new KeyGesture(Key.F, KeyModifiers.Control)),
 
         new("layer.add", "圖層", "新增圖層", new KeyGesture(Key.N, KeyModifiers.Control | KeyModifiers.Shift)),

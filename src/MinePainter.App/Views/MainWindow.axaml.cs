@@ -2681,7 +2681,7 @@ public partial class MainWindow : Window
     /// <summary>「調整」選單順序照 paint.net；我們自己加的（曝光度、色溫）接在後面。</summary>
     private static readonly string[] AdjustmentMenuOrder =
         ["blackWhite", "brightnessContrast", "curves", "hueSaturation", "invert", "levels", "posterize", "sepia",
-         "exposure", "temperatureTint", "colorBalance", "photoFilter", "channelMixer", "threshold"];
+         "exposure", "temperatureTint", "colorBalance", "photoFilter", "channelMixer", "threshold", "lut"];
 
     internal static IReadOnlyList<string> AdjustmentMenuOrderForTests => AdjustmentMenuOrder;
 
@@ -2707,6 +2707,7 @@ public partial class MainWindow : Window
         "photoFilter" => MaterialIconKind.CameraIris,
         "channelMixer" => MaterialIconKind.TuneVertical,
         "threshold" => MaterialIconKind.ContrastCircle,
+        "lut" => MaterialIconKind.GradientHorizontal,
         _ => MaterialIconKind.TuneVariant,
     };
 
