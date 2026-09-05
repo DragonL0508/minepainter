@@ -52,7 +52,7 @@ public partial class MainWindow : Window
     {
         public required EditorSession Session { get; init; }
         public string? FilePath;      // 目前的 .mpp 路徑（null = 尚未存過）
-        public string? ImportedName;  // 匯入來源的檔名（.pdn／影像）；只用於標題與存檔預設名
+        public string? ImportedName;  // 匯入來源的檔名（.pdn／.psd／影像）；只用於標題與存檔預設名
         public bool IsDirty;
         public int ChangeCount;       // Interlocked 累計；背景存檔期間的編輯靠它保住 dirty 旗標
         public Action? DirtyHandler;  // 關分頁時解除訂閱用
@@ -1466,9 +1466,10 @@ public partial class MainWindow : Window
             AllowMultiple = false,
             FileTypeFilter =
             [
-                new FilePickerFileType("支援的檔案") { Patterns = ["*.mpp", "*.pdn", "*.png", "*.jpg", "*.jpeg", "*.bmp"] },
+                new FilePickerFileType("支援的檔案") { Patterns = ["*.mpp", "*.pdn", "*.psd", "*.psb", "*.png", "*.jpg", "*.jpeg", "*.bmp"] },
                 new FilePickerFileType("MinePainter 專案") { Patterns = ["*.mpp"] },
                 new FilePickerFileType("paint.net 專案") { Patterns = ["*.pdn"] },
+                new FilePickerFileType("Photoshop 文件") { Patterns = ["*.psd", "*.psb"] },
                 new FilePickerFileType("影像檔") { Patterns = ["*.png", "*.jpg", "*.jpeg", "*.bmp"] },
             ],
         });
@@ -1480,7 +1481,7 @@ public partial class MainWindow : Window
     // ---- 拖放檔案 ----
 
     private static readonly string[] ImageExtensions = [".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp"];
-    private static readonly string[] OpenableExtensions = [".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp", ".mpp", ".pdn"];
+    private static readonly string[] OpenableExtensions = [".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp", ".mpp", ".pdn", ".psd", ".psb"];
 
     private static bool HasExtension(string path, string[] list) =>
         list.Contains(Path.GetExtension(path), StringComparer.OrdinalIgnoreCase);
@@ -1549,12 +1550,12 @@ public partial class MainWindow : Window
                 {
                     if (!HasExtension(path, ImageExtensions))
                     {
-                        skipped++; // .mpp/.pdn 是整份文件，不能當一層
+                        skipped++; // .mpp/.pdn/.psd 是整份文件，不能當一層
                         continue;
                     }
                     ImportLayerFromFile(session, path);
                 }
-                if (skipped > 0) Toasts.Show($"{skipped} 個檔案是文件格式（.mpp/.pdn），只能用「開啟」");
+                if (skipped > 0) Toasts.Show($"{skipped} 個檔案是文件格式（.mpp/.pdn/.psd），只能用「開啟」");
                 _layersContent.Refresh();
                 RefreshUiState();
                 break;
@@ -1689,6 +1690,10 @@ public partial class MainWindow : Window
             else if (PdnFormat.IsPdnFile(path))
             {
                 OpenPaintDotNetFile(path);
+            }
+            else if (PsdFormat.IsPsdFile(path))
+            {
+                await OpenPhotoshopFile(path);
             }
             else
             {
@@ -1841,6 +1846,21 @@ public partial class MainWindow : Window
         Toasts.Show("已匯入 paint.net 專案（儲存時會存成 .mpp）");
         foreach (var warning in warnings.Take(2)) Toasts.Show(warning);
         WarnAboutMissingFonts(doc, Path.GetFileName(path));
+    }
+
+    /// <summary>
+    /// .psd 同樣只讀不寫，當成匯入。Photoshop 檔常常很大，所以和開影像一樣先問要不要走快速模式。
+    /// 匯入時有損的地方（調整圖層略過、混合模式沒對應）最多提示兩則，其餘塞進 Debug 輸出。
+    /// </summary>
+    private async Task OpenPhotoshopFile(string path)
+    {
+        var doc = PsdFormat.Load(path, out var warnings);
+        doc = await AskFastModeOnOpen(doc, "這份 Photoshop 文件");
+        SetDocument(doc, importedName: Path.GetFileName(path));
+
+        Toasts.Show("已匯入 Photoshop 文件（儲存時會存成 .mpp）");
+        foreach (var warning in warnings.Take(2)) Toasts.Show(warning);
+        if (warnings.Count > 2) Toasts.Show($"另有 {warnings.Count - 2} 處匯入時有調整");
     }
 
     /// <summary>

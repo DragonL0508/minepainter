@@ -18,7 +18,7 @@ Windows 10 / 11 64 位元。
 
 | | |
 | --- | --- |
-| **開啟** | `.mpp` `.pdn` `.png` `.jpg` `.bmp` `.gif` `.webp` |
+| **開啟** | `.mpp` `.pdn` `.psd` `.png` `.jpg` `.bmp` `.gif` `.webp` |
 | **儲存** | `.mpp` `.png` `.jpg` `.bmp` `.gif` `.webp` |
 
 ## 開發
@@ -48,7 +48,7 @@ release.bat 1.8.2           推標籤，GitHub Actions 跑測試、建置、出 
 
 - **Core 不知道 UI 存在。** Core 只依賴 SkiaSharp；任何 Avalonia 型別、對話框、剪貼簿、檔案挑選器都在 App。Core 要通知使用者用 `EditorSession.Notify`（App 接成 toast）。
 - **App 不直接改文件。** 所有改到 `Document`／圖層的操作都是 Core 的指令（`History/*Commands.cs`），App 只呼叫指令、刷新畫面。（同一個操作要能從選單、快捷鍵、測試三個入口叫到，邏輯只能在一處。）
-- **Core 子目錄職責**：`Documents` 文件與縮放規則 · `Layers` 圖層樹、原始高清來源 · `Tiles` 稀疏像素表面、遮罩 · `History` 所有可 undo 的指令 · `Tools` 互動工具與 `EditorSession` · `Effects` 非破壞性效果堆疊 · `Adjustments` 色彩調整 · `Vectors` 文字／形狀物件 · `Selections` 選取與浮動內容 · `Compositing` 合成 · `IO` `.mpp`／`.pdn`／影像編解碼 · `AI` 去背。
+- **Core 子目錄職責**：`Documents` 文件與縮放規則 · `Layers` 圖層樹、原始高清來源 · `Tiles` 稀疏像素表面、遮罩 · `History` 所有可 undo 的指令 · `Tools` 互動工具與 `EditorSession` · `Effects` 非破壞性效果堆疊 · `Adjustments` 色彩調整 · `Vectors` 文字／形狀物件 · `Selections` 選取與浮動內容 · `Compositing` 合成 · `IO` `.mpp`／`.pdn`／`.psd`／影像編解碼 · `AI` 去背。
 - **App 子目錄職責**：`Views` 視窗與面板 · `Controls` 可重用控制項（含 `Motion`） · `Rendering` 畫布上屏與 GPU 路徑 · `Services` 設定、字型、更新、安裝 · `Platform` Win32 互通。
 
 ### 文件與像素的鐵律
