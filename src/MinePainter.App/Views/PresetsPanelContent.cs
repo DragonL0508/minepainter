@@ -130,12 +130,12 @@ public sealed class PresetsPanelContent : UserControl
         DragDrop.SetAllowDrop(right, true);
         right.AddHandler(DragDrop.DragOverEvent, (_, e) =>
         {
-            e.DragEffects = PresetFrom(e.Data) is { } p && p.Folder != _currentFolder ? DragDropEffects.Move : DragDropEffects.None;
+            e.DragEffects = PresetFrom(e.DataTransfer) is { } p && p.Folder != _currentFolder ? DragDropEffects.Move : DragDropEffects.None;
             e.Handled = true;
         });
         right.AddHandler(DragDrop.DropEvent, (_, e) =>
         {
-            if (PresetFrom(e.Data) is { } p) MoveTo(p, _currentFolder);
+            if (PresetFrom(e.DataTransfer) is { } p) MoveTo(p, _currentFolder);
             e.Handled = true;
         });
 
@@ -232,12 +232,12 @@ public sealed class PresetsPanelContent : UserControl
         DragDrop.SetAllowDrop(item, true);
         item.AddHandler(DragDrop.DragOverEvent, (_, e) =>
         {
-            e.DragEffects = PresetFrom(e.Data) is { } p && p.Folder != folder ? DragDropEffects.Move : DragDropEffects.None;
+            e.DragEffects = PresetFrom(e.DataTransfer) is { } p && p.Folder != folder ? DragDropEffects.Move : DragDropEffects.None;
             e.Handled = true;
         });
         item.AddHandler(DragDrop.DropEvent, (_, e) =>
         {
-            if (PresetFrom(e.Data) is { } p) MoveTo(p, folder);
+            if (PresetFrom(e.DataTransfer) is { } p) MoveTo(p, folder);
             e.Handled = true;
         });
 
@@ -463,14 +463,14 @@ public sealed class PresetsPanelContent : UserControl
 
     private static async Task BeginDrag(EffectPreset preset, PointerEventArgs e, IImage? thumbnail)
     {
-        var data = new DataObject();
-        data.Set(DataFormats.Text, DragPrefix + preset.Path);
+        var data = new DataTransfer();
+        data.Add(DataTransferItem.CreateText(DragPrefix + preset.Path));
         Dragging = preset;
         // OS 拖放沒有拖曳影像：自己開一個跟著游標走的殘影小窗（縮圖＋名稱，平滑跟隨、放開時淡出）
         var ghost = DragGhostWindow.Start(thumbnail, preset.Name);
         try
         {
-            await DragDrop.DoDragDrop(e, data, DragDropEffects.Copy | DragDropEffects.Move);
+            await DragDrop.DoDragDropAsync(e, data, DragDropEffects.Copy | DragDropEffects.Move);
         }
         catch (Exception)
         {
@@ -483,12 +483,12 @@ public sealed class PresetsPanelContent : UserControl
     }
 
     /// <summary>從拖放資料認出預設集（同程式內直接拿 <see cref="Dragging"/>；否則解析文字格式）。</summary>
-    public static EffectPreset? PresetFrom(IDataObject data)
+    public static EffectPreset? PresetFrom(IDataTransfer data)
     {
         if (Dragging != null) return Dragging;
         try
         {
-            if (data.GetText() is { } text && text.StartsWith(DragPrefix, StringComparison.Ordinal))
+            if (data.TryGetText() is { } text && text.StartsWith(DragPrefix, StringComparison.Ordinal))
             {
                 var path = text[DragPrefix.Length..];
                 if (File.Exists(path)) return EffectPresetStore.LoadFile(path);

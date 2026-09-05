@@ -56,6 +56,13 @@ public sealed class FloatingSelection : IDisposable
     /// </summary>
     public bool IsCopy { get; private init; }
 
+    /// <summary>
+    /// 快速模式貼上：<see cref="Pixels"/> 是縮到代理比例的那份，這裡是剪貼簿的原始高清像素
+    /// （左上角同樣對齊 SourceBounds、整張填滿 SourceBounds）。落地時留成圖層的原始高清來源。
+    /// 擁有權在本物件；null＝沒有。
+    /// </summary>
+    public SKImage? HiResPixels { get; private init; }
+
     /// <summary>提交時的 history 標籤。</summary>
     public string CommitLabel =>
         IsCopy ? "複製選取內容" : IsPasted ? "貼上" : IsWholeContent ? "縮放圖層內容" : "移動選取內容";
@@ -192,8 +199,18 @@ public sealed class FloatingSelection : IDisposable
     /// 接手 <paramref name="pixels"/> 的擁有權。須在 Document.SyncRoot 內呼叫。
     /// </summary>
     public static FloatingSelection CreatePasted(RasterLayer layer, SKImage pixels,
-        SKRectI bounds, SelectionMask selection) =>
-        new(layer.Id, pixels, bounds, layer.Surface.Snapshot(), selection) { IsPasted = true };
+        SKRectI bounds, SelectionMask selection, SKImage? hiResPixels = null) =>
+        new(layer.Id, pixels, bounds, layer.Surface.Snapshot(), selection) { IsPasted = true, HiResPixels = hiResPixels };
+
+    /// <summary>交出原始高清像素的擁有權（落地時掛到圖層上）。</summary>
+    internal SKImage? DetachHiResPixels()
+    {
+        var pixels = HiResPixels;
+        _hiResDetached = true;
+        return pixels;
+    }
+
+    private bool _hiResDetached;
 
     /// <summary>
     /// 把浮動內容以目前 TargetRect 畫到 canvas。須在 SyncRoot 內呼叫。
@@ -378,6 +395,7 @@ public sealed class FloatingSelection : IDisposable
         if (_disposed) return;
         _disposed = true;
         if (!_pixelsDetached) Pixels.Dispose();
+        if (!_hiResDetached) HiResPixels?.Dispose();
         BeforeSnapshot.Dispose();
         _sourceOutline?.Dispose();
     }

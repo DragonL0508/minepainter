@@ -1,7 +1,9 @@
 using MinePainter.Core.Adjustments;
 using MinePainter.Core.Compositing;
+using MinePainter.Core.Effects;
 using MinePainter.Core.History;
 using MinePainter.Core.Layers;
+using MinePainter.Core.Tiles;
 using SkiaSharp;
 
 namespace MinePainter.Core.Documents;
@@ -66,6 +68,44 @@ public static class OutputRender
         }
         progress?.Report(1);
         return clone;
+    }
+
+    /// <summary>
+    /// 這一層在輸出解析度下的樣子（原始高清來源重畫＋效果堆疊放大後算好），包成新的原始高清來源。
+    /// 快速模式下「烙印效果」與「去背前先平面化」靠這個保留高清：代理上的像素照樣烙，
+    /// 但來源換成輸出解析度算出來的那份，之後輸出仍是從它重畫。
+    /// 不是快速模式、這層沒有有效來源、或結果太大（<see cref="ScaleRules.MaxSourcePixels"/>）時回 null。
+    /// 回傳的 Revision 未對齊，呼叫端要設。可能很慢（4K 上跑一遍效果），別在鎖內呼叫。
+    /// </summary>
+    internal static LayerPixelSource? RenderLayerAsSource(Document doc, RasterLayer layer)
+    {
+        if (!doc.IsFastMode || layer.ValidPixelSource == null) return null;
+        var sx = doc.OutputWidth / (float)doc.Width;
+        var sy = doc.OutputHeight / (float)doc.Height;
+
+        using var temp = new Document(doc.OutputWidth, doc.OutputHeight);
+        RasterLayer copy;
+        lock (doc.SyncRoot)
+        {
+            var ctx = new CloneContext(temp, sx, sy, ResampleMode.Bicubic, new ScaleRules.Budget(), false, () => { });
+            copy = (RasterLayer)CloneNode(ctx, layer);
+            temp.Root.Add(copy);
+        }
+
+        if (copy.HasActiveEffects) LayerEffectRenderer.RenderLayerNow(temp, copy);
+        var surface = copy.HasActiveEffects && copy.FxCache.Rendered ? copy.FxCache.Surface : copy.Surface;
+        var region = surface.ExactContentBounds();
+        if (region.Width <= 0 || region.Height <= 0) return null;
+        if ((long)region.Width * region.Height > ScaleRules.MaxSourcePixels) return null;
+
+        using var bitmap = ImageCommands.ReadRegion(surface, region);
+        var image = SKImage.FromBitmap(bitmap);
+        if (image == null) return null;
+
+        // 複本的 Offset 是 0：表面座標＝輸出 doc 座標；除回比例就是代理 doc 座標
+        return new LayerPixelSource(image, region, SKMatrix.CreateScale(1 / sx, 1 / sy), layer.Offset,
+            SKRect.Create(region.Left / sx, region.Top / sy, region.Width / sx, region.Height / sy),
+            0f, new SKSize(region.Width, region.Height), 0);
     }
 
     private sealed record CloneContext(Document Target, float Sx, float Sy, ResampleMode Resample,

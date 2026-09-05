@@ -1488,7 +1488,7 @@ public partial class MainWindow : Window
     private static List<string> DroppedPaths(DragEventArgs e)
     {
         var result = new List<string>();
-        if (e.Data.GetFiles() is not { } items) return result;
+        if (e.DataTransfer.TryGetFiles() is not { } items) return result;
         foreach (var item in items)
         {
             var path = item.TryGetLocalPath();
@@ -1499,7 +1499,7 @@ public partial class MainWindow : Window
 
     private void OnDragOver(object? sender, DragEventArgs e)
     {
-        if (PresetsPanelContent.PresetFrom(e.Data) != null)
+        if (PresetsPanelContent.PresetFrom(e.DataTransfer) != null)
         {
             // 預設集只能丟在畫布上（有文件時）
             e.DragEffects = Canvas.Session != null && IsOverCanvas(e) ? DragDropEffects.Copy : DragDropEffects.None;
@@ -1518,7 +1518,7 @@ public partial class MainWindow : Window
 
     private async void OnDrop(object? sender, DragEventArgs e)
     {
-        if (PresetsPanelContent.PresetFrom(e.Data) is { } preset)
+        if (PresetsPanelContent.PresetFrom(e.DataTransfer) is { } preset)
         {
             e.Handled = true;
             if (!IsOverCanvas(e)) return;
@@ -2307,12 +2307,13 @@ public partial class MainWindow : Window
             if (image == null) return;
         }
 
-        // 超出畫布：問要延展還是維持（paint.net 的行為）
+        // 超出畫布：問要延展還是維持（paint.net 的行為）。快速模式下比的是縮到代理之後的尺寸
         var doc = session.Document;
-        if (image.Width > doc.Width || image.Height > doc.Height)
+        var (pastedW, pastedH) = session.PastedSize(image.Width, image.Height);
+        if (pastedW > doc.Width || pastedH > doc.Height)
         {
             var dialog = new PasteSizeDialog(
-                new SKSizeI(image.Width, image.Height), new SKSizeI(doc.Width, doc.Height));
+                new SKSizeI(pastedW, pastedH), new SKSizeI(doc.Width, doc.Height));
             await dialog.ShowDialog(this);
 
             switch (dialog.Result)
@@ -2322,13 +2323,13 @@ public partial class MainWindow : Window
                     return;
                 case PasteSizeDialog.Choice.ExpandCanvas:
                     DocumentCommands.ResizeCanvas(session,
-                        Math.Max(doc.Width, image.Width), Math.Max(doc.Height, image.Height), "延展畫布（貼上）");
+                        Math.Max(doc.Width, pastedW), Math.Max(doc.Height, pastedH), "延展畫布（貼上）");
                     Canvas.ZoomToFit();
                     break;
             }
         }
 
-        if (session.PasteImage(image, PastePosition(session, image.Width, image.Height)))
+        if (session.PasteImage(image, PastePosition(session, pastedW, pastedH)))
         {
             SelectTool("move"); // 貼上後直接可拖曳（paint.net 行為）
             Toasts.Show("已貼上（可拖曳移動，Enter 套用、Esc 取消）");

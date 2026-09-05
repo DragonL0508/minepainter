@@ -1326,8 +1326,10 @@ public sealed class EditorSession : IDisposable
         {
             // 落地後這層的像素「就是」浮動內容（貼到空圖層、或整層內容縮放）且縮小過：
             // 原始那份留成原始高清來源，快速模式輸出時從它重畫而不是拿縮過的放大
-            var keepSource = floating.IsScaled
-                && targetRect.Width < floating.PixelSize.Width && targetRect.Height < floating.PixelSize.Height
+            var hiRes = floating.HiResPixels;
+            var shrunk = floating.IsScaled
+                && targetRect.Width < floating.PixelSize.Width && targetRect.Height < floating.PixelSize.Height;
+            var keepSource = (hiRes != null || shrunk)
                 && (floating.IsWholeContent || (floating.IsPasted && !floating.BeforeSnapshot.Tiles.Any()))
                 && (long)floating.PixelSize.Width * floating.PixelSize.Height <= Documents.ScaleRules.MaxSourcePixels;
             var sourceBefore = layer.ValidPixelSource;
@@ -1345,6 +1347,16 @@ public sealed class EditorSession : IDisposable
             {
                 // 整層本來就有原圖：串在原圖上（不是拿代理像素當原圖）
                 sourceAfter = sourceBefore.Rebased(floating.TransformMatrix, layer.Offset, layer.Offset);
+            }
+            else if (keepSource && hiRes != null && (long)hiRes.Width * hiRes.Height <= Documents.ScaleRules.MaxSourcePixels)
+            {
+                // 剪貼簿的原始高清像素：先縮到 SourceBounds（貼上時的代理尺寸）再套浮動變換
+                var src = floating.SourceBounds;
+                var fit = SKMatrix.CreateScaleTranslation(src.Width / (float)hiRes.Width, src.Height / (float)hiRes.Height,
+                    src.Left, src.Top);
+                sourceAfter = new LayerPixelSource(floating.DetachHiResPixels()!, new SKRectI(0, 0, hiRes.Width, hiRes.Height),
+                    SKMatrix.Concat(floating.TransformMatrix, fit), layer.Offset,
+                    targetRect, 0f, new SKSize(hiRes.Width, hiRes.Height), 0);
             }
             else if (keepSource)
             {
@@ -1529,6 +1541,21 @@ public sealed class EditorSession : IDisposable
     {
         CommitPendingEdits(); // 先落地現有的浮動內容/編輯，貼上才不會蓋在半空中的狀態上
 
+        // 快速模式：貼進來的圖照代理比例縮（同匯入圖層），原始那份留著在落地時當原始高清來源
+        SKImage? hiRes = null;
+        var (pastedW, pastedH) = PastedSize(pixels.Width, pixels.Height);
+        if (pastedW != pixels.Width || pastedH != pixels.Height)
+        {
+            using var bitmap = SKBitmap.FromImage(pixels);
+            using var small = bitmap.Resize(new SKImageInfo(pastedW, pastedH, SKColorType.Bgra8888, SKAlphaType.Premul),
+                SKFilterQuality.High);
+            if (small != null && SKImage.FromBitmap(small) is { } smallImage)
+            {
+                hiRes = pixels;
+                pixels = smallImage;
+            }
+        }
+
         RasterLayer layer;
         switch (Document.ActiveLayer)
         {
@@ -1539,12 +1566,18 @@ public sealed class EditorSession : IDisposable
                 Notify("文字圖層不能貼上像素，已貼到新圖層");
                 break;
             }
+            case RasterLayer raster when hiRes != null && raster.Surface.TileCount > 0:
+                // 快速模式：原始高清來源代表「整層像素」，貼進已有內容的圖層就留不住原圖 —— 貼到新圖層
+                layer = InsertPendingLayerAbove(raster, "貼上的圖層");
+                Notify("快速模式：已貼到新圖層，輸出時才能用原始解析度");
+                break;
             case RasterLayer raster:
                 layer = raster;
                 break;
             default:
                 Notify("請先選擇一般圖層再貼上");
                 pixels.Dispose();
+                hiRes?.Dispose();
                 return false;
         }
 
@@ -1559,11 +1592,22 @@ public sealed class EditorSession : IDisposable
 
         lock (Document.SyncRoot)
         {
-            Floating = FloatingSelection.CreatePasted(layer, pixels, bounds, mask);
+            Floating = FloatingSelection.CreatePasted(layer, pixels, bounds, mask, hiRes);
         }
         ApplySelection(mask);
         layer.Invalidate(bounds);
         return true;
+    }
+
+    /// <summary>
+    /// 貼上一張 width×height 的影像時，它在畫布上會是多大：快速模式照代理比例縮（同匯入圖層），
+    /// 不然一張 4K 圖會塞爆 1080p 的畫布。UI 算貼上位置、問「延展畫布」時要用這個尺寸。
+    /// </summary>
+    public (int Width, int Height) PastedSize(int width, int height)
+    {
+        var scale = Document.IsFastMode ? 1f / Document.OutputScale : 1f;
+        if (scale >= 0.999f) return (width, height);
+        return (Math.Max(1, (int)MathF.Round(width * scale)), Math.Max(1, (int)MathF.Round(height * scale)));
     }
 
     /// <summary>

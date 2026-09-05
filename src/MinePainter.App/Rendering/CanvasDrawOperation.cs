@@ -720,7 +720,7 @@ public static class TextBench
     public static double LatinMs, CjkMs, CjkBoldMs, CjkNewFontMs, CjkStreamMs, CjkAvaloniaMs;
     public static long FontCacheUsed, FontCacheLimit;
     private static SKFont? _latin, _cjk, _cjkBold, _cjkStream, _cjkAvalonia;
-    private static SKTextBlob? _latinBlob, _cjkBlob, _cjkBoldBlob, _cjkStreamBlob, _cjkAvaloniaBlob;
+    private static SKTextBlob? _latinBlob, _cjkBlob, _cjkBoldBlob, _cjkStreamBlob;
 
     public static void Run(SKCanvas canvas)
     {

@@ -82,11 +82,16 @@ public static class LayerEffectCommands
         if (!layer.HasActiveEffects && layer.Effects.Count == 0) return false;
 
         LayerEffectRenderer.RenderLayerNow(doc, layer);
+        // 快速模式：先在輸出解析度把這層（含效果）算一份當新的原始來源，代理上烙完之後輸出仍從它重畫
+        var hiRes = Documents.OutputRender.RenderLayerAsSource(doc, layer);
 
-        TileDeltaEntry? pixels = null;
+        IHistoryEntry? pixels = null;
         var before = layer.Effects;
         lock (doc.SyncRoot)
         {
+            var sourceBefore = layer.ValidPixelSource;
+            if (sourceBefore != null) layer.TakePixelSource(); // 留給 undo（寫像素後它會被當失效釋放）
+
             // 快取是圖層座標、涵蓋整個內容（含畫布外）；烙印範圍 = 基底內容 ∪ 快取內容
             var region = layer.Surface.ContentBounds;
             var fxBounds = layer.FxCache.Surface.ContentBounds;
@@ -98,6 +103,15 @@ public static class LayerEffectCommands
                 pixels = TileDeltaEntry.Capture("烙印效果", layer, snapshot, region);
             }
             layer.SetEffects([]);
+
+            var sourceAfter = pixels != null ? hiRes : sourceBefore; // 像素沒動就沿用原來源
+            if (sourceAfter != null)
+            {
+                sourceAfter.Revision = layer.Surface.Revision;
+                layer.SetPixelSource(sourceAfter);
+            }
+            if (pixels != null && (sourceBefore != null || sourceAfter != null))
+                pixels = new PixelSourceSwapEntry(pixels, layer, sourceBefore, sourceAfter);
         }
 
         var stack = new ActionHistoryEntry("烙印效果", doc.Bounds,

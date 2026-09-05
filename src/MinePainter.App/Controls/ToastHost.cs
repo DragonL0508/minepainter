@@ -40,7 +40,7 @@ public sealed class ToastHost : StackPanel
     private static readonly PixelRect MiddleSource = new(520, 0, 880, 150);
     private static readonly PixelRect RightCapSource = new(1400, 0, 520, 150);
 
-    private static readonly Lazy<Bitmap?> Background = new(() =>
+    private static readonly Lazy<Bitmap?> BandImage = new(() =>
     {
         try
         {
@@ -111,7 +111,7 @@ public sealed class ToastHost : StackPanel
         {
             Text = message,
             FontSize = 12.5,
-            Foreground = Background.Value != null ? OnBandTextBrush : AppTheme.ToastTextBrush,
+            Foreground = BandImage.Value != null ? OnBandTextBrush : AppTheme.ToastTextBrush,
             VerticalAlignment = VerticalAlignment.Center,
             TextAlignment = TextAlignment.Center,
         };
@@ -143,7 +143,7 @@ public sealed class ToastHost : StackPanel
         content.Margin = new Thickness(4, 10);
 
         Control body;
-        if (Background.Value is { } bitmap)
+        if (BandImage.Value is { } bitmap)
         {
             // 兩端的淡出各佔一欄（固定寬度），中段那欄跟著文字撐開
             var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto") };

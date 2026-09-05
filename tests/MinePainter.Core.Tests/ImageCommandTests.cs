@@ -207,12 +207,12 @@ public class ElementDragOverlayTests
 
         lock (doc.SyncRoot) session.BeginElementOverlayLocked(layer, text);
 
-        var overlay = session.ElementOverlay;
-        Assert.NotNull(overlay);
-        Assert.True(overlay!.Bounds.Width > 20000, "這個測試要的就是超大物件");
-        Assert.True(overlay.Image.Width <= 4096 && overlay.Image.Height <= 4096,
-            $"覆疊圖 {overlay.Image.Width}x{overlay.Image.Height} 超過貼圖上限，畫面上會整個看不到");
-        Assert.True(overlay.Image.Width > 0 && overlay.Image.Height > 0);
+        var overlay = session.ElementOverlay ?? throw new Xunit.Sdk.XunitException("沒有建立覆疊");
+        var image = overlay.Image ?? throw new Xunit.Sdk.XunitException("覆疊沒有影像");
+        Assert.True(overlay.Bounds.Width > 20000, "這個測試要的就是超大物件");
+        Assert.True(image.Width <= 4096 && image.Height <= 4096,
+            $"覆疊圖 {image.Width}x{image.Height} 超過貼圖上限，畫面上會整個看不到");
+        Assert.True(image.Width > 0 && image.Height > 0);
         // 框仍然是原尺寸：畫的時候會拉回去，位置與大小都對
         Assert.Equal(overlay.Bounds.Width, overlay.CurrentRect.Width);
     }

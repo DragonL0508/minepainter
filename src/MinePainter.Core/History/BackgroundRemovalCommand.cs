@@ -60,15 +60,24 @@ public static class BackgroundRemovalCommand
         // ---- 1. 平面化（鎖內）----
         // 效果快取要先是最新的；RenderLayerNow 會等 worker 正在算的工作
         if (layer.HasActiveEffects) LayerEffectRenderer.RenderLayerNow(doc, layer);
+        // 快速模式且有效果要烙：先在輸出解析度算好含效果的一份當來源，平面化不會把高清弄丟
+        var flattenedSource = layer.HasActiveEffects ? Documents.OutputRender.RenderLayerAsSource(doc, layer) : null;
 
         TileSnapshot before;
         var effectsBefore = layer.Effects;
         Vectors.VectorElement[] elementsBefore;
         SKRectI affected; // 圖層座標
+        LayerPixelSource? sourceOriginal; // 去背前的原始高清來源（undo 要接回去）
         lock (doc.SyncRoot)
         {
             before = layer.Surface.Snapshot();
             affected = layer.Surface.ContentBounds;
+            sourceOriginal = layer.ValidPixelSource;
+            if (sourceOriginal != null && (layer.HasActiveEffects || layer.HasElements))
+            {
+                layer.TakePixelSource(); // 平面化會寫像素，先拿下來留給 undo
+                if (flattenedSource != null) layer.SetPixelSource(flattenedSource); // Revision 在平面化後對齊
+            }
 
             if (layer.HasActiveEffects && layer.FxCache.Rendered)
             {
@@ -88,6 +97,7 @@ public static class BackgroundRemovalCommand
                 affected = Union(affected, rect);
                 foreach (var el in elementsBefore) layer.RemoveElement(el.Id);
             }
+            if (layer.PixelSource is { } flattened) flattened.Revision = layer.Surface.Revision;
         }
 
         try
@@ -164,9 +174,8 @@ public static class BackgroundRemovalCommand
             lock (doc.SyncRoot)
             {
                 if (layer.Document != doc) { sourceAfter?.Dispose(); Rollback(); return false; }
-                // 舊來源留給 undo（ApplyMask 換了像素版本後它會被當失效釋放，先拿下來）
-                if (sourceBefore != null && !ReferenceEquals(layer.TakePixelSource(), sourceBefore))
-                    sourceBefore = null;
+                // 目前掛著的來源（原始的、或平面化後算好的）拿下來：ApplyMask 換了像素版本後它會被當失效釋放
+                if (sourceBefore != null) layer.TakePixelSource();
                 ApplyMask(layer.Surface, crop, mask);
                 affected = Union(affected, crop);
                 if (selection != null)
@@ -184,8 +193,8 @@ public static class BackgroundRemovalCommand
                 }
 
                 IHistoryEntry? pixelEntry = TileDeltaEntry.Capture("AI 去背", layer, before, affected);
-                if (pixelEntry != null && (sourceBefore != null || sourceAfter != null))
-                    pixelEntry = new PixelSourceSwapEntry(pixelEntry, layer, sourceBefore, sourceAfter);
+                if (pixelEntry != null && (sourceOriginal != null || sourceAfter != null))
+                    pixelEntry = new PixelSourceSwapEntry(pixelEntry, layer, sourceOriginal, sourceAfter);
                 var stateEntry = new ActionHistoryEntry("AI 去背", doc.Bounds,
                     undo: d =>
                     {
@@ -228,8 +237,14 @@ public static class BackgroundRemovalCommand
             {
                 foreach (var idx in TileIndex.CoveringRect(affected))
                     layer.Surface.RestoreTile(idx, before.GetTile(idx));
-                if (layer.PixelSource is { } src && src.Revision != layer.Surface.Revision)
-                    src.Revision = layer.Surface.Revision; // 像素放回去了，來源仍對得上
+                // 像素放回去了：去背前的原始來源接回去（平面化算出的那份就不要了）
+                var restore = sourceOriginal ?? layer.PixelSource;
+                if (restore != null)
+                {
+                    if (!ReferenceEquals(layer.PixelSource, restore)) layer.TakePixelSource();
+                    restore.Revision = layer.Surface.Revision;
+                    layer.SetPixelSource(restore);
+                }
                 layer.SetEffects(effectsBefore);
                 foreach (var el in elementsBefore)
                     if (layer.Elements.All(e => e.Id != el.Id)) layer.AddElement(el);
