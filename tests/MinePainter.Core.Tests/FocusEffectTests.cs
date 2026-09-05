@@ -118,4 +118,40 @@ public class FocusEffectTests
         Assert.True(loaded.Elliptical);
         Assert.Equal(fx.CenterX, loaded.CenterX, 3);
     }
+    [Fact]
+    public void 景深模式_來源外圍透明_畫布邊緣不會變半透明()
+    {
+        // 圖層效果的來源在內容外圍是透明的：模擬 margin 全透明的 ctx
+        const int m = 16;
+        var sw = W + m * 2;
+        var sh = H + m * 2;
+        var src = new uint[sw * sh];
+        for (var y = 0; y < H; y++)
+        for (var x = 0; x < W; x++)
+            src[(y + m) * sw + (x + m)] = Pack(((x / 2 + y / 2) % 2 == 0) ? 0 : 255, 120, 200, 255);
+        var ctx = new EffectContext(new SkiaSharp.SKRectI(0, 0, W, H), new SkiaSharp.SKRectI(-m, -m, W + m, H + m), src, new SkiaSharp.SKSizeI(W, H));
+        new FocusEffect { Mode = FocusEffect.ModeDepth, Radius = 10, Feather = 20, BlurRadius = 10 }.Render(ctx);
+
+        Assert.All(ctx.Dst, p => Assert.Equal(255, A(p))); // 使用者 2026-09-06 回報邊緣變透明
+        Assert.InRange(B(ctx.Dst[0]), 40, 215); // 顏色還是有糊到
+    }
+
+    [Fact]
+    public void 導引圈_與半徑過渡滑桿互相換算()
+    {
+        var fx = new FocusEffect { Radius = 30, Feather = 25, Elliptical = true };
+        var g = fx.Guide;
+        Assert.Equal(0.30f, g.Inner, 3);
+        Assert.Equal(0.55f, g.Outer, 3);
+        Assert.True(g.Elliptical);
+
+        var moved = fx.WithGuide(new PointGuide(0.42f, 0.5f));
+        Assert.Equal(42, moved.Radius);
+        Assert.Equal(8, moved.Feather);
+
+        var pt = Assert.IsType<PointParam>(fx.Parameters.First(d => d is PointParam));
+        Assert.NotNull(pt.Guide);
+        Assert.NotNull(pt.WithGuide);
+        Assert.Equal(g, pt.Guide!(fx));
+    }
 }

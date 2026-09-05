@@ -47,7 +47,11 @@ public sealed record FocusEffect : IEffect
     private static readonly ParamDef[] Common =
     [
         new PointParam("center", "中心", o => (((FocusEffect)o).CenterX, ((FocusEffect)o).CenterY),
-            (o, v) => ((FocusEffect)o) with { CenterX = v.X, CenterY = v.Y }),
+            (o, v) => ((FocusEffect)o) with { CenterX = v.X, CenterY = v.Y })
+        {
+            Guide = o => ((FocusEffect)o).Guide,
+            WithGuide = (o, g) => ((FocusEffect)o).WithGuide(g),
+        },
         new SliderParam("radius", "半徑", 0, 100, o => ((FocusEffect)o).Radius,
             (o, v) => ((FocusEffect)o) with { Radius = (int)v }, "%"),
         new SliderParam("feather", "過渡", 0, 100, o => ((FocusEffect)o).Feather,
@@ -85,6 +89,20 @@ public sealed record FocusEffect : IEffect
         ModeParams.Select(m => (ParamDef[])[ModeDef, .. m, .. Common]).ToArray();
 
     public IReadOnlyList<ParamDef> Parameters => ParamsByMode[Math.Clamp(Mode, ModeDepth, ModeBrightness)];
+
+    /// <summary>選點器上的兩圈：清楚範圍（半徑）與過渡結束處（半徑＋過渡）。</summary>
+    public PointGuide Guide => new(
+        Math.Clamp(Radius, 0, 100) / 100f,
+        (Math.Clamp(Radius, 0, 100) + Math.Clamp(Feather, 0, 100)) / 100f,
+        Elliptical, Invert);
+
+    /// <summary>從選點器拖曳回來的兩圈換算回半徑／過渡（都是整數 %）。</summary>
+    public FocusEffect WithGuide(PointGuide g)
+    {
+        var inner = Math.Clamp((int)MathF.Round(g.Inner * 100f), 0, 100);
+        var feather = Math.Clamp((int)MathF.Round((g.Outer - g.Inner) * 100f), 0, 100);
+        return this with { Radius = inner, Feather = feather };
+    }
 
     public void Render(EffectContext ctx)
     {
@@ -144,11 +162,27 @@ public sealed record FocusEffect : IEffect
                 var i0 = Math.Min((int)t, BlurLevels - 1);
                 var frac = t - i0;
                 var si = (y + ctx.SrcOffsetY) * ctx.SrcWidth + (x + ctx.SrcOffsetX);
-                ctx.Dst[y * ctx.Width + x] = frac <= 0f
+                var blurred = frac <= 0f
                     ? levels[i0][si]
                     : Lerp(levels[i0][si], levels[i0 + 1][si], frac);
+                ctx.Dst[y * ctx.Width + x] = KeepAlpha(blurred, ctx.Src[si]);
             }
         });
+    }
+
+    /// <summary>
+    /// 景深只模糊顏色，透明度照原樣。圖層效果的來源在內容外圍是透明的，直接拿模糊結果，
+    /// 畫布邊緣會被透明抹淡成半透明（使用者 2026-09-06 回報「景深聚焦會導致畫布邊緣變透明」）。
+    /// 把模糊後的 premul 除回它自己的 alpha 得到鄰域的平均顏色，再套回原像素的 alpha：
+    /// 邊緣就是「顏色糊了、形狀沒糊」，正好是聚焦要的。
+    /// </summary>
+    private static uint KeepAlpha(uint blurred, uint original)
+    {
+        var a = A(original);
+        if (a == 0) return 0;
+        var ba = A(blurred);
+        if (ba == 0) return original;
+        return Premul(B(blurred) * 255 / ba, G(blurred) * 255 / ba, R(blurred) * 255 / ba, a);
     }
 
     private void RenderContrast(EffectContext ctx, float[] weight)
