@@ -1861,6 +1861,7 @@ public partial class MainWindow : Window
         Toasts.Show("已匯入 Photoshop 文件（儲存時會存成 .mpp）");
         foreach (var warning in warnings.Take(2)) Toasts.Show(warning);
         if (warnings.Count > 2) Toasts.Show($"另有 {warnings.Count - 2} 處匯入時有調整");
+        WarnAboutMissingFonts(doc, Path.GetFileName(path));
     }
 
     /// <summary>

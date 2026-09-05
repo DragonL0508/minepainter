@@ -3,6 +3,7 @@ using System.IO.Compression;
 using System.Text;
 using MinePainter.Core.Documents;
 using MinePainter.Core.Layers;
+using MinePainter.Core.Vectors;
 using SkiaSharp;
 
 namespace MinePainter.Core.IO;
@@ -26,9 +27,11 @@ namespace MinePainter.Core.IO;
 /// 剪裁遮色片（clipping）烙成像素：被剪裁圖層的 alpha 乘上底下那層的 alpha。剪裁到群組時，
 /// 底是群組合成後的透明度，所以每個群組邊讀邊累加一張畫布大小的 alpha（混合模式不影響 alpha，只看不透明度）。
 ///
-/// 刻意不做的：調整圖層與填色圖層（沒有像素，略過並提示）、圖層樣式（陰影、外框…只提示）、
-/// 智慧型物件的可編輯性（只拿它的點陣結果）、32 位元／通道的 HDR 檔。
-/// 文字圖層拿 Photoshop 存好的點陣快照匯入成像素圖層（字型、字距在 PSD 裡是私有格式）。
+/// 圖層樣式（<c>lfx2</c>）對成我們的效果（見 <see cref="PsdLayerStyle"/>）；文字圖層（<c>TySh</c>）
+/// 解成可編輯文字（見 <see cref="PsdTextLayer"/>），解不出來才退回 Photoshop 存好的點陣快照。
+///
+/// 刻意不做的：調整圖層與填色圖層（沒有像素，略過並提示）、智慧型物件的可編輯性（只拿它的點陣結果）、
+/// 32 位元／通道的 HDR 檔。
 /// </summary>
 public static class PsdFormat
 {
@@ -76,7 +79,7 @@ public static class PsdFormat
         var reader = new Reader(stream);
         var header = ReadHeader(reader);
         var palette = ReadColorModeData(reader, header);
-        reader.Skip(reader.UInt32());   // 影像資源：縮圖、解析度、ICC，匯入用不到
+        header = header with { GlobalAngle = ReadImageResources(reader) };
 
         var records = ReadLayerSection(reader, header, notes);
 
@@ -107,6 +110,9 @@ public static class PsdFormat
 
     private readonly record struct Header(bool IsPsb, int Channels, int Width, int Height, int Depth, ColorMode Mode)
     {
+        /// <summary>圖層樣式「使用整體光源」的角度（影像資源 1037；Photoshop 預設 120）。</summary>
+        public int GlobalAngle { get; init; } = 120;
+
         /// <summary>這個色彩模式本身佔幾個通道；合成影像多出來的第一個就是透明度。</summary>
         public int ColorChannels => Mode switch
         {
@@ -164,6 +170,30 @@ public static class PsdFormat
         return palette;
     }
 
+    /// <summary>
+    /// 影像資源區：一串 8BIM + ID + Pascal 名稱（補到偶數）+ 長度 + 資料（補到偶數）。
+    /// 只要整體光源角度（1037），其餘（縮圖、ICC、解析度）匯入用不到。
+    /// </summary>
+    private static int ReadImageResources(Reader reader)
+    {
+        var length = reader.UInt32();
+        var end = reader.Position + length;
+        var globalAngle = 120;
+        while (reader.Position + 12 <= end)
+        {
+            if (!reader.Bytes(4).AsSpan().SequenceEqual("8BIM"u8)) break;
+            var id = reader.UInt16();
+            var nameLength = reader.Byte();
+            reader.Skip(nameLength + (nameLength + 1) % 2);
+            var size = reader.UInt32();
+            var dataStart = reader.Position;
+            if (id == 1037 && size >= 4) globalAngle = reader.Int32();
+            reader.Position = dataStart + size + size % 2;
+        }
+        reader.Position = end;
+        return globalAngle;
+    }
+
     // ---- 圖層區 ----
 
     private sealed class ChannelRecord
@@ -188,9 +218,10 @@ public static class PsdFormat
         public byte MaskDefault = 255;
         public byte MaskFlags;
         public int SectionType;     // lsct：0 一般、1／2 群組本體、3 群組底部界線
-        public bool IsText;
         public bool IsAdjustmentOrFill;
-        public bool HasLayerStyle;
+        public byte[]? StyleData;       // lfx2 原始位元組
+        public byte[]? TextData;        // TySh 原始位元組
+        public bool HasLegacyStyle;     // 只有舊版 lrFX、沒有 lfx2
     }
 
     /// <summary>附加資訊區塊中，PSB 用 8 位元組長度的那幾個 key（其餘仍是 4 位元組）。</summary>
@@ -370,11 +401,13 @@ public static class PsdFormat
                 if (length >= 1) record.FillOpacity = reader.Byte();
                 break;
             case "TySh":
-                record.IsText = true;
+                record.TextData = reader.Bytes(length);
                 break;
             case "lfx2":
+                record.StyleData = reader.Bytes(length);
+                break;
             case "lrFX":
-                record.HasLayerStyle = true;
+                record.HasLegacyStyle = true;
                 break;
             default:
                 if (AdjustmentAndFillKeys.Contains(key)) record.IsAdjustmentOrFill = true;
@@ -687,11 +720,6 @@ public static class PsdFormat
                 return layer;   // 真的空白圖層：留一層空的，名字與順序不變
             }
 
-            if (record.IsText)
-                notes.Add($"文字圖層「{layer.Name}」已轉成像素（Photoshop 的文字排版無法對應）。");
-            if (record.HasLayerStyle)
-                notes.Add($"「{layer.Name}」的圖層樣式（陰影、外框等）沒有匯入。");
-
             bgra = ComposeBgra(record, header, palette);
             if (record.HasMask) ApplyMask(bgra, record);
             if (record.Clipped)
@@ -699,6 +727,19 @@ public static class PsdFormat
                 if (clipBase != null) ApplyClip(bgra, record.Rect, clipBase);
                 else notes.Add($"「{layer.Name}」設了剪裁但底下沒有圖層，已當成一般圖層。");
             }
+
+            var style = ParseStyle(record, header, layer.Name, notes);
+            if (record.TextData != null && BuildText(record, style, layer.Name, notes) is { } text)
+            {
+                // 文字圖層不變式：有物件就沒有像素。點陣快照只留給剪裁／群組 alpha 當底用
+                layer.AddElement(text);
+                return layer;
+            }
+
+            if (style is { IsEmpty: false }) layer.SetEffects(style.ToLayerEffects());
+            if (style is { Unsupported.Count: > 0 })
+                notes.Add($"「{layer.Name}」的圖層樣式裡，{string.Join("、", style.Unsupported.Distinct())}沒有對應，已略過。");
+
             if (!IsFullyTransparent(bgra)) CopyUnpremultiplied(layer, bgra, record.Rect);
             return layer;
         }
@@ -808,6 +849,54 @@ public static class PsdFormat
                 bgra[i] = (byte)((bgra[i] * coverage + 127) / 255);
             }
         }
+    }
+
+    private static PsdLayerStyle? ParseStyle(LayerRecord record, Header header, string name, List<string> notes)
+    {
+        if (record.StyleData == null)
+        {
+            if (record.HasLegacyStyle) notes.Add($"「{name}」用的是舊版圖層樣式，沒有匯入。");
+            return null;
+        }
+        try
+        {
+            return PsdLayerStyle.Parse(record.StyleData, header.GlobalAngle);
+        }
+        catch (Exception ex) when (ex is InvalidDataException or IndexOutOfRangeException or ArgumentOutOfRangeException or OverflowException)
+        {
+            notes.Add($"「{name}」的圖層樣式無法解析，已略過。");
+            return null;
+        }
+    }
+
+    /// <summary>解出可編輯文字並套上樣式；解不出來提示原因並回 null（呼叫端退回點陣）。</summary>
+    private static TextElement? BuildText(LayerRecord record, PsdLayerStyle? style, string name, List<string> notes)
+    {
+        TextElement? text;
+        string? failure;
+        try
+        {
+            text = PsdTextLayer.TryBuild(record.TextData!, notes, out failure);
+        }
+        catch (Exception ex) when (ex is InvalidDataException or IndexOutOfRangeException or ArgumentOutOfRangeException or OverflowException or FormatException)
+        {
+            text = null;
+            failure = "排版資料無法解析";
+        }
+
+        if (text == null)
+        {
+            notes.Add($"文字圖層「{name}」已轉成像素（{failure}）。");
+            return null;
+        }
+
+        if (style != null)
+        {
+            text = style.ApplyTo(text);
+            if (style.Unsupported.Count > 0)
+                notes.Add($"文字「{name}」的圖層樣式裡，{string.Join("、", style.Unsupported.Distinct())}沒有對應，已略過。");
+        }
+        return text;
     }
 
     /// <summary>剪裁遮色片：只留底層有像素的地方。底層範圍外一律透明。</summary>

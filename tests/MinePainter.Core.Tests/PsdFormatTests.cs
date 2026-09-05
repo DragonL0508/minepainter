@@ -372,7 +372,7 @@ public class PsdFormatTests
 
     // ---- 依規格現寫的 PSD ----
 
-    private static class PsdWriter
+    internal static class PsdWriter
     {
         public sealed class Layer(string pascalName, SKRectI rect)
         {
@@ -392,12 +392,14 @@ public class PsdFormatTests
             public byte MaskFlags { get; init; }
             /// <summary>只放 key、內容為空的附加資訊區塊（TySh、levl…），讀取端只看 key。</summary>
             public List<string> ExtraKeys { get; } = new();
+            /// <summary>帶內容的附加資訊區塊（lfx2、TySh…）。</summary>
+            public Dictionary<string, byte[]> Blocks { get; } = new();
         }
 
         public static byte[] Build(
             int width, int height, IReadOnlyList<Layer> layers,
             byte[][]? merged = null, int mergedCompression = 0,
-            int depth = 8, int mode = 3, int channels = 3, byte[]? palette = null, bool psb = false)
+            int depth = 8, int mode = 3, int channels = 3, byte[]? palette = null, bool psb = false, int? globalAngle = null)
         {
             var file = new MemoryStream();
             file.Write("8BPS"u8);
@@ -412,7 +414,7 @@ public class PsdFormatTests
             U32(file, (uint)(palette?.Length ?? 0));
             if (palette != null) file.Write(palette);
 
-            U32(file, 0);   // 影像資源
+            WriteImageResources(file, globalAngle);
 
             if (layers.Count == 0)
             {
@@ -446,6 +448,24 @@ public class PsdFormatTests
             merged ??= Enumerable.Range(0, channels).Select(_ => new byte[width * height * depth / 8]).ToArray();
             WriteMerged(file, merged, width, height, depth, mergedCompression, psb);
             return file.ToArray();
+        }
+
+        /// <summary>影像資源區：只在要測整體光源時放一筆 1037（8BIM + ID + 空名稱 + 長度 + int32）。</summary>
+        private static void WriteImageResources(MemoryStream file, int? globalAngle)
+        {
+            if (globalAngle == null)
+            {
+                U32(file, 0);
+                return;
+            }
+            var res = new MemoryStream();
+            res.Write("8BIM"u8);
+            U16(res, 1037);
+            res.Write(new byte[2]);     // 空的 Pascal 名稱（長度 0 + 補位）
+            U32(res, 4);
+            I32(res, globalAngle.Value);
+            U32(file, (uint)res.Length);
+            res.WriteTo(file);
         }
 
         private static void WriteLayerInfo(MemoryStream info, IReadOnlyList<Layer> layers, int depth, bool psb)
@@ -520,6 +540,7 @@ public class PsdFormatTests
                     WriteBlock(extra, "lsct", block.ToArray());
                 }
                 foreach (var key in layer.ExtraKeys) WriteBlock(extra, key, []);
+                foreach (var (key, payload) in layer.Blocks) WriteBlock(extra, key, payload);
 
                 U32(info, (uint)extra.Length);
                 extra.WriteTo(info);
