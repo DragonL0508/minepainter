@@ -16,6 +16,16 @@ public enum RemoveBgSize
 /// <summary>remove.bg 線上去背的參數。</summary>
 public sealed record RemoveBgOptions(string ApiKey, RemoveBgSize Size = RemoveBgSize.Auto);
 
+/// <summary>
+/// remove.bg 的回應：<see cref="Alpha"/> 是縮回來源尺寸的前景遮罩（0..255），
+/// <see cref="ServerWidth"/>／<see cref="ServerHeight"/> 是伺服器實際回的解析度（沒點數時只給預覽尺寸）。
+/// </summary>
+public sealed record RemoveBgResult(byte[] Alpha, int ServerWidth, int ServerHeight)
+{
+    /// <summary>伺服器回的圖比來源小（預覽解析度、或超過 25 MP）。</summary>
+    public bool Downscaled(int width, int height) => ServerWidth < width || ServerHeight < height;
+}
+
 /// <summary>remove.bg 回的錯誤（HTTP 4xx／5xx 附 JSON errors[]）。</summary>
 public sealed class RemoveBgException(string message, string? code = null) : Exception(message)
 {
@@ -26,8 +36,8 @@ public sealed class RemoveBgException(string message, string? code = null) : Exc
 /// <summary>
 /// remove.bg 線上去背，做法與 paint.net 的 Remove Background 插件（WhelanB/PDN-RemoveBG）相同：
 /// 影像編成 PNG 以 multipart POST 到 https://api.remove.bg/v1.0/removebg（X-Api-Key、size=auto），
-/// 回來的 PNG 就是去背結果（連邊緣的顏色去污都是伺服器做好的），縮回原尺寸後整張貼回。
-/// 品質來自 remove.bg 的伺服器模型，本機模型追不上，所以顏色也照單全收，不再經過本機的遮罩後處理。
+/// 回來的 PNG 是去背結果。這裡只取它的 alpha 當前景遮罩，顏色一律用本機的原圖：
+/// 帳號沒點數時伺服器只回預覽解析度（約 0.25 MP），整張貼回會糊；拿遮罩回原圖摳才保得住原解析度。
 /// </summary>
 public static class RemoveBgClient
 {
@@ -69,10 +79,11 @@ public static class RemoveBgClient
     public static double? LastCreditsCharged { get; private set; }
 
     /// <summary>
-    /// 把 premul BGRA 像素送去 remove.bg，回傳同尺寸的 premul BGRA 去背結果。
-    /// 伺服器回的圖若比較小（預覽尺寸、超過 25 MP），以高品質縮放放回原尺寸（插件也是這樣做）。
+    /// 把 premul BGRA 像素送去 remove.bg，回傳來源尺寸的前景遮罩（伺服器結果的 alpha）。
+    /// 伺服器回的圖若比較小（預覽尺寸、超過 25 MP），遮罩以高品質縮放放回原尺寸；
+    /// 呼叫端再拿原圖做引導濾波把邊緣貼回真實像素。
     /// </summary>
-    public static unsafe uint[] Cutout(uint[] src, int width, int height, RemoveBgOptions options, CancellationToken ct)
+    public static unsafe RemoveBgResult Cutout(uint[] src, int width, int height, RemoveBgOptions options, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(options.ApiKey))
             throw new RemoveBgException("還沒有填 remove.bg 的 API Key。", "auth_failed");
@@ -96,17 +107,29 @@ public static class RemoveBgClient
             ?? throw new RemoveBgException("remove.bg 回傳的影像無法解碼。");
         var info = new SKImageInfo(codec.Info.Width, codec.Info.Height, SKColorType.Bgra8888, SKAlphaType.Premul);
         using var decoded = SKBitmap.Decode(codec, info) ?? throw new RemoveBgException("remove.bg 回傳的影像無法解碼。");
-        using var resized = decoded.Width == width && decoded.Height == height ? null
-            : decoded.Resize(new SKImageInfo(width, height, SKColorType.Bgra8888, SKAlphaType.Premul), SKFilterQuality.High)
-              ?? throw new InvalidOperationException("縮放 remove.bg 結果失敗");
-        var output = resized ?? decoded;
 
-        var outPixels = new uint[width * height];
-        var rowBytes = output.RowBytes;
+        // 只要 alpha：先抽成灰階，再（需要時）縮回來源尺寸
+        using var small = new SKBitmap(new SKImageInfo(decoded.Width, decoded.Height, SKColorType.Gray8, SKAlphaType.Opaque));
+        {
+            var dp = (byte*)decoded.GetPixels();
+            var gp = (byte*)small.GetPixels();
+            for (var y = 0; y < decoded.Height; y++)
+            {
+                var row = dp + y * decoded.RowBytes;
+                var grow = gp + y * small.RowBytes;
+                for (var x = 0; x < decoded.Width; x++) grow[x] = row[x * 4 + 3];
+            }
+        }
+        using var big = small.Width == width && small.Height == height ? null
+            : small.Resize(new SKImageInfo(width, height, SKColorType.Gray8, SKAlphaType.Opaque), SKFilterQuality.High)
+              ?? throw new InvalidOperationException("縮放 remove.bg 遮罩失敗");
+        var output = big ?? small;
+
+        var alpha = new byte[width * height];
         var basePtr = (byte*)output.GetPixels();
         for (var y = 0; y < height; y++)
-            new ReadOnlySpan<uint>(basePtr + y * rowBytes, width).CopyTo(outPixels.AsSpan(y * width, width));
-        return outPixels;
+            new ReadOnlySpan<byte>(basePtr + y * output.RowBytes, width).CopyTo(alpha.AsSpan(y * width, width));
+        return new RemoveBgResult(alpha, decoded.Width, decoded.Height);
     }
 
     /// <summary>送 multipart；成功回影像 bytes，失敗丟 <see cref="RemoveBgException"/>（訊息取自 API 的 errors[]）。</summary>

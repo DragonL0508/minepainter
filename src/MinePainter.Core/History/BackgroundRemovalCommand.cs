@@ -13,7 +13,8 @@ public sealed record BackgroundRemovalOptions
     public OnnxModelInfo? Model { get; init; }
     /// <summary>
     /// 走 remove.bg 線上服務（同 paint.net 的 Remove Background 插件）。有值時不用本機模型：
-    /// 伺服器回的去背圖整張貼回（連邊緣顏色都是伺服器算好的），本機的精修／填實／對比／收縮都不再套用。
+    /// 伺服器結果只取 alpha 當遮罩，顏色仍是原圖（原解析度）；伺服器只回預覽尺寸時，
+    /// 遮罩放大後用原圖做引導濾波貼回真實邊緣。填實／對比／收縮照常套用。
     /// </summary>
     public RemoveBgOptions? RemoveBg { get; init; }
     public bool UseGpu { get; init; } = true;
@@ -126,42 +127,45 @@ public static class BackgroundRemovalCommand
             }
 
             // ---- 3. 推論 + 後處理（鎖外）----
-            byte[]? mask = null;     // 本機模型：前景遮罩，乘到 alpha
-            uint[]? cutout = null;   // remove.bg：整張結果，直接覆蓋
+            // 前景機率圖（來源尺寸）：本機模型推論，或 remove.bg 結果的 alpha
+            byte[] model;
+            var refine = true; // 遮罩是低解析度放大來的才需要用原圖精修邊緣
             if (options.RemoveBg is { } remote)
             {
-                cutout = RemoveBgClient.Cutout(pixels, crop.Width, crop.Height, remote, ct);
-                if (coverage != null)
-                    for (var i = 0; i < cutout.Length; i++)
-                        if (coverage[i] != 255) cutout[i] = Scale(cutout[i], coverage[i]);
-                BackgroundRemover.LastPlanNote = RemoveBgClient.LastCreditsCharged is { } charged
-                    ? $"remove.bg 扣了 {charged:0.##} 點" : null;
+                var result = RemoveBgClient.Cutout(pixels, crop.Width, crop.Height, remote, ct);
+                model = result.Alpha;
+                refine = result.Downscaled(crop.Width, crop.Height);
+                var charged = RemoveBgClient.LastCreditsCharged;
+                BackgroundRemover.LastPlanNote =
+                    $"remove.bg 回傳 {result.ServerWidth}×{result.ServerHeight}" +
+                    (refine ? $"（{(charged is 0 ? "帳號沒有點數，只給預覽解析度；" : "")}已用原圖精修放大回 {crop.Width}×{crop.Height}）" : "") +
+                    (charged is { } c ? $"，扣 {c:0.##} 點" : "");
             }
             else
             {
                 var localModel = options.Model ?? throw new InvalidOperationException("沒有指定去背模型");
-                var model = BackgroundRemover.Infer(localModel, pixels, crop.Width, crop.Height, options.UseGpu, ct);
-                ct.ThrowIfCancellationRequested();
-                // 精修半徑隨圖片大小放大：模型的一個像素在大圖上是好幾個像素
-                var scale = Math.Max(1, (int)MathF.Ceiling(Math.Max(crop.Width, crop.Height) / 1024f));
-                var radius = Math.Max(options.RefineRadius, 6 * scale);
-                mask = GuidedFilter.Refine(model, pixels, crop.Width, crop.Height, radius, ct: ct);
-                if (options.SolidCore)
-                    mask = BackgroundRemover.SolidifyCore(mask, model, crop.Width, crop.Height, radius);
-                BackgroundRemover.ApplyContrast(mask, options.Contrast);
-                mask = BackgroundRemover.Shift(mask, crop.Width, crop.Height, options.Shift);
-                if (coverage != null)
-                    for (var i = 0; i < mask.Length; i++)
-                        if (coverage[i] != 255) mask[i] = (byte)(mask[i] * coverage[i] / 255);
+                model = BackgroundRemover.Infer(localModel, pixels, crop.Width, crop.Height, options.UseGpu, ct);
             }
             ct.ThrowIfCancellationRequested();
 
-            // ---- 4. 套 alpha／貼回結果（鎖內）----
+            // 精修半徑隨圖片大小放大：模型的一個像素在大圖上是好幾個像素
+            var scale = Math.Max(1, (int)MathF.Ceiling(Math.Max(crop.Width, crop.Height) / 1024f));
+            var radius = Math.Max(options.RefineRadius, 6 * scale);
+            var mask = refine ? GuidedFilter.Refine(model, pixels, crop.Width, crop.Height, radius, ct: ct) : (byte[])model.Clone();
+            if (options.SolidCore)
+                mask = BackgroundRemover.SolidifyCore(mask, model, crop.Width, crop.Height, radius);
+            BackgroundRemover.ApplyContrast(mask, options.Contrast);
+            mask = BackgroundRemover.Shift(mask, crop.Width, crop.Height, options.Shift);
+            if (coverage != null)
+                for (var i = 0; i < mask.Length; i++)
+                    if (coverage[i] != 255) mask[i] = (byte)(mask[i] * coverage[i] / 255);
+            ct.ThrowIfCancellationRequested();
+
+            // ---- 4. 套 alpha（鎖內）：顏色永遠是原圖的原解析度像素，只乘上遮罩 ----
             lock (doc.SyncRoot)
             {
                 if (layer.Document != doc) { Rollback(); return false; }
-                if (cutout != null) WriteRegion(layer.Surface, crop, cutout);
-                else ApplyMask(layer.Surface, crop, mask!);
+                ApplyMask(layer.Surface, crop, mask);
                 affected = Union(affected, crop);
                 if (selection != null)
                 {
@@ -244,26 +248,6 @@ public static class BackgroundRemovalCommand
             }
         }
         return pixels;
-    }
-
-    /// <summary>把 pixels（premul BGRA，rect 尺寸）整塊寫回 rect（圖層座標）；寫完全透明的 tile 直接移除。</summary>
-    private static unsafe void WriteRegion(TileSurface surface, SKRectI rect, uint[] pixels)
-    {
-        foreach (var idx in TileIndex.CoveringRect(rect))
-        {
-            var tileRect = idx.ToPixelRect();
-            var inter = SKRectI.Intersect(tileRect, rect);
-            if (inter.Width <= 0 || inter.Height <= 0) continue;
-            var tile = surface.GetTileForWrite(idx);
-            var dst = (uint*)tile.Pixels;
-            for (var y = inter.Top; y < inter.Bottom; y++)
-            {
-                var dstRow = dst + (y - tileRect.Top) * Tile.Size + (inter.Left - tileRect.Left);
-                pixels.AsSpan((y - rect.Top) * rect.Width + (inter.Left - rect.Left), inter.Width)
-                    .CopyTo(new Span<uint>(dstRow, inter.Width));
-            }
-            if (tile.IsBlank()) surface.RemoveTile(idx);
-        }
     }
 
     /// <summary>讀選取在 rect（圖層座標）內的覆蓋度；選取本身是 doc 座標，差一個圖層位移。</summary>

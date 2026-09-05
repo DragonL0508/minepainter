@@ -87,7 +87,7 @@ public class RemoveBgTests : IDisposable
     }
 
     [Fact]
-    public void Cutout_SendsSameRequestAsPaintNetPlugin_AndReturnsServerPixels()
+    public void Cutout_SendsSameRequestAsPaintNetPlugin_AndReturnsServerAlpha()
     {
         _server.Respond = png => CutoutCircle(png, new SKPoint(32, 32), 16, credits: 1);
         var src = Solid(64, 64, 0xFFC8C8C8);
@@ -103,9 +103,11 @@ public class RemoveBgTests : IDisposable
             Assert.Equal(64, up.Width);
             Assert.Equal(new SKColor(200, 200, 200), up.GetPixel(5, 5));
         }
-        Assert.Equal(64 * 64, result.Length);
-        Assert.Equal(0xFFC8C8C8u, result[32 * 64 + 32]); // 圓心：伺服器保留
-        Assert.Equal(0u, result[2 * 64 + 2]);             // 角落：伺服器清掉
+        Assert.Equal(64 * 64, result.Alpha.Length);
+        Assert.Equal(64, result.ServerWidth);
+        Assert.False(result.Downscaled(64, 64));
+        Assert.Equal(255, result.Alpha[32 * 64 + 32]); // 圓心：伺服器保留
+        Assert.Equal(0, result.Alpha[2 * 64 + 2]);     // 角落：伺服器清掉
         Assert.Equal(1, RemoveBgClient.LastCreditsCharged);
     }
 
@@ -118,9 +120,11 @@ public class RemoveBgTests : IDisposable
         var result = RemoveBgClient.Cutout(src, 64, 64, new RemoveBgOptions("k", RemoveBgSize.Preview), CancellationToken.None);
 
         Assert.Equal("preview", _server.Fields["size"]);
-        Assert.Equal(64 * 64, result.Length);
-        Assert.Equal(255, (int)(result[32 * 64 + 32] >> 24));
-        Assert.Equal(0, (int)(result[1 * 64 + 1] >> 24));
+        Assert.Equal(64 * 64, result.Alpha.Length);
+        Assert.Equal(32, result.ServerWidth);
+        Assert.True(result.Downscaled(64, 64));
+        Assert.Equal(255, result.Alpha[32 * 64 + 32]);
+        Assert.Equal(0, result.Alpha[1 * 64 + 1]);
     }
 
     [Fact]
@@ -166,7 +170,79 @@ public class RemoveBgTests : IDisposable
         return tile.PixelSpan[((ly - rect.Top) * Tile.Size + (lx - rect.Left)) * 4 + 3];
     }
 
-    /// <summary>命令走 remove.bg：伺服器的結果整張貼回、一步 undo；不需要本機模型。</summary>
+    private static uint PixelAt(RasterLayer layer, int x, int y)
+    {
+        var lx = x - layer.Offset.X;
+        var ly = y - layer.Offset.Y;
+        var tile = layer.Surface.GetTileForRead(TileIndex.FromPixel(lx, ly));
+        if (tile == null) return 0;
+        var rect = TileIndex.FromPixel(lx, ly).ToPixelRect();
+        var span = tile.PixelSpan.Slice(((ly - rect.Top) * Tile.Size + (lx - rect.Left)) * 4, 4);
+        return (uint)span[0] | ((uint)span[1] << 8) | ((uint)span[2] << 16) | ((uint)span[3] << 24);
+    }
+
+    /// <summary>
+    /// 伺服器只回預覽解析度（1/4）而且顏色被它糊掉：結果的顏色仍是原圖原解析度像素，
+    /// 遮罩經原圖引導濾波後邊緣貼回真實邊界（方塊內緣不透明、外緣透明）。
+    /// </summary>
+    [Fact]
+    public void Command_RemoveBg_PreviewSize_KeepsOriginalPixels_AndSnapsMaskToRealEdge()
+    {
+        // 伺服器：把圖縮到 1/4、回一個每邊比真實方塊多包 6px 的方形遮罩（模擬低解析度的邊緣誤差），顏色全塗成綠色
+        _server.Respond = png =>
+        {
+            using var src = SKBitmap.Decode(png);
+            var w = src.Width / 4; var h = src.Height / 4;
+            using var outBmp = new SKBitmap(new SKImageInfo(w, h, SKColorType.Bgra8888, SKAlphaType.Unpremul));
+            for (var y = 0; y < h; y++)
+            for (var x = 0; x < w; x++)
+            {
+                var fx = x * 4 + 2; var fy = y * 4 + 2;
+                var inside = fx >= 82 && fx < 174 && fy >= 82 && fy < 174;
+                outBmp.SetPixel(x, y, inside ? new SKColor(0, 255, 0) : SKColors.Transparent);
+            }
+            using var data = outBmp.Encode(SKEncodedImageFormat.Png, 100);
+            var r = new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(data.ToArray()) };
+            r.Headers.Add("X-Credits-Charged", "0");
+            return r;
+        };
+        var doc = ImageCodec.CreateBlankDocument(256, 256, new SKColor(220, 220, 220));
+        using var session = new EditorSession(doc);
+        var layer = (RasterLayer)doc.ActiveLayer!;
+        lock (doc.SyncRoot)
+        {
+            // 深藍方塊 (88..168)，邊緣銳利
+            foreach (var idx in TileIndex.CoveringRect(new SKRectI(88, 88, 168, 168)))
+            {
+                var tile = layer.Surface.GetTileForWrite(idx);
+                using var surface = SKSurface.Create(Tile.Info, tile.Pixels, Tile.RowBytes);
+                var tr = idx.ToPixelRect();
+                surface.Canvas.Translate(-tr.Left, -tr.Top);
+                using var paint = new SKPaint { Color = new SKColor(20, 30, 160) };
+                surface.Canvas.DrawRect(SKRect.Create(88, 88, 80, 80), paint);
+                surface.Canvas.Flush();
+            }
+        }
+
+        var ok = BackgroundRemovalCommand.Run(session, layer, new BackgroundRemovalOptions
+        {
+            RemoveBg = new RemoveBgOptions("k"),
+        });
+        Assert.True(ok);
+
+        // 顏色是原圖的深藍，不是伺服器的綠
+        Assert.Equal(0xFF141EA0u, PixelAt(layer, 128, 128));
+        Assert.Equal(255, AlphaAt(layer, 90, 90));   // 方塊內緣：不透明
+        Assert.Equal(255, AlphaAt(layer, 165, 128));
+        // 伺服器遮罩多包的那圈背景（方塊外 3px）被原圖引導精修掉
+        Assert.True(AlphaAt(layer, 171, 128) < 60, $"outside {AlphaAt(layer, 171, 128)}");
+        Assert.True(AlphaAt(layer, 128, 171) < 60, $"outside {AlphaAt(layer, 128, 171)}");
+        Assert.Equal(0, AlphaAt(layer, 250, 250));
+        Assert.Contains("64×64", BackgroundRemover.LastPlanNote);
+        Assert.Contains("沒有點數", BackgroundRemover.LastPlanNote);
+    }
+
+    /// <summary>命令走 remove.bg：伺服器結果當遮罩乘到原圖、一步 undo；不需要本機模型。</summary>
     [Fact]
     public void Command_RemoveBg_WritesServerResult_OneUndoStep()
     {

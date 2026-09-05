@@ -91,7 +91,7 @@ public sealed class BackgroundRemovalWindow : ModalDialog
         _downloadButton.Padding = new Thickness(8, 4);
         ToolTip.SetTip(_downloadButton, "從 rembg 官方發佈下載本機去背模型（離線可用，不用 API Key）");
 
-        _sizeCombo.Items.Add("自動（最高解析度；每張扣 1 點）");
+        _sizeCombo.Items.Add("自動（有點數給最高解析度、扣 1 點；沒點數給預覽）");
         _sizeCombo.Items.Add("預覽（約 0.25 百萬像素；免費額度）");
         var settings = AppSettings.Instance;
         _sizeCombo.SelectedIndex = settings.RemoveBgPreview ? 1 : 0;
@@ -114,7 +114,7 @@ public sealed class BackgroundRemovalWindow : ModalDialog
         keyLink.PointerPressed += (_, _) => OpenUrl(RemoveBgClient.ApiKeyUrl);
         ToolTip.SetTip(keyLink, RemoveBgClient.ApiKeyUrl);
         ToolTip.SetTip(_apiKeyBox, "登入 remove.bg 後在儀表板取得；會存進設定檔，下次不用再填");
-        ToolTip.SetTip(_sizeCombo, "自動＝依圖片大小與帳號點數給最高解析度（paint.net 插件的做法）；預覽＝免費但只有約 0.25 百萬像素，會放大回原尺寸");
+        ToolTip.SetTip(_sizeCombo, "自動＝依圖片大小與帳號點數給最高解析度（paint.net 插件的做法），帳號沒點數時伺服器只會回預覽；預覽＝免費、約 0.25 百萬像素。不管哪種，顏色都是原圖的原解析度像素，伺服器結果只當遮罩用");
 
         var keyRow = new DockPanel();
         DockPanel.SetDock(keyLink, Dock.Right);
@@ -125,9 +125,6 @@ public sealed class BackgroundRemovalWindow : ModalDialog
         _remotePanel.Children.Add(LabeledRow("解析度", _sizeCombo));
 
         _localPanel.Children.Add(_gpuCheck);
-        _localPanel.Children.Add(_solidCheck);
-        _localPanel.Children.Add(LabeledRow("遮罩對比", _contrastBar));
-        _localPanel.Children.Add(LabeledRow("邊緣收縮", _shiftBar));
 
         _gpuCheck.IsChecked = _lastGpu;
         _solidCheck.IsChecked = _lastSolid;
@@ -165,6 +162,9 @@ public sealed class BackgroundRemovalWindow : ModalDialog
                 LabeledRow("模型", modelRow),
                 _remotePanel,
                 _localPanel,
+                _solidCheck,
+                LabeledRow("遮罩對比", _contrastBar),
+                LabeledRow("邊緣收縮", _shiftBar),
                 _selectionCheck,
                 new Separator { Margin = new Thickness(0, 3) },
                 _hint,
@@ -218,7 +218,7 @@ public sealed class BackgroundRemovalWindow : ModalDialog
             ? "本圖層的效果堆疊／文字物件會先平面化成像素，再去背。"
             : "去背結果直接寫進本圖層（可 undo）。";
         _hint.Text = IsRemote
-            ? flatten + "影像會上傳到 remove.bg 處理，拿回來的就是伺服器算好的去背圖（含邊緣去色），整張貼回，做法與 paint.net 的 Remove Background 插件相同。"
+            ? flatten + "影像會上傳到 remove.bg（同 paint.net 的 Remove Background 插件）。伺服器結果只當遮罩：顏色一律取自原圖的原解析度像素；伺服器只回預覽尺寸時，遮罩會以原圖做引導濾波精修放大。"
             : flatten + "邊緣一律以高清原圖做引導濾波精修。";
         UpdatePlanHint();
     }
@@ -322,9 +322,15 @@ public sealed class BackgroundRemovalWindow : ModalDialog
             options = new BackgroundRemovalOptions
             {
                 RemoveBg = new RemoveBgOptions(key, preview ? RemoveBgSize.Preview : RemoveBgSize.Auto),
+                SolidCore = _solidCheck.IsChecked == true,
+                Contrast = (int)_contrastBar.Value,
+                Shift = (int)_shiftBar.Value,
                 Selection = _selectionCheck.IsVisible && _selectionCheck.IsChecked == true ? _session.Selection : null,
             };
             _lastModel = RemoveBgName;
+            _lastSolid = options.SolidCore;
+            _lastContrast = options.Contrast;
+            _lastShift = options.Shift;
         }
         else
         {
