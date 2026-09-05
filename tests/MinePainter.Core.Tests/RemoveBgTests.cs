@@ -160,6 +160,45 @@ public class RemoveBgTests : IDisposable
         Assert.Null(_server.UploadedPng);
     }
 
+    /// <summary>多組 key：第一組沒點數（402）、第二組 key 失效（403）、第三組成功；其他錯誤不換 key。</summary>
+    [Fact]
+    public void Post_FallsBackToNextKey_OnCreditsAuthOrRateLimit()
+    {
+        var used = new List<string>();
+        _server.Respond = png =>
+        {
+            used.Add(_server.ApiKey!);
+            return _server.ApiKey switch
+            {
+                "k1" => new HttpResponseMessage(HttpStatusCode.PaymentRequired)
+                {
+                    Content = new StringContent("""{"errors":[{"title":"Insufficient credits","code":"insufficient_credits"}]}"""),
+                },
+                "k2" => new HttpResponseMessage(HttpStatusCode.Forbidden) { Content = new StringContent("nope") },
+                "k3" => new HttpResponseMessage(HttpStatusCode.TooManyRequests) { Content = new StringContent("slow") },
+                _ => CutoutCircle(png, new SKPoint(4, 4), 3),
+            };
+        };
+        var result = RemoveBgClient.Cutout(Solid(8, 8, 0xFFFFFFFF), 8, 8,
+            new RemoveBgOptions(["k1", " ", "k2", "k3", "k4"]), CancellationToken.None);
+        Assert.Equal(["k1", "k2", "k3", "k4"], used);
+        Assert.Equal(255, result.Alpha[4 * 8 + 4]);
+
+        // 全部都不行：丟最後一組的錯
+        used.Clear();
+        var ex = Assert.Throws<RemoveBgException>(() => RemoveBgClient.Cutout(Solid(8, 8, 0xFFFFFFFF), 8, 8,
+            new RemoveBgOptions(["k1", "k2"]), CancellationToken.None));
+        Assert.Equal("auth_failed", ex.Code);
+        Assert.Equal(["k1", "k2"], used);
+
+        // 伺服器錯誤（500）不換 key
+        used.Clear();
+        _server.Respond = _ => { used.Add(_server.ApiKey!); return new HttpResponseMessage(HttpStatusCode.InternalServerError) { Content = new StringContent("x") }; };
+        Assert.Throws<RemoveBgException>(() => RemoveBgClient.Cutout(Solid(8, 8, 0xFFFFFFFF), 8, 8,
+            new RemoveBgOptions(["k1", "k2"]), CancellationToken.None));
+        Assert.Equal(["k1"], used);
+    }
+
     private static byte AlphaAt(RasterLayer layer, int x, int y)
     {
         var lx = x - layer.Offset.X;

@@ -13,8 +13,11 @@ public enum RemoveBgSize
     Preview,
 }
 
-/// <summary>remove.bg 線上去背的參數。</summary>
-public sealed record RemoveBgOptions(string ApiKey, RemoveBgSize Size = RemoveBgSize.Auto);
+/// <summary>remove.bg 線上去背的參數。多組 API Key 依序試：一組沒點數／失效／被限流就換下一組。</summary>
+public sealed record RemoveBgOptions(IReadOnlyList<string> ApiKeys, RemoveBgSize Size = RemoveBgSize.Auto)
+{
+    public RemoveBgOptions(string apiKey, RemoveBgSize size = RemoveBgSize.Auto) : this([apiKey], size) { }
+}
 
 /// <summary>
 /// remove.bg 的回應：<see cref="Alpha"/> 是縮回來源尺寸的前景遮罩（0..255），
@@ -85,7 +88,7 @@ public static class RemoveBgClient
     /// </summary>
     public static unsafe RemoveBgResult Cutout(uint[] src, int width, int height, RemoveBgOptions options, CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(options.ApiKey))
+        if (options.ApiKeys.All(string.IsNullOrWhiteSpace))
             throw new RemoveBgException("沒有 API Key", "auth_failed");
 
         byte[] png;
@@ -132,15 +135,37 @@ public static class RemoveBgClient
         return new RemoveBgResult(alpha, decoded.Width, decoded.Height);
     }
 
-    /// <summary>送 multipart；成功回影像 bytes，失敗丟 <see cref="RemoveBgException"/>（訊息取自 API 的 errors[]）。</summary>
+    /// <summary>
+    /// 依序用每組 key 送；某組回「沒點數／key 失效／被限流」就換下一組，其他錯誤直接丟。
+    /// 全部都不行時丟最後一組的錯。
+    /// </summary>
     public static byte[] Post(byte[] png, RemoveBgOptions options, CancellationToken ct)
     {
+        RemoveBgException? last = null;
+        foreach (var key in options.ApiKeys)
+        {
+            if (string.IsNullOrWhiteSpace(key)) continue;
+            try
+            {
+                return PostWithKey(png, key.Trim(), options.Size, ct);
+            }
+            catch (RemoveBgException e) when (e.Code is "insufficient_credits" or "auth_failed" or "rate_limit")
+            {
+                last = e;
+            }
+        }
+        throw last ?? new RemoveBgException("沒有 API Key", "auth_failed");
+    }
+
+    /// <summary>送 multipart；成功回影像 bytes，失敗丟 <see cref="RemoveBgException"/>（訊息取自 API 的 errors[]）。</summary>
+    private static byte[] PostWithKey(byte[] png, string apiKey, RemoveBgSize size, CancellationToken ct)
+    {
         using var form = new MultipartFormDataContent();
-        form.Headers.Add("X-Api-Key", options.ApiKey.Trim());
+        form.Headers.Add("X-Api-Key", apiKey);
         var file = new ByteArrayContent(png);
         file.Headers.ContentType = new MediaTypeHeaderValue("image/png");
         form.Add(file, "image_file", "image.png");
-        form.Add(new StringContent(options.Size == RemoveBgSize.Preview ? "preview" : "auto"), "size");
+        form.Add(new StringContent(size == RemoveBgSize.Preview ? "preview" : "auto"), "size");
         form.Add(new StringContent("png"), "format");
 
         HttpResponseMessage response;
@@ -170,6 +195,14 @@ public static class RemoveBgClient
 
             var body = response.Content.ReadAsStringAsync(ct).GetAwaiter().GetResult();
             var (message, code) = ParseError(body);
+            // 沒附 code 時依 HTTP 狀態補：402 沒點數、401/403 key 失效、429 限流（換下一組 key 的依據）
+            code ??= (int)response.StatusCode switch
+            {
+                402 => "insufficient_credits",
+                401 or 403 => "auth_failed",
+                429 => "rate_limit",
+                _ => null,
+            };
             throw new RemoveBgException(message ?? $"remove.bg 回應 {(int)response.StatusCode} {response.ReasonPhrase}", code);
         }
     }

@@ -10,11 +10,11 @@ namespace MinePainter.Core.History;
 public sealed record BackgroundRemovalOptions
 {
     /// <summary>
-    /// remove.bg 線上服務（同 paint.net 的 Remove Background 插件）。
-    /// 伺服器結果只取 alpha 當遮罩，顏色仍是原圖（原解析度）；伺服器只回預覽尺寸時，
-    /// 遮罩放大後用原圖做引導濾波貼回真實邊緣。
+    /// remove.bg 線上服務（同 paint.net 的 Remove Background 插件）；null＝本機演算（<see cref="GrabCut"/>）。
+    /// 兩者都只拿到前景遮罩，顏色仍是原圖（原解析度）；遮罩是低解析度放大來的時候，
+    /// 用原圖做引導濾波貼回真實邊緣。
     /// </summary>
-    public required RemoveBgOptions RemoveBg { get; init; }
+    public RemoveBgOptions? RemoveBg { get; init; }
     /// <summary>引導濾波精修半徑（全解析度 px；一律精修，見 <see cref="GuidedFilter"/>）。</summary>
     public int RefineRadius { get; init; } = 16;
     /// <summary>
@@ -124,10 +124,20 @@ public static class BackgroundRemovalCommand
             }
 
             // ---- 3. 推論 + 後處理（鎖外）----
-            // 前景機率圖（來源尺寸）＝ remove.bg 結果的 alpha；低解析度放大來的才需要用原圖精修邊緣
-            var result = RemoveBgClient.Cutout(pixels, crop.Width, crop.Height, options.RemoveBg, ct);
-            var model = result.Alpha;
-            var refine = result.Downscaled(crop.Width, crop.Height);
+            // 前景機率圖（來源尺寸）；低解析度放大來的才需要用原圖精修邊緣
+            byte[] model;
+            bool refine;
+            if (options.RemoveBg is { } remote)
+            {
+                var result = RemoveBgClient.Cutout(pixels, crop.Width, crop.Height, remote, ct);
+                model = result.Alpha;
+                refine = result.Downscaled(crop.Width, crop.Height);
+            }
+            else
+            {
+                model = GrabCut.Run(pixels, crop.Width, crop.Height, LocalTrimap(pixels, crop.Width, crop.Height, coverage), ct: ct);
+                refine = Math.Max(crop.Width, crop.Height) > GrabCut.MaxSide;
+            }
             ct.ThrowIfCancellationRequested();
 
             // 精修半徑隨圖片大小放大：模型的一個像素在大圖上是好幾個像素
@@ -208,10 +218,30 @@ public static class BackgroundRemovalCommand
         }
     }
 
+    /// <summary>
+    /// 演算去背的初始 trimap：整塊當「可能前景」，只有最外圈一條帶子（邊長 2%，至少 2px）當確定背景
+    /// —— GrabCut 需要背景樣本；有選取時範圍外的像素已是透明，也算背景。
+    /// </summary>
+    private static byte[] LocalTrimap(uint[] pixels, int w, int h, byte[]? coverage)
+    {
+        var band = Math.Max(2, Math.Min(w, h) * 2 / 100);
+        var trimap = new byte[w * h];
+        for (var y = 0; y < h; y++)
+        for (var x = 0; x < w; x++)
+        {
+            var i = y * w + x;
+            var edge = x < band || y < band || x >= w - band || y >= h - band;
+            var transparent = pixels[i] >> 24 == 0 || (coverage != null && coverage[i] < 128);
+            trimap[i] = edge || transparent ? GrabCut.Background : GrabCut.ProbableForeground;
+        }
+        return trimap;
+    }
+
     private static SKRectI Union(SKRectI a, SKRectI b) =>
         a.IsEmpty ? b : b.IsEmpty ? a : SKRectI.Union(a, b);
 
-    private static unsafe uint[] ReadRegion(TileSurface surface, SKRectI rect)
+    /// <summary>讀 rect（圖層座標）的 premul BGRA 像素；沒有 tile 的地方是 0。</summary>
+    internal static unsafe uint[] ReadRegion(TileSurface surface, SKRectI rect)
     {
         var pixels = new uint[rect.Width * rect.Height];
         foreach (var idx in TileIndex.CoveringRect(rect))

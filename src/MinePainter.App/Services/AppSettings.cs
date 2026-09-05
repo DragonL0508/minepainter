@@ -76,11 +76,11 @@ public sealed class AppSettings
     /// <summary>使用者在「檔案關聯」按過「全部移除」；啟動時不再自動登記。</summary>
     public bool FileAssociationsOptOut { get; set; }
 
-    /// <summary>
-    /// remove.bg 的 API Key（AI 去背的線上模式；同 paint.net 的 Remove Background 插件）。
-    /// 明文存放，跟那個插件的 config.json 一樣；null = 還沒填。
-    /// </summary>
+    /// <summary>舊欄位（單一 key）；載入時併進 <see cref="RemoveBgApiKeys"/>，之後不再寫。</summary>
     public string? RemoveBgApiKey { get; set; }
+
+    /// <summary>remove.bg 的 API Key，可多組：一組沒點數／失效／被限流就換下一組。明文存放。</summary>
+    public List<string> RemoveBgApiKeys { get; set; } = new();
 
     /// <summary>remove.bg 用預覽解析度（免費額度）而不是自動（最高解析度、扣點）。</summary>
     public bool RemoveBgPreview { get; set; }
@@ -131,8 +131,14 @@ public sealed class AppSettings
         {
             if (File.Exists(FilePath))
             {
-                return JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(FilePath))
+                var loaded = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(FilePath))
                     ?? new AppSettings();
+                if (!string.IsNullOrWhiteSpace(loaded.RemoveBgApiKey))
+                {
+                    if (!loaded.RemoveBgApiKeys.Contains(loaded.RemoveBgApiKey)) loaded.RemoveBgApiKeys.Insert(0, loaded.RemoveBgApiKey);
+                    loaded.RemoveBgApiKey = null;
+                }
+                return loaded;
             }
         }
         catch

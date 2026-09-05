@@ -89,6 +89,9 @@ public sealed class EditorSession : IDisposable
     /// <summary>魔術棒 / 油漆桶容差（0..255）。</summary>
     public byte Tolerance { get; set; } = 32;
 
+    /// <summary>矩形／橢圓／套索選取的「物件選取」：圈完自動在圈內找主體（見 <see cref="Selections.ObjectSelector"/>）。</summary>
+    public bool ObjectSelect { get; set; }
+
     /// <summary>目前選中的向量元素（圖層 Id + 元素 Id）。</summary>
     public (Guid LayerId, Guid ElementId)? SelectedElement
     {

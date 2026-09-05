@@ -129,6 +129,19 @@ public sealed class RectangleSelectTool : ITool
         lock (session.Document.SyncRoot)
         {
             incoming = SelectionMask.FromPath(path, session.Document.Bounds);
+            // 物件選取：圈出來的形狀只是初始範圍，真正的選取是圈內找到的主體
+            if (session.ObjectSelect && session.Document.ActiveLayer is RasterLayer layer && !incoming.IsEmpty)
+            {
+                var found = ObjectSelector.Select(layer, incoming, session.Document.Bounds);
+                if (found == null)
+                {
+                    session.Notify("圈選範圍內找不到物件");
+                    SelectionCommands.SetSelection(session, original, original, "取消選取");
+                    return;
+                }
+                incoming = found;
+                label = "物件選取";
+            }
         }
         // Replace 模式在 down 時已把 session.Selection 清掉，combine 以 original 為基準
         var combined = SelectionMask.Combine(original, incoming, SelectionCommands.ModeFrom(mods));

@@ -30,8 +30,8 @@ public sealed class BackgroundRemovalWindow : ModalDialog
     /// <summary>失敗訊息（null = 沒失敗或使用者取消）。</summary>
     public string? Error { get; private set; }
 
-    public BackgroundRemovalWindow(EditorSession session, RasterLayer layer, BackgroundRemovalOptions options)
-        : base("AI 去背", 360)
+    public BackgroundRemovalWindow(EditorSession session, RasterLayer layer, BackgroundRemovalOptions options, string title)
+        : base(title, 360)
     {
         _session = session;
         _layer = layer;

@@ -71,6 +71,7 @@ public static class ShortcutMap
         new("layer.flipV", "圖層", "垂直翻轉圖層", null),
         new("layer.properties", "圖層", "圖層屬性", new KeyGesture(Key.F4)),
         new("layer.removeBackground", "圖層", "AI 去背", null),
+        new("layer.removeBackgroundLocal", "圖層", "演算去背", null),
         new("layer.transformFree", "圖層", "自由變形", new KeyGesture(Key.T, KeyModifiers.Control)),
         new("layer.transformPerspective", "圖層", "透視變形", null),
         new("layer.transformDistort", "圖層", "扭曲變形", null),

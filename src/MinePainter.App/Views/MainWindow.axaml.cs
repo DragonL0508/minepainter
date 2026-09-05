@@ -1085,6 +1085,7 @@ public partial class MainWindow : Window
         Motion.Reveal(SmoothingGroup, key is "brush" or "eraser");
         Motion.Reveal(OpacityGroup, key is "brush" or "pencil" or "eraser" or "fill");
         Motion.Reveal(ToleranceGroup, key is "fill" or "wand" or "bgeraser");
+        Motion.Reveal(ObjectSelectGroup, key is "rectselect" or "ellipseselect" or "lasso");
         Motion.Reveal(BgEraserGroup, key == "bgeraser");
         Motion.Reveal(TextGroup, key == "text");
         Motion.Reveal(ShapeGroup, key is "shape" or "line");
@@ -2596,26 +2597,46 @@ public partial class MainWindow : Window
             return;
         }
         var settings = Services.AppSettings.Instance;
-        if (string.IsNullOrWhiteSpace(settings.RemoveBgApiKey))
+        if (settings.RemoveBgApiKeys.All(string.IsNullOrWhiteSpace))
         {
             Toasts.Show("請先填 API Key");
             await OpenSettingsAsync(Settings.SettingsWindow.Page.BackgroundRemoval);
-            if (string.IsNullOrWhiteSpace(settings.RemoveBgApiKey)) return;
+            if (settings.RemoveBgApiKeys.All(string.IsNullOrWhiteSpace)) return;
             session = CommitPending();
             if (session?.Document.ActiveLayer is not RasterLayer stillLayer) return;
             layer = stillLayer;
         }
+        var remote = new RemoveBgOptions(settings.RemoveBgApiKeys.Where(k => !string.IsNullOrWhiteSpace(k)).ToList(),
+            settings.RemoveBgPreview ? RemoveBgSize.Preview : RemoveBgSize.Auto);
+        await RunBackgroundRemovalAsync(session, layer, remote, "AI 去背");
+    }
+
+    /// <summary>圖層 → 演算去背：本機 GrabCut，不上網、不用 key。</summary>
+    private async void OnRemoveBackgroundLocalClicked(object? sender, RoutedEventArgs e)
+    {
+        var session = CommitPending();
+        if (session == null) return;
+        if (session.Document.ActiveLayer is not RasterLayer layer)
+        {
+            Toasts.Show("請先選擇一個點陣圖層");
+            return;
+        }
+        await RunBackgroundRemovalAsync(session, layer, null, "演算去背");
+    }
+
+    private async Task RunBackgroundRemovalAsync(EditorSession session, RasterLayer layer, RemoveBgOptions? remote, string title)
+    {
+        var settings = Services.AppSettings.Instance;
         var options = new BackgroundRemovalOptions
         {
-            RemoveBg = new RemoveBgOptions(settings.RemoveBgApiKey!.Trim(),
-                settings.RemoveBgPreview ? RemoveBgSize.Preview : RemoveBgSize.Auto),
+            RemoveBg = remote,
             SolidCore = settings.RemoveBgSolidCore,
             Contrast = settings.RemoveBgContrast,
             Shift = settings.RemoveBgShift,
             Selection = session.Selection is { IsEmpty: false } sel ? sel : null,
         };
         session.SelectedElement = null; // 平面化後物件不存在，把手框不能還指著它
-        var dialog = new BackgroundRemovalWindow(session, layer, options);
+        var dialog = new BackgroundRemovalWindow(session, layer, options, title);
         await dialog.ShowDialog(this);
         if (dialog.Error != null) Toasts.Show("去背失敗：" + dialog.Error);
         else if (dialog.Applied) Toasts.Show("去背完成");
@@ -3128,6 +3149,7 @@ public partial class MainWindow : Window
         _shortcutActions["layer.flipV"] = () => OnFlipLayerVerticalClicked(null, new RoutedEventArgs());
         _shortcutActions["layer.properties"] = () => OnLayerPropertiesClicked(null, new RoutedEventArgs());
         _shortcutActions["layer.removeBackground"] = () => OnRemoveBackgroundClicked(null, new RoutedEventArgs());
+        _shortcutActions["layer.removeBackgroundLocal"] = () => OnRemoveBackgroundLocalClicked(null, new RoutedEventArgs());
         _shortcutActions["gadget.youtubePreview"] = () => OnYouTubePreviewClicked(null, new RoutedEventArgs());
 
         _shortcutActions["adjust.autoLevel"] = () => _ = ApplyAutoLevelAsync();
@@ -3405,6 +3427,7 @@ public partial class MainWindow : Window
         SmoothingBar.ValueChanged += _ => ApplyBrushOptions();
         OpacityBar.ValueChanged += _ => ApplyBrushOptions();
         ToleranceBar.ValueChanged += _ => ApplyBrushOptions();
+        ObjectSelectCheck.IsCheckedChanged += (_, _) => ApplyBrushOptions();
         SoftnessBar.ValueChanged += _ => ApplyBrushOptions();
         foreach (var k in new[] { "連續", "一次" }) BgSamplingCombo.Items.Add(k);
         foreach (var k in new[] { "連續", "不連續" }) BgLimitCombo.Items.Add(k);
@@ -3446,6 +3469,7 @@ public partial class MainWindow : Window
 
         session.Shape.StrokeWidth = Math.Max(1f, (float)SizeBox.Value / 4);
         session.Tolerance = (byte)Math.Round(ToleranceBar.Value * 2.55); // 滑桿 0..100%，工具吃 0..255
+        session.ObjectSelect = ObjectSelectCheck.IsChecked == true;
 
         var bg = session.BackgroundEraser.Settings;
         bg.Radius = radius;

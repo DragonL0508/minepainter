@@ -95,11 +95,12 @@
             <MenuItem Header="刪除圖層" Click="OnDeleteLayerClicked" />
             <MenuItem Header="從檔案匯入圖層(_I)…" Click="OnImportLayerClicked" Tag="layer.import" />
             <Separator />
-            <MenuItem Header="水平翻轉圖層" Click="OnFlipLayerHorizontalClicked" Tag="layer.flipH" />
-            <MenuItem Header="垂直翻轉圖層" Click="OnFlipLayerVerticalClicked" Tag="layer.flipV" />
-            <Separator />
             <MenuItem Header="向下合併(_M)" Click="OnMergeLayerDownClicked" Tag="layer.mergeDown" />
+            <MenuItem Header="圖層文字平面化(_R)" Click="OnFlattenTextClicked" Tag="layer.flattenText"
+                      ToolTip.Tip="把本圖層的文字物件烙成像素（之後不能再編輯文字內容）" />
             <Separator />
+            <MenuItem Header="水平翻轉" Click="OnFlipLayerHorizontalClicked" Tag="layer.flipH" />
+            <MenuItem Header="垂直翻轉" Click="OnFlipLayerVerticalClicked" Tag="layer.flipV" />
             <MenuItem Header="變形(_T)">
               <MenuItem Header="自由變形(_F)" Click="OnTransformFreeClicked" Tag="layer.transformFree"
                         ToolTip.Tip="切到移動工具並框住圖層內容：拖角縮放、右鍵旋轉；Enter 套用、Esc 還原" />
@@ -109,10 +110,10 @@
                         ToolTip.Tip="3×3 網格、16 個控制點，把內容彎成曲面（Photoshop 彎曲）" />
             </MenuItem>
             <Separator />
-            <MenuItem Header="圖層文字平面化(_R)" Click="OnFlattenTextClicked" Tag="layer.flattenText"
-                      ToolTip.Tip="把本圖層的文字物件烙成像素（之後不能再編輯文字內容）" />
-            <Separator />
-            <MenuItem Header="AI 去背(_B)" Click="OnRemoveBackgroundClicked" Tag="layer.removeBackground" />
+            <MenuItem Header="去背(_B)">
+              <MenuItem Header="AI 去背（remove.bg）" Click="OnRemoveBackgroundClicked" Tag="layer.removeBackground" />
+              <MenuItem Header="演算去背" Click="OnRemoveBackgroundLocalClicked" Tag="layer.removeBackgroundLocal" />
+            </MenuItem>
             <Separator />
             <MenuItem Header="圖層屬性(_P)…" Click="OnLayerPropertiesClicked" Tag="layer.properties" />
           </MenuItem>
@@ -199,6 +200,11 @@
         <StackPanel x:Name="ToleranceGroup" Orientation="Horizontal" Spacing="5" VerticalAlignment="Center">
           <TextBlock Text="容許度：" FontSize="12" VerticalAlignment="Center" />
           <controls:BarSlider x:Name="ToleranceBar" Minimum="0" Maximum="100" Value="13" Width="120" Suffix="%" />
+        </StackPanel>
+
+        <StackPanel x:Name="ObjectSelectGroup" Orientation="Horizontal" Spacing="5" VerticalAlignment="Center" IsVisible="False">
+          <CheckBox x:Name="ObjectSelectCheck" Content="物件選取" FontSize="12" MinHeight="0" VerticalAlignment="Center"
+                    ToolTip.Tip="圈個大概，自動選出圈內的主體" />
         </StackPanel>
 
         <StackPanel x:Name="TextGroup" Orientation="Horizontal" Spacing="5" VerticalAlignment="Center" IsVisible="False">

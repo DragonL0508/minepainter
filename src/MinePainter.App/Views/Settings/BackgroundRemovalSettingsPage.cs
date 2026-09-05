@@ -19,14 +19,16 @@ public sealed class BackgroundRemovalSettingsPage : SettingsPage
         {
             FontSize = 12,
             Width = 320,
-            PasswordChar = '•',
-            Watermark = "API Key",
-            Text = settings.RemoveBgApiKey ?? "",
+            MinHeight = 72,
+            AcceptsReturn = true,
+            Watermark = "API Key（一行一組，依序備用）",
+            Text = string.Join(Environment.NewLine, settings.RemoveBgApiKeys),
         };
         keyBox.TextChanged += (_, _) =>
         {
-            var key = (keyBox.Text ?? "").Trim();
-            settings.RemoveBgApiKey = key.Length == 0 ? null : key;
+            settings.RemoveBgApiKeys = (keyBox.Text ?? "")
+                .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .ToList();
         };
 
         var keyLink = new TextBlock
