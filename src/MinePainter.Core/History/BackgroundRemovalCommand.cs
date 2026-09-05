@@ -44,9 +44,18 @@ public sealed record BackgroundRemovalOptions
 /// 但連半透明的髮絲邊也一起處理）。
 ///
 /// 只上傳內容外接框（透明邊不送），有選取範圍時只上傳選取的外接框、範圍外清掉。
+///
+/// 快速模式（圖層帶著比畫布大的原始高清來源）：整套改在來源解析度上做 —— 送原圖的那一塊去算遮罩、
+/// 遮罩直接乘到原圖、再把遮罩縮回代理畫布。之前是在代理解析度算遮罩再放大套到原圖，
+/// 邊緣就是代理解析度的邊緣，輸出大圖時一放大就糊（使用者 2026-09-06 回報）。
 /// </summary>
 public static class BackgroundRemovalCommand
 {
+    /// <summary>來源這一塊超過這個像素數就先縮小再送模型（remove.bg 的上限附近），遮罩回來再放大精修。</summary>
+    private const long MaxModelPixels = 40_000_000;
+
+    /// <summary>來源比畫布大到這個倍數以上才值得在來源解析度做（差不多大就沒必要多讀一次原圖）。</summary>
+    private const float HiResThreshold = 1.15f;
     /// <summary>
     /// 執行。長時間工作在呼叫端的背景執行緒上跑；只在讀寫圖層時短暫持鎖。
     /// 回傳 false = 圖層沒有內容、沒有動作。
@@ -138,37 +147,34 @@ public static class BackgroundRemovalCommand
             }
 
             // ---- 3. 推論 + 後處理（鎖外）----
-            // 前景機率圖（來源尺寸）；低解析度放大來的才需要用原圖精修邊緣
-            byte[] model;
-            bool refine;
-            if (options.RemoveBg is { } remote)
+            byte[] mask;
+            LayerPixelSource? sourceAfter;
+            var hiResRegion = sourceBefore != null && sourceBefore.SourcePixelsPerLayerPixel >= HiResThreshold
+                ? sourceBefore.SourceRegionFor(crop)
+                : SKRectI.Empty;
+            if (sourceBefore != null && !hiResRegion.IsEmpty)
             {
-                var result = RemoveBgClient.Cutout(pixels, crop.Width, crop.Height, remote, ct);
-                model = result.Alpha;
-                refine = result.Downscaled(crop.Width, crop.Height);
+                // 快速模式：在原圖那一塊上算遮罩（選取覆蓋度也放大到來源座標），遮罩直接乘到原圖
+                var ratio = sourceBefore.SourcePixelsPerLayerPixel;
+                var sourcePixels = sourceBefore.ReadPixels(hiResRegion);
+                var sourceCoverage = coverage == null ? null : sourceBefore.ResampleMaskToSource(coverage, crop, hiResRegion);
+                if (sourceCoverage != null)
+                    for (var i = 0; i < sourcePixels.Length; i++)
+                        if (sourceCoverage[i] != 255) sourcePixels[i] = Scale(sourcePixels[i], sourceCoverage[i]);
+
+                var sourceMask = ComputeMask(sourcePixels, hiResRegion.Width, hiResRegion.Height, sourceCoverage, options,
+                    shift: (int)MathF.Round(options.Shift * ratio), ct);
+                sourceAfter = sourceBefore.MaskedInSourceSpace(hiResRegion, sourceMask, ct);
+                // 代理畫布用的是同一份遮罩縮回來的（取樣平均），兩邊看到的是同一個輪廓
+                mask = sourceBefore.ResampleMaskToLayer(sourceMask, hiResRegion, crop);
             }
             else
             {
-                model = GrabCut.Run(pixels, crop.Width, crop.Height, LocalTrimap(pixels, crop.Width, crop.Height, coverage), ct: ct);
-                refine = Math.Max(crop.Width, crop.Height) > GrabCut.MaxSide;
+                mask = ComputeMask(pixels, crop.Width, crop.Height, coverage, options, options.Shift, ct);
+                // 原始高清來源也套同一份遮罩（依來源矩陣反查、雙線性取樣），成為新的來源
+                sourceAfter = sourceBefore?.Masked(crop, mask, ct: ct);
             }
             ct.ThrowIfCancellationRequested();
-
-            // 精修半徑隨圖片大小放大：模型的一個像素在大圖上是好幾個像素
-            var scale = Math.Max(1, (int)MathF.Ceiling(Math.Max(crop.Width, crop.Height) / 1024f));
-            var radius = Math.Max(options.RefineRadius, 6 * scale);
-            var mask = refine ? GuidedFilter.Refine(model, pixels, crop.Width, crop.Height, radius, ct: ct) : (byte[])model.Clone();
-            if (options.SolidCore)
-                mask = BackgroundRemover.SolidifyCore(mask, model, crop.Width, crop.Height, radius);
-            BackgroundRemover.ApplyContrast(mask, options.Contrast);
-            mask = BackgroundRemover.Shift(mask, crop.Width, crop.Height, options.Shift);
-            if (coverage != null)
-                for (var i = 0; i < mask.Length; i++)
-                    if (coverage[i] != 255) mask[i] = (byte)(mask[i] * coverage[i] / 255);
-            ct.ThrowIfCancellationRequested();
-
-            // 原始高清來源也套同一份遮罩（依來源矩陣反查、雙線性取樣），成為新的來源
-            var sourceAfter = sourceBefore?.Masked(crop, mask, ct: ct);
 
             // ---- 4. 套 alpha（鎖內）：顏色永遠是原圖的原解析度像素，只乘上遮罩 ----
             lock (doc.SyncRoot)
@@ -250,6 +256,72 @@ public static class BackgroundRemovalCommand
                     if (layer.Elements.All(e => e.Id != el.Id)) layer.AddElement(el);
             }
             layer.InvalidateAll();
+        }
+    }
+
+    /// <summary>
+    /// 一塊像素 → 前景遮罩：模型（remove.bg 或本機 GrabCut）給機率圖，低解析度放大來的用原圖引導濾波貼回邊緣，
+    /// 再做內部填實、對比、收縮／擴張、乘上選取覆蓋度。太大的圖先縮到 <see cref="MaxModelPixels"/> 以內送模型。
+    /// </summary>
+    private static byte[] ComputeMask(uint[] pixels, int width, int height, byte[]? coverage,
+        BackgroundRemovalOptions options, int shift, CancellationToken ct)
+    {
+        var area = (long)width * height;
+        var sendScale = area > MaxModelPixels ? MathF.Sqrt(MaxModelPixels / (float)area) : 1f;
+        var (modelPixels, modelW, modelH) = sendScale < 1f ? Downscale(pixels, width, height, sendScale) : (pixels, width, height);
+
+        byte[] model;
+        bool refine;
+        if (options.RemoveBg is { } remote)
+        {
+            var result = RemoveBgClient.Cutout(modelPixels, modelW, modelH, remote, ct);
+            model = result.Alpha;
+            refine = result.Downscaled(modelW, modelH);
+        }
+        else
+        {
+            var modelCoverage = ReferenceEquals(modelPixels, pixels) ? coverage : null;
+            model = GrabCut.Run(modelPixels, modelW, modelH, LocalTrimap(modelPixels, modelW, modelH, modelCoverage), ct: ct);
+            refine = Math.Max(modelW, modelH) > GrabCut.MaxSide;
+        }
+        ct.ThrowIfCancellationRequested();
+
+        if (modelW != width || modelH != height)
+        {
+            model = LayerPixelSource.ResampleMask(model, new SKRectI(0, 0, modelW, modelH),
+                SKMatrix.CreateScale(width / (float)modelW, height / (float)modelH), new SKRectI(0, 0, width, height));
+            refine = true;
+        }
+
+        // 精修半徑隨圖片大小放大：模型的一個像素在大圖上是好幾個像素
+        var scale = Math.Max(1, (int)MathF.Ceiling(Math.Max(width, height) / 1024f));
+        var radius = Math.Max(options.RefineRadius, 6 * scale);
+        var mask = refine ? GuidedFilter.Refine(model, pixels, width, height, radius, ct: ct) : (byte[])model.Clone();
+        if (options.SolidCore)
+            mask = BackgroundRemover.SolidifyCore(mask, model, width, height, radius);
+        BackgroundRemover.ApplyContrast(mask, options.Contrast);
+        mask = BackgroundRemover.Shift(mask, width, height, shift);
+        if (coverage != null)
+            for (var i = 0; i < mask.Length; i++)
+                if (coverage[i] != 255) mask[i] = (byte)(mask[i] * coverage[i] / 255);
+        return mask;
+    }
+
+    private static unsafe (uint[] Pixels, int Width, int Height) Downscale(uint[] pixels, int width, int height, float factor)
+    {
+        var w = Math.Max(1, (int)MathF.Round(width * factor));
+        var h = Math.Max(1, (int)MathF.Round(height * factor));
+        var info = new SKImageInfo(width, height, SKColorType.Bgra8888, SKAlphaType.Premul);
+        fixed (uint* p = pixels)
+        {
+            using var source = new SKBitmap();
+            if (!source.InstallPixels(info, (IntPtr)p, width * 4)) throw new InvalidOperationException("建立縮圖來源失敗");
+            using var small = source.Resize(new SKImageInfo(w, h, SKColorType.Bgra8888, SKAlphaType.Premul), SKFilterQuality.High)
+                ?? throw new InvalidOperationException("縮小送模型的圖失敗");
+            var result = new uint[w * h];
+            fixed (uint* dst = result)
+                Buffer.MemoryCopy((void*)small.GetPixels(), dst, (long)w * h * 4, (long)w * h * 4);
+            return (result, w, h);
         }
     }
 

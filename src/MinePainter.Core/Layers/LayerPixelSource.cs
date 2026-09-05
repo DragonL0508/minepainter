@@ -89,6 +89,153 @@ public sealed class LayerPixelSource : IDisposable
         return result;
     }
 
+    // ---- 在來源解析度上做事（快速模式的去背） ----
+
+    /// <summary>
+    /// 原始像素座標 → 圖層座標的矩陣：原始像素先擺到 <see cref="Bounds"/>，走 <see cref="Matrix"/>，
+    /// 再減掉 <see cref="BaseOffset"/>（圖層座標 = 文件座標 − 圖層位移）。
+    /// </summary>
+    internal SKMatrix SourceToLayer =>
+        SKMatrix.CreateTranslation(-BaseOffset.X, -BaseOffset.Y)
+            .PreConcat(Matrix)
+            .PreConcat(SKMatrix.CreateTranslation(Bounds.Left, Bounds.Top));
+
+    /// <summary>一個圖層像素對應幾個原始像素（1 = 沒縮；4 = 原圖是畫布的四倍）。</summary>
+    internal float SourcePixelsPerLayerPixel
+    {
+        get
+        {
+            var m = SourceToLayer;
+            var det = Math.Abs(m.ScaleX * m.ScaleY - m.SkewX * m.SkewY);
+            return det <= 1e-12f ? 1f : 1f / MathF.Sqrt(det);
+        }
+    }
+
+    /// <summary>圖層座標的範圍在原始像素上蓋到哪（原始像素座標，已裁到圖內）；空＝沒交集。</summary>
+    internal SKRectI SourceRegionFor(SKRectI layerRect)
+    {
+        if (!SourceToLayer.TryInvert(out var inverse)) return SKRectI.Empty;
+        var corners = inverse.MapPoints(
+        [
+            new SKPoint(layerRect.Left, layerRect.Top), new SKPoint(layerRect.Right, layerRect.Top),
+            new SKPoint(layerRect.Left, layerRect.Bottom), new SKPoint(layerRect.Right, layerRect.Bottom),
+        ]);
+        var left = (int)MathF.Floor(corners.Min(c => c.X));
+        var top = (int)MathF.Floor(corners.Min(c => c.Y));
+        var right = (int)MathF.Ceiling(corners.Max(c => c.X));
+        var bottom = (int)MathF.Ceiling(corners.Max(c => c.Y));
+        var region = SKRectI.Intersect(new SKRectI(left, top, right, bottom), new SKRectI(0, 0, Pixels.Width, Pixels.Height));
+        return region.Width <= 0 || region.Height <= 0 ? SKRectI.Empty : region;
+    }
+
+    /// <summary>讀原始像素某一塊（premul BGRA）。</summary>
+    internal unsafe uint[] ReadPixels(SKRectI region)
+    {
+        var pixels = new uint[region.Width * region.Height];
+        var info = new SKImageInfo(region.Width, region.Height, SKColorType.Bgra8888, SKAlphaType.Premul);
+        fixed (uint* p = pixels)
+        {
+            if (!Pixels.ReadPixels(info, (IntPtr)p, region.Width * 4, region.Left, region.Top))
+                throw new InvalidOperationException("讀取原始像素失敗");
+        }
+        return pixels;
+    }
+
+    /// <summary>
+    /// 把「原始像素座標」的遮罩直接乘到原圖上（區域外一律透明）。快速模式的去背在來源解析度算出遮罩，
+    /// 用這個套回去，邊緣就是來源解析度的邊緣，不是代理畫布放大來的。Revision 未對齊，呼叫端要設。
+    /// </summary>
+    internal unsafe LayerPixelSource MaskedInSourceSpace(SKRectI region, byte[] mask, CancellationToken ct = default)
+    {
+        using var bitmap = SKBitmap.FromImage(Pixels);
+        var premul = bitmap.ColorType == SKColorType.Bgra8888 && bitmap.AlphaType == SKAlphaType.Premul
+            ? bitmap
+            : Convert(bitmap);
+        try
+        {
+            var w = premul.Width;
+            var px = (uint*)premul.GetPixels();
+            for (var y = 0; y < premul.Height; y++)
+            {
+                if ((y & 63) == 0) ct.ThrowIfCancellationRequested();
+                var row = px + y * w;
+                var inRow = y >= region.Top && y < region.Bottom;
+                for (var x = 0; x < w; x++)
+                {
+                    ref var p = ref row[x];
+                    if (p == 0) continue;
+                    if (!inRow || x < region.Left || x >= region.Right)
+                    {
+                        p = 0;
+                        continue;
+                    }
+                    var m = mask[(y - region.Top) * region.Width + (x - region.Left)];
+                    if (m != 255) p = ScalePremul(p, m);
+                }
+            }
+            var image = SKImage.FromBitmap(premul) ?? throw new InvalidOperationException("複製原始像素失敗");
+            return new LayerPixelSource(image, Bounds, Matrix, BaseOffset, TargetRect, RotationDeg, OriginalSize, 0);
+        }
+        finally
+        {
+            if (!ReferenceEquals(premul, bitmap)) premul.Dispose();
+        }
+
+        static SKBitmap Convert(SKBitmap raw)
+        {
+            var bmp = new SKBitmap(new SKImageInfo(raw.Width, raw.Height, SKColorType.Bgra8888, SKAlphaType.Premul));
+            using var canvas = new SKCanvas(bmp);
+            canvas.DrawBitmap(raw, 0, 0);
+            return bmp;
+        }
+    }
+
+    /// <summary>原始像素座標的遮罩 → 圖層座標（縮小時取樣平均，不會有鋸齒）。</summary>
+    internal byte[] ResampleMaskToLayer(byte[] sourceMask, SKRectI region, SKRectI layerRect) =>
+        ResampleMask(sourceMask, region, SourceToLayer, layerRect);
+
+    /// <summary>圖層座標的遮罩 → 原始像素座標（放大時雙線性）。</summary>
+    internal byte[] ResampleMaskToSource(byte[] layerMask, SKRectI layerRect, SKRectI region)
+    {
+        if (!SourceToLayer.TryInvert(out var inverse)) return new byte[region.Width * region.Height];
+        return ResampleMask(layerMask, layerRect, inverse, region);
+    }
+
+    /// <summary>
+    /// 用 Skia 把一張 8 位元遮罩從一個座標系畫到另一個：<paramref name="fromRect"/> 是遮罩在來源座標系的位置，
+    /// <paramref name="fromToTo"/> 把來源座標映到目標座標，<paramref name="toRect"/> 是要輸出的目標範圍。
+    /// 縮小走 mipmap（High），放大是雙線性。範圍外＝0。
+    /// </summary>
+    internal static unsafe byte[] ResampleMask(byte[] mask, SKRectI fromRect, SKMatrix fromToTo, SKRectI toRect)
+    {
+        var result = new byte[toRect.Width * toRect.Height];
+        if (fromRect.Width <= 0 || fromRect.Height <= 0 || toRect.Width <= 0 || toRect.Height <= 0) return result;
+
+        var info = new SKImageInfo(toRect.Width, toRect.Height, SKColorType.Bgra8888, SKAlphaType.Premul);
+        using var surface = SKSurface.Create(info) ?? throw new InvalidOperationException("建立遮罩重取樣表面失敗");
+        var canvas = surface.Canvas;
+        canvas.Clear(SKColors.Transparent);
+        canvas.Translate(-toRect.Left, -toRect.Top);
+        canvas.Concat(ref fromToTo);
+
+        var maskInfo = new SKImageInfo(fromRect.Width, fromRect.Height, SKColorType.Alpha8, SKAlphaType.Premul);
+        fixed (byte* p = mask)
+        {
+            using var image = SKImage.FromPixels(maskInfo, (IntPtr)p, fromRect.Width);
+            using var paint = new SKPaint { Color = SKColors.White, FilterQuality = SKFilterQuality.High, IsAntialias = false };
+            canvas.DrawImage(image, fromRect.Left, fromRect.Top, paint);
+        }
+        canvas.Flush();
+
+        using var snapshot = surface.Snapshot();
+        using var pixels = new SKBitmap(info);
+        if (!snapshot.ReadPixels(info, pixels.GetPixels(), info.RowBytes, 0, 0))
+            throw new InvalidOperationException("讀取遮罩重取樣結果失敗");
+        var src = (byte*)pixels.GetPixels();
+        for (var i = 0; i < result.Length; i++) result[i] = src[i * 4 + 3];
+        return result;
+    }
+
     /// <summary>複製一份（獨立擁有像素）；Revision 未對齊。</summary>
     internal LayerPixelSource Copy()
     {
