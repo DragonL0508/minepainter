@@ -39,119 +39,237 @@
 
         <controls:ClickSubmenuMenu x:Name="MainMenu" DockPanel.Dock="Left">
           <MenuItem Header="檔案(_F)">
-            <MenuItem Header="新增(_N)" Click="OnNewClicked" Tag="file.new" />
-            <MenuItem Header="開啟(_O)…" Click="OnOpenClicked" Tag="file.open" />
+            <MenuItem Header="新增(_N)" Click="OnNewClicked" Tag="file.new">
+              <MenuItem.Icon><mi:MaterialIcon Kind="FilePlusOutline" Width="16" Height="16" /></MenuItem.Icon>
+            </MenuItem>
+            <MenuItem Header="開啟(_O)…" Click="OnOpenClicked" Tag="file.open">
+              <MenuItem.Icon><mi:MaterialIcon Kind="FolderOpenOutline" Width="16" Height="16" /></MenuItem.Icon>
+            </MenuItem>
             <Separator />
-            <MenuItem Header="儲存(_S)" Click="OnSaveClicked" Tag="file.save" />
-            <MenuItem Header="另存新檔(_A)…" Click="OnSaveAsClicked" Tag="file.saveAs" />
-            <MenuItem Header="匯出影像(_E)…" Click="OnExportClicked" Tag="file.export" />
-            <MenuItem Header="複製這張圖片(_C)" Click="OnCopyFlattenedClicked" Tag="file.copyImage" />
+            <MenuItem Header="儲存(_S)" Click="OnSaveClicked" Tag="file.save">
+              <MenuItem.Icon><mi:MaterialIcon Kind="ContentSaveOutline" Width="16" Height="16" /></MenuItem.Icon>
+            </MenuItem>
+            <MenuItem Header="另存新檔(_A)…" Click="OnSaveAsClicked" Tag="file.saveAs">
+              <MenuItem.Icon><mi:MaterialIcon Kind="ContentSaveEditOutline" Width="16" Height="16" /></MenuItem.Icon>
+            </MenuItem>
+            <MenuItem Header="匯出影像(_E)…" Click="OnExportClicked" Tag="file.export">
+              <MenuItem.Icon><mi:MaterialIcon Kind="ExportVariant" Width="16" Height="16" /></MenuItem.Icon>
+            </MenuItem>
+            <MenuItem Header="複製這張圖片(_C)" Click="OnCopyFlattenedClicked" Tag="file.copyImage">
+              <MenuItem.Icon><mi:MaterialIcon Kind="ImageMultipleOutline" Width="16" Height="16" /></MenuItem.Icon>
+            </MenuItem>
             <Separator />
             <!-- 內容由 MainWindow.RefreshRecentFilesMenu 填（最近開過的檔案，最新在最上面） -->
-            <MenuItem x:Name="RecentFilesMenu" Header="最近使用的檔案(_R)" />
+            <MenuItem x:Name="RecentFilesMenu" Header="最近使用的檔案(_R)">
+              <MenuItem.Icon><mi:MaterialIcon Kind="History" Width="16" Height="16" /></MenuItem.Icon>
+            </MenuItem>
             <Separator />
-            <MenuItem Header="關閉分頁(_W)" Click="OnCloseTabClicked" Tag="file.closeTab" />
+            <MenuItem Header="關閉分頁(_W)" Click="OnCloseTabClicked" Tag="file.closeTab">
+              <MenuItem.Icon><mi:MaterialIcon Kind="CloseBoxOutline" Width="16" Height="16" /></MenuItem.Icon>
+            </MenuItem>
             <Separator />
-            <MenuItem Header="結束(_X)" Click="OnExitClicked" />
+            <MenuItem Header="結束(_X)" Click="OnExitClicked">
+              <MenuItem.Icon><mi:MaterialIcon Kind="ExitToApp" Width="16" Height="16" /></MenuItem.Icon>
+            </MenuItem>
           </MenuItem>
           <MenuItem Header="編輯(_E)">
-            <MenuItem x:Name="UndoMenuItem" Header="復原(_U)" Click="OnUndoClicked" Tag="edit.undo" />
-            <MenuItem x:Name="RedoMenuItem" Header="重做(_R)" Click="OnRedoClicked" Tag="edit.redo" />
+            <MenuItem x:Name="UndoMenuItem" Header="復原(_U)" Click="OnUndoClicked" Tag="edit.undo">
+              <MenuItem.Icon><mi:MaterialIcon Kind="Undo" Width="16" Height="16" /></MenuItem.Icon>
+            </MenuItem>
+            <MenuItem x:Name="RedoMenuItem" Header="重做(_R)" Click="OnRedoClicked" Tag="edit.redo">
+              <MenuItem.Icon><mi:MaterialIcon Kind="Redo" Width="16" Height="16" /></MenuItem.Icon>
+            </MenuItem>
             <Separator />
-            <MenuItem Header="剪下(_T)" Click="OnCutClicked" Tag="edit.cut" />
-            <MenuItem Header="複製(_C)" Click="OnCopyClicked" Tag="edit.copy" />
-            <MenuItem Header="貼上(_P)" Click="OnPasteClicked" Tag="edit.paste" />
+            <MenuItem Header="剪下(_T)" Click="OnCutClicked" Tag="edit.cut">
+              <MenuItem.Icon><mi:MaterialIcon Kind="ContentCut" Width="16" Height="16" /></MenuItem.Icon>
+            </MenuItem>
+            <MenuItem Header="複製(_C)" Click="OnCopyClicked" Tag="edit.copy">
+              <MenuItem.Icon><mi:MaterialIcon Kind="ContentCopy" Width="16" Height="16" /></MenuItem.Icon>
+            </MenuItem>
+            <MenuItem Header="貼上(_P)" Click="OnPasteClicked" Tag="edit.paste">
+              <MenuItem.Icon><mi:MaterialIcon Kind="ContentPaste" Width="16" Height="16" /></MenuItem.Icon>
+            </MenuItem>
             <Separator />
-            <MenuItem Header="全選(_A)" Click="OnSelectAllClicked" Tag="edit.selectAll" />
-            <MenuItem Header="取消選取(_D)" Click="OnDeselectClicked" Tag="edit.deselect" />
-            <MenuItem Header="反轉選取(_I)" Click="OnInvertSelectionClicked" Tag="edit.invertSelection" />
+            <MenuItem Header="全選(_A)" Click="OnSelectAllClicked" Tag="edit.selectAll">
+              <MenuItem.Icon><mi:MaterialIcon Kind="SelectAll" Width="16" Height="16" /></MenuItem.Icon>
+            </MenuItem>
+            <MenuItem Header="取消選取(_D)" Click="OnDeselectClicked" Tag="edit.deselect">
+              <MenuItem.Icon><mi:MaterialIcon Kind="SelectOff" Width="16" Height="16" /></MenuItem.Icon>
+            </MenuItem>
+            <MenuItem Header="反轉選取(_I)" Click="OnInvertSelectionClicked" Tag="edit.invertSelection">
+              <MenuItem.Icon><mi:MaterialIcon Kind="SelectInverse" Width="16" Height="16" /></MenuItem.Icon>
+            </MenuItem>
             <Separator />
-            <MenuItem Header="清除選取範圍(_E)" Click="OnEraseSelectionClicked" Tag="edit.erase" />
-            <MenuItem Header="填滿選取範圍(_F)" Click="OnFillSelectionClicked" Tag="edit.fill" />
+            <MenuItem Header="清除選取範圍(_E)" Click="OnEraseSelectionClicked" Tag="edit.erase">
+              <MenuItem.Icon><mi:MaterialIcon Kind="EraserVariant" Width="16" Height="16" /></MenuItem.Icon>
+            </MenuItem>
+            <MenuItem Header="填滿選取範圍(_F)" Click="OnFillSelectionClicked" Tag="edit.fill">
+              <MenuItem.Icon><mi:MaterialIcon Kind="FormatColorFill" Width="16" Height="16" /></MenuItem.Icon>
+            </MenuItem>
           </MenuItem>
 
           <MenuItem Header="影像(_I)">
-            <MenuItem Header="裁切至選取範圍(_C)" Click="OnCropToSelectionClicked" Tag="image.crop" />
-            <MenuItem Header="調整影像大小(_R)…" Click="OnResizeImageClicked" Tag="image.resize" />
-            <MenuItem Header="調整畫布大小(_S)…" Click="OnCanvasSizeClicked" Tag="image.canvasSize" />
+            <MenuItem Header="裁切至選取範圍(_C)" Click="OnCropToSelectionClicked" Tag="image.crop">
+              <MenuItem.Icon><mi:MaterialIcon Kind="Crop" Width="16" Height="16" /></MenuItem.Icon>
+            </MenuItem>
+            <MenuItem Header="調整影像大小(_R)…" Click="OnResizeImageClicked" Tag="image.resize">
+              <MenuItem.Icon><mi:MaterialIcon Kind="ResizeBottomRight" Width="16" Height="16" /></MenuItem.Icon>
+            </MenuItem>
+            <MenuItem Header="調整畫布大小(_S)…" Click="OnCanvasSizeClicked" Tag="image.canvasSize">
+              <MenuItem.Icon><mi:MaterialIcon Kind="ArrowExpandAll" Width="16" Height="16" /></MenuItem.Icon>
+            </MenuItem>
             <MenuItem x:Name="ToFastModeMenuItem" Header="轉成快速模式（實驗）" Click="OnToFastModeClicked"
-                      ToolTip.Tip="畫布縮到代理級別編輯（預設 1080p，可在設定改）、輸出仍是現在的解析度。文字與效果輸出時重畫；畫過的像素會變成代理解析度（可復原）。" />
+                      ToolTip.Tip="畫布縮到代理級別編輯（預設 1080p，可在設定改）、輸出仍是現在的解析度。文字與效果輸出時重畫；畫過的像素會變成代理解析度（可復原）。">
+              <MenuItem.Icon><mi:MaterialIcon Kind="Speedometer" Width="16" Height="16" /></MenuItem.Icon>
+            </MenuItem>
             <MenuItem x:Name="ToFullResolutionMenuItem" Header="轉成完整解析度" Click="OnToFullResolutionClicked"
-                      ToolTip.Tip="快速模式專用：把整份放大成專案的輸出解析度，之後就是一般專案（可復原）。" />
+                      ToolTip.Tip="快速模式專用：把整份放大成專案的輸出解析度，之後就是一般專案（可復原）。">
+              <MenuItem.Icon><mi:MaterialIcon Kind="ImageSizeSelectLarge" Width="16" Height="16" /></MenuItem.Icon>
+            </MenuItem>
             <Separator />
-            <MenuItem Header="水平翻轉(_H)" Click="OnFlipHorizontalClicked" />
-            <MenuItem Header="垂直翻轉(_V)" Click="OnFlipVerticalClicked" />
+            <MenuItem Header="水平翻轉(_H)" Click="OnFlipHorizontalClicked">
+              <MenuItem.Icon><mi:MaterialIcon Kind="FlipHorizontal" Width="16" Height="16" /></MenuItem.Icon>
+            </MenuItem>
+            <MenuItem Header="垂直翻轉(_V)" Click="OnFlipVerticalClicked">
+              <MenuItem.Icon><mi:MaterialIcon Kind="FlipVertical" Width="16" Height="16" /></MenuItem.Icon>
+            </MenuItem>
             <Separator />
-            <MenuItem Header="順時針旋轉 90°" Click="OnRotateCwClicked" Tag="image.rotateCw" />
-            <MenuItem Header="逆時針旋轉 90°" Click="OnRotateCcwClicked" Tag="image.rotateCcw" />
-            <MenuItem Header="旋轉 180°" Click="OnRotate180Clicked" Tag="image.rotate180" />
+            <MenuItem Header="順時針旋轉 90°" Click="OnRotateCwClicked" Tag="image.rotateCw">
+              <MenuItem.Icon><mi:MaterialIcon Kind="RotateRight" Width="16" Height="16" /></MenuItem.Icon>
+            </MenuItem>
+            <MenuItem Header="逆時針旋轉 90°" Click="OnRotateCcwClicked" Tag="image.rotateCcw">
+              <MenuItem.Icon><mi:MaterialIcon Kind="RotateLeft" Width="16" Height="16" /></MenuItem.Icon>
+            </MenuItem>
+            <MenuItem Header="旋轉 180°" Click="OnRotate180Clicked" Tag="image.rotate180">
+              <MenuItem.Icon><mi:MaterialIcon Kind="Rotate360" Width="16" Height="16" /></MenuItem.Icon>
+            </MenuItem>
             <Separator />
-            <MenuItem Header="平面化(_F)" Click="OnFlattenClicked" Tag="image.flatten" />
+            <MenuItem Header="平面化(_F)" Click="OnFlattenClicked" Tag="image.flatten">
+              <MenuItem.Icon><mi:MaterialIcon Kind="LayersOutline" Width="16" Height="16" /></MenuItem.Icon>
+            </MenuItem>
           </MenuItem>
 
           <MenuItem Header="圖層(_L)">
-            <MenuItem Header="新增圖層(_N)" Click="OnAddLayerClicked" Tag="layer.add" />
-            <MenuItem Header="複製圖層(_D)" Click="OnDuplicateLayerClicked" Tag="layer.duplicate" />
-            <MenuItem Header="刪除圖層" Click="OnDeleteLayerClicked" />
-            <MenuItem Header="從檔案匯入圖層(_I)…" Click="OnImportLayerClicked" Tag="layer.import" />
+            <MenuItem Header="新增圖層(_N)" Click="OnAddLayerClicked" Tag="layer.add">
+              <MenuItem.Icon><mi:MaterialIcon Kind="LayersPlus" Width="16" Height="16" /></MenuItem.Icon>
+            </MenuItem>
+            <MenuItem Header="複製圖層(_D)" Click="OnDuplicateLayerClicked" Tag="layer.duplicate">
+              <MenuItem.Icon><mi:MaterialIcon Kind="ContentDuplicate" Width="16" Height="16" /></MenuItem.Icon>
+            </MenuItem>
+            <MenuItem Header="刪除圖層" Click="OnDeleteLayerClicked">
+              <MenuItem.Icon><mi:MaterialIcon Kind="LayersMinus" Width="16" Height="16" /></MenuItem.Icon>
+            </MenuItem>
+            <MenuItem Header="從檔案匯入圖層(_I)…" Click="OnImportLayerClicked" Tag="layer.import">
+              <MenuItem.Icon><mi:MaterialIcon Kind="ImagePlus" Width="16" Height="16" /></MenuItem.Icon>
+            </MenuItem>
             <Separator />
-            <MenuItem Header="向下合併(_M)" Click="OnMergeLayerDownClicked" Tag="layer.mergeDown" />
+            <MenuItem Header="向下合併(_M)" Click="OnMergeLayerDownClicked" Tag="layer.mergeDown">
+              <MenuItem.Icon><mi:MaterialIcon Kind="ArrowCollapseDown" Width="16" Height="16" /></MenuItem.Icon>
+            </MenuItem>
             <MenuItem Header="圖層文字平面化(_R)" Click="OnFlattenTextClicked" Tag="layer.flattenText"
-                      ToolTip.Tip="把本圖層的文字物件烙成像素（之後不能再編輯文字內容）" />
+                      ToolTip.Tip="把本圖層的文字物件烙成像素（之後不能再編輯文字內容）">
+              <MenuItem.Icon><mi:MaterialIcon Kind="FormatText" Width="16" Height="16" /></MenuItem.Icon>
+            </MenuItem>
             <Separator />
-            <MenuItem Header="水平翻轉" Click="OnFlipLayerHorizontalClicked" Tag="layer.flipH" />
-            <MenuItem Header="垂直翻轉" Click="OnFlipLayerVerticalClicked" Tag="layer.flipV" />
+            <MenuItem Header="水平翻轉" Click="OnFlipLayerHorizontalClicked" Tag="layer.flipH">
+              <MenuItem.Icon><mi:MaterialIcon Kind="FlipHorizontal" Width="16" Height="16" /></MenuItem.Icon>
+            </MenuItem>
+            <MenuItem Header="垂直翻轉" Click="OnFlipLayerVerticalClicked" Tag="layer.flipV">
+              <MenuItem.Icon><mi:MaterialIcon Kind="FlipVertical" Width="16" Height="16" /></MenuItem.Icon>
+            </MenuItem>
             <MenuItem Header="變形(_T)">
+              <MenuItem.Icon><mi:MaterialIcon Kind="VectorSquareEdit" Width="16" Height="16" /></MenuItem.Icon>
               <MenuItem Header="自由變形(_F)" Click="OnTransformFreeClicked" Tag="layer.transformFree"
-                        ToolTip.Tip="切到移動工具並框住圖層內容：拖角縮放、右鍵旋轉；Enter 套用、Esc 還原" />
+                        ToolTip.Tip="切到移動工具並框住圖層內容：拖角縮放、右鍵旋轉；Enter 套用、Esc 還原">
+                <MenuItem.Icon><mi:MaterialIcon Kind="ArrowExpandAll" Width="16" Height="16" /></MenuItem.Icon>
+              </MenuItem>
               <MenuItem Header="透視(_P)" Click="OnTransformPerspectiveClicked" Tag="layer.transformPerspective"
-                        ToolTip.Tip="拖一角、同一邊的鄰角對稱跟著動，做出梯形／遠近感（Shift＝只動那一角）" />
+                        ToolTip.Tip="拖一角、同一邊的鄰角對稱跟著動，做出梯形／遠近感（Shift＝只動那一角）">
+                <MenuItem.Icon><mi:MaterialIcon Kind="PerspectiveLess" Width="16" Height="16" /></MenuItem.Icon>
+              </MenuItem>
               <MenuItem Header="扭曲(_D)" Click="OnTransformDistortClicked" Tag="layer.transformDistort"
-                        ToolTip.Tip="3×3 網格、16 個控制點，把內容彎成曲面（Photoshop 彎曲）" />
+                        ToolTip.Tip="3×3 網格、16 個控制點，把內容彎成曲面（Photoshop 彎曲）">
+                <MenuItem.Icon><mi:MaterialIcon Kind="VectorCurve" Width="16" Height="16" /></MenuItem.Icon>
+              </MenuItem>
             </MenuItem>
             <Separator />
             <MenuItem Header="去背(_B)">
-              <MenuItem Header="AI 去背（remove.bg）" Click="OnRemoveBackgroundClicked" Tag="layer.removeBackground" />
-              <MenuItem Header="演算去背" Click="OnRemoveBackgroundLocalClicked" Tag="layer.removeBackgroundLocal" />
+              <MenuItem.Icon><mi:MaterialIcon Kind="ImageFilterHdr" Width="16" Height="16" /></MenuItem.Icon>
+              <MenuItem Header="AI 去背（remove.bg）" Click="OnRemoveBackgroundClicked" Tag="layer.removeBackground">
+                <MenuItem.Icon><mi:MaterialIcon Kind="AutoFix" Width="16" Height="16" /></MenuItem.Icon>
+              </MenuItem>
+              <MenuItem Header="演算去背" Click="OnRemoveBackgroundLocalClicked" Tag="layer.removeBackgroundLocal">
+                <MenuItem.Icon><mi:MaterialIcon Kind="Calculator" Width="16" Height="16" /></MenuItem.Icon>
+              </MenuItem>
             </MenuItem>
             <Separator />
-            <MenuItem Header="圖層屬性(_P)…" Click="OnLayerPropertiesClicked" Tag="layer.properties" />
+            <MenuItem Header="圖層屬性(_P)…" Click="OnLayerPropertiesClicked" Tag="layer.properties">
+              <MenuItem.Icon><mi:MaterialIcon Kind="Tune" Width="16" Height="16" /></MenuItem.Icon>
+            </MenuItem>
           </MenuItem>
 
           <MenuItem x:Name="AdjustmentsMenu" Header="調整(_A)" />
           <MenuItem x:Name="EffectsMenu" Header="效果(_C)" />
 
           <MenuItem Header="檢視(_V)">
-            <MenuItem Header="放大" Click="OnZoomInClicked" Tag="view.zoomIn" />
-            <MenuItem Header="縮小" Click="OnZoomOutClicked" Tag="view.zoomOut" />
-            <MenuItem Header="實際大小" Click="OnActualSizeClicked" Tag="view.actualSize" />
-            <MenuItem Header="最適大小" Click="OnBestFitClicked" Tag="view.bestFit" />
+            <MenuItem Header="放大" Click="OnZoomInClicked" Tag="view.zoomIn">
+              <MenuItem.Icon><mi:MaterialIcon Kind="MagnifyPlusOutline" Width="16" Height="16" /></MenuItem.Icon>
+            </MenuItem>
+            <MenuItem Header="縮小" Click="OnZoomOutClicked" Tag="view.zoomOut">
+              <MenuItem.Icon><mi:MaterialIcon Kind="MagnifyMinusOutline" Width="16" Height="16" /></MenuItem.Icon>
+            </MenuItem>
+            <MenuItem Header="實際大小" Click="OnActualSizeClicked" Tag="view.actualSize">
+              <MenuItem.Icon><mi:MaterialIcon Kind="ImageSizeSelectActual" Width="16" Height="16" /></MenuItem.Icon>
+            </MenuItem>
+            <MenuItem Header="最適大小" Click="OnBestFitClicked" Tag="view.bestFit">
+              <MenuItem.Icon><mi:MaterialIcon Kind="FitToPageOutline" Width="16" Height="16" /></MenuItem.Icon>
+            </MenuItem>
             <Separator />
             <MenuItem x:Name="PixelGridMenuItem" Header="像素格線" Click="OnTogglePixelGridClicked"
-                      ToggleType="CheckBox" />
+                      ToggleType="CheckBox">
+              <MenuItem.Icon><mi:MaterialIcon Kind="Grid" Width="16" Height="16" /></MenuItem.Icon>
+            </MenuItem>
             <MenuItem x:Name="SmoothZoomMenuItem" Header="放大時平滑取樣" Click="OnToggleSmoothZoomClicked"
                       ToggleType="CheckBox"
-                      ToolTip.Tip="關（預設，同 paint.net）：放大時顯示真實像素、硬邊；開：放大時雙線性插值，看起來平滑但看不到真實像素邊界。只影響畫面顯示，不影響輸出。" />
+                      ToolTip.Tip="關（預設，同 paint.net）：放大時顯示真實像素、硬邊；開：放大時雙線性插值，看起來平滑但看不到真實像素邊界。只影響畫面顯示，不影響輸出。">
+              <MenuItem.Icon><mi:MaterialIcon Kind="Blur" Width="16" Height="16" /></MenuItem.Icon>
+            </MenuItem>
             <MenuItem x:Name="CanvasLodMenuItem" Header="縮小時用降取樣貼圖" Click="OnToggleCanvasLodClicked"
                       ToggleType="CheckBox"
-                      ToolTip.Tip="開（預設）：縮小檢視時一張貼圖抵好幾格，畫面順很多、縮小的鋸齒也少。關：一律逐格畫全解析度。只影響顯示，不影響輸出。" />
+                      ToolTip.Tip="開（預設）：縮小檢視時一張貼圖抵好幾格，畫面順很多、縮小的鋸齒也少。關：一律逐格畫全解析度。只影響顯示，不影響輸出。">
+              <MenuItem.Icon><mi:MaterialIcon Kind="ImageFilterCenterFocusWeak" Width="16" Height="16" /></MenuItem.Icon>
+            </MenuItem>
           </MenuItem>
 
           <!-- 小工具：各種與編輯本身無關的獨立小玩具 -->
           <MenuItem x:Name="GadgetsMenu" Header="小工具(_G)">
             <MenuItem Header="YouTube 縮圖預覽(_Y)…" Click="OnYouTubePreviewClicked"
-                      Tag="gadget.youtubePreview" />
+                      Tag="gadget.youtubePreview">
+              <MenuItem.Icon><mi:MaterialIcon Kind="Youtube" Width="16" Height="16" /></MenuItem.Icon>
+            </MenuItem>
           </MenuItem>
 
           <!-- 設定：每一項都是「開同一個設定視窗、直接跳到那一頁」（同 VS Code） -->
           <MenuItem Header="設定(_S)">
-            <MenuItem Header="一般(_G)…" Click="OnSettingsClicked" CommandParameter="General" />
-            <MenuItem Header="外觀(_T)…" Click="OnSettingsClicked" CommandParameter="Appearance" />
-            <MenuItem Header="快捷鍵(_K)…" Click="OnSettingsClicked" CommandParameter="Shortcuts" />
-            <MenuItem Header="AI 去背(_B)…" Click="OnSettingsClicked" CommandParameter="BackgroundRemoval" />
-            <MenuItem Header="檔案關聯(_A)…" Click="OnSettingsClicked" CommandParameter="FileAssociations" />
+            <MenuItem Header="一般(_G)…" Click="OnSettingsClicked" CommandParameter="General">
+              <MenuItem.Icon><mi:MaterialIcon Kind="Cog" Width="16" Height="16" /></MenuItem.Icon>
+            </MenuItem>
+            <MenuItem Header="外觀(_T)…" Click="OnSettingsClicked" CommandParameter="Appearance">
+              <MenuItem.Icon><mi:MaterialIcon Kind="Palette" Width="16" Height="16" /></MenuItem.Icon>
+            </MenuItem>
+            <MenuItem Header="快捷鍵(_K)…" Click="OnSettingsClicked" CommandParameter="Shortcuts">
+              <MenuItem.Icon><mi:MaterialIcon Kind="KeyboardOutline" Width="16" Height="16" /></MenuItem.Icon>
+            </MenuItem>
+            <MenuItem Header="AI 去背(_B)…" Click="OnSettingsClicked" CommandParameter="BackgroundRemoval">
+              <MenuItem.Icon><mi:MaterialIcon Kind="AutoFix" Width="16" Height="16" /></MenuItem.Icon>
+            </MenuItem>
+            <MenuItem Header="檔案關聯(_A)…" Click="OnSettingsClicked" CommandParameter="FileAssociations">
+              <MenuItem.Icon><mi:MaterialIcon Kind="FileLinkOutline" Width="16" Height="16" /></MenuItem.Icon>
+            </MenuItem>
             <Separator />
-            <MenuItem Header="檢查更新(_U)…" Click="OnCheckUpdatesClicked" />
+            <MenuItem Header="檢查更新(_U)…" Click="OnCheckUpdatesClicked">
+              <MenuItem.Icon><mi:MaterialIcon Kind="Update" Width="16" Height="16" /></MenuItem.Icon>
+            </MenuItem>
           </MenuItem>
         </controls:ClickSubmenuMenu>
       </DockPanel>

@@ -2687,9 +2687,45 @@ public partial class MainWindow : Window
     private IEffect? _lastEffect;
     private MenuItem? _repeatEffectItem;
 
+    /// <summary>選單項目左邊的小圖示（單色、跟著文字顏色）—— 使用者 2026-09-06：「只有文字略顯單調」。</summary>
+    private static MaterialIcon MenuIcon(MaterialIconKind kind) => new() { Kind = kind, Width = 16, Height = 16 };
+
+    private static MaterialIconKind AdjustmentIcon(string typeId) => typeId switch
+    {
+        "brightnessContrast" => MaterialIconKind.Brightness6,
+        "curves" => MaterialIconKind.ChartBellCurveCumulative,
+        "hueSaturation" => MaterialIconKind.Palette,
+        "levels" => MaterialIconKind.Tune,
+        "posterize" => MaterialIconKind.Stairs,
+        "blackWhite" => MaterialIconKind.ContrastBox,
+        "invert" => MaterialIconKind.InvertColors,
+        "sepia" => MaterialIconKind.ImageFilterVintage,
+        "exposure" => MaterialIconKind.WhiteBalanceSunny,
+        "temperatureTint" => MaterialIconKind.Thermometer,
+        "colorBalance" => MaterialIconKind.ScaleBalance,
+        "photoFilter" => MaterialIconKind.CameraIris,
+        "channelMixer" => MaterialIconKind.TuneVertical,
+        "threshold" => MaterialIconKind.ContrastCircle,
+        _ => MaterialIconKind.TuneVariant,
+    };
+
+    private static MaterialIconKind EffectCategoryIcon(string category) => category switch
+    {
+        "藝術" => MaterialIconKind.Brush,
+        "模糊" => MaterialIconKind.Blur,
+        "色彩" => MaterialIconKind.Palette,
+        "扭曲" => MaterialIconKind.Waves,
+        "雜訊" => MaterialIconKind.Grain,
+        "物件" => MaterialIconKind.ShapeOutline,
+        "相片" => MaterialIconKind.Camera,
+        "演算" => MaterialIconKind.FunctionVariant,
+        "風格化" => MaterialIconKind.TextureBox,
+        _ => MaterialIconKind.AutoFix,
+    };
+
     private void BuildEffectMenus()
     {
-        var auto = new MenuItem { Header = "自動色階", Tag = "adjust.autoLevel" };
+        var auto = new MenuItem { Header = "自動色階", Tag = "adjust.autoLevel", Icon = MenuIcon(MaterialIconKind.AutoFix) };
         auto.Click += (_, _) => _ = ApplyAutoLevelAsync();
         AdjustmentsMenu.Items.Add(auto);
 
@@ -2704,12 +2740,13 @@ public partial class MainWindow : Window
             {
                 Header = entry.HasDialog ? entry.DisplayName + "…" : entry.DisplayName,
                 Tag = "adjust." + entry.TypeId,
+                Icon = MenuIcon(AdjustmentIcon(entry.TypeId)),
             };
             item.Click += (_, _) => _ = ApplyAdjustmentAsync(entry);
             AdjustmentsMenu.Items.Add(item);
         }
 
-        _repeatEffectItem = new MenuItem { Header = "重複上次效果", Tag = "effect.repeat", IsEnabled = false };
+        _repeatEffectItem = new MenuItem { Header = "重複上次效果", Tag = "effect.repeat", IsEnabled = false, Icon = MenuIcon(MaterialIconKind.Repeat) };
         _repeatEffectItem.Click += (_, _) => OnRepeatEffect();
         EffectsMenu.Items.Add(_repeatEffectItem);
 
@@ -2752,7 +2789,7 @@ public partial class MainWindow : Window
 
         foreach (var category in EffectRegistry.Categories)
         {
-            var sub = new MenuItem { Header = category };
+            var sub = new MenuItem { Header = category, Icon = MenuIcon(EffectCategoryIcon(category)) };
             foreach (var entry in EffectRegistry.InCategory(category))
             {
                 var e = entry;
