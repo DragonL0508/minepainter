@@ -2620,15 +2620,10 @@ public partial class MainWindow : Window
             Toasts.Show("請先選擇一個點陣圖層");
             return;
         }
+        // 沒有本機模型也能開：對話框裡有 remove.bg 線上模式，也有「下載模型…」
         var models = OnnxModels.Scan();
-        if (models.Count == 0)
-        {
-            // 還沒有模型就直接請他下載，而不是丟一句話叫他自己去找 .onnx
-            models = await ShowModelDownloadAsync();
-            if (models.Count == 0) return;
-        }
         session.SelectedElement = null; // 平面化後物件不存在，把手框不能還指著它
-        var dialog = new BackgroundRemovalWindow(session, layer, models);
+        var dialog = new BackgroundRemovalWindow(session, layer, models, ModelFolder);
         await dialog.ShowDialog(this);
         if (dialog.Error != null) Toasts.Show("AI 去背失敗：" + dialog.Error);
         else if (dialog.Applied) Toasts.Show(dialog.Note == null ? "AI 去背完成" : "AI 去背完成：" + dialog.Note);

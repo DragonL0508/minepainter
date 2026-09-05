@@ -148,7 +148,7 @@ public static class BackgroundRemover
     /// 最近一次推論的計畫說明（例如「模型太大，改用 CPU」）；沒有話說時是 null。
     /// 給 UI 在完成後顯示用。
     /// </summary>
-    public static string? LastPlanNote { get; private set; }
+    public static string? LastPlanNote { get; internal set; }
 
     private static unsafe byte[] InferCore(OnnxModelInfo model, uint[] src, int width, int height,
         InferencePlan plan, CancellationToken ct)

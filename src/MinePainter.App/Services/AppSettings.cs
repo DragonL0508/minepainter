@@ -76,6 +76,15 @@ public sealed class AppSettings
     /// <summary>使用者在「檔案關聯」按過「全部移除」；啟動時不再自動登記。</summary>
     public bool FileAssociationsOptOut { get; set; }
 
+    /// <summary>
+    /// remove.bg 的 API Key（AI 去背的線上模式；同 paint.net 的 Remove Background 插件）。
+    /// 明文存放，跟那個插件的 config.json 一樣；null = 還沒填。
+    /// </summary>
+    public string? RemoveBgApiKey { get; set; }
+
+    /// <summary>remove.bg 用預覽解析度（免費額度）而不是自動（最高解析度、扣點）。</summary>
+    public bool RemoveBgPreview { get; set; }
+
     /// <summary>主視窗啟動時最大化（預設是）。</summary>
     public bool WindowMaximized { get; set; } = true;
 
