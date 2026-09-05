@@ -79,11 +79,12 @@ public static class PsdFormat
         var reader = new Reader(stream);
         var header = ReadHeader(reader);
         var palette = ReadColorModeData(reader, header);
-        header = header with { GlobalAngle = ReadImageResources(reader) };
+        var (globalAngle, dpi) = ReadImageResources(reader);
+        header = header with { GlobalAngle = globalAngle, Dpi = dpi };
 
         var records = ReadLayerSection(reader, header, notes);
 
-        var document = new Document(header.Width, header.Height);
+        var document = new Document(header.Width, header.Height) { Dpi = header.Dpi };
         try
         {
             lock (document.SyncRoot)
@@ -112,6 +113,9 @@ public static class PsdFormat
     {
         /// <summary>圖層樣式「使用整體光源」的角度（影像資源 1037；Photoshop 預設 120）。</summary>
         public int GlobalAngle { get; init; } = 120;
+
+        /// <summary>解析度（影像資源 1005；Photoshop 預設 72）。</summary>
+        public float Dpi { get; init; } = 72f;
 
         /// <summary>這個色彩模式本身佔幾個通道；合成影像多出來的第一個就是透明度。</summary>
         public int ColorChannels => Mode switch
@@ -172,13 +176,15 @@ public static class PsdFormat
 
     /// <summary>
     /// 影像資源區：一串 8BIM + ID + Pascal 名稱（補到偶數）+ 長度 + 資料（補到偶數）。
-    /// 只要整體光源角度（1037），其餘（縮圖、ICC、解析度）匯入用不到。
+    /// 只要整體光源角度（1037）與解析度（1005：hRes 是 16.16 定點數，單位 1 = 每英寸、2 = 每公分），
+    /// 其餘（縮圖、ICC）匯入用不到。
     /// </summary>
-    private static int ReadImageResources(Reader reader)
+    private static (int GlobalAngle, float Dpi) ReadImageResources(Reader reader)
     {
         var length = reader.UInt32();
         var end = reader.Position + length;
         var globalAngle = 120;
+        var dpi = 72f;
         while (reader.Position + 12 <= end)
         {
             if (!reader.Bytes(4).AsSpan().SequenceEqual("8BIM"u8)) break;
@@ -188,10 +194,16 @@ public static class PsdFormat
             var size = reader.UInt32();
             var dataStart = reader.Position;
             if (id == 1037 && size >= 4) globalAngle = reader.Int32();
+            if (id == 1005 && size >= 6)
+            {
+                var fixedRes = reader.UInt32() / 65536f;
+                var unit = reader.UInt16();
+                if (fixedRes > 0) dpi = unit == 2 ? fixedRes * PhysicalUnits.CentimetersPerInch : fixedRes;
+            }
             reader.Position = dataStart + size + size % 2;
         }
         reader.Position = end;
-        return globalAngle;
+        return (globalAngle, dpi);
     }
 
     // ---- 圖層區 ----

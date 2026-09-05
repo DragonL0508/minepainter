@@ -48,6 +48,12 @@ public static class MppFormat
 
         public int OutputHeight { get; set; }
 
+        /// <summary>
+        /// 解析度（dpi）。沒有這個欄位的舊檔當 96。舊版程式讀到會忽略（System.Text.Json 預設跳過不認得的欄位），
+        /// 檔案照樣打得開，所以加這個欄位不升 FormatVersion。
+        /// </summary>
+        public float? Dpi { get; set; }
+
         public Node Root { get; set; } = new();
     }
 
@@ -190,6 +196,7 @@ public static class MppFormat
                 Height = doc.Height,
                 OutputWidth = doc.IsFastMode ? doc.OutputWidth : 0,
                 OutputHeight = doc.IsFastMode ? doc.OutputHeight : 0,
+                Dpi = doc.Dpi,
                 Root = BuildNode(doc.Root, rasters, masks, sources),
             };
             // 只有真的寫了原始高清來源才升版本，一般檔案照舊是 v1（舊版程式仍讀得到）
@@ -482,6 +489,7 @@ public static class MppFormat
 
         var doc = new Document(manifest.Width, manifest.Height);
         doc.SetOutputSize(manifest.OutputWidth, manifest.OutputHeight);
+        if (manifest.Dpi is { } dpi) doc.Dpi = dpi;
         lock (doc.SyncRoot)
         {
             foreach (var childNode in manifest.Root.Children ?? [])

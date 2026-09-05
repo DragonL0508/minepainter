@@ -60,9 +60,10 @@ public static class ImageCodec
     }
 
     /// <summary>建立含單一底色圖層的新文件。</summary>
-    public static Document CreateBlankDocument(int width, int height, SKColor background, string layerName = "背景")
+    public static Document CreateBlankDocument(int width, int height, SKColor background, string layerName = "背景",
+        float dpi = Documents.PhysicalUnits.ScreenDpi)
     {
-        var doc = new Document(width, height);
+        var doc = new Document(width, height) { Dpi = dpi };
         var layer = new RasterLayer { Name = layerName };
         if (background.Alpha > 0)
             layer.Surface.Fill(new SKRectI(0, 0, width, height), background);

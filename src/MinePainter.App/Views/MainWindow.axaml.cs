@@ -1441,13 +1441,16 @@ public partial class MainWindow : Window
     private async void OnNewClicked(object? sender, RoutedEventArgs e)
     {
         var dialog = new NewDocumentWindow();
+        // 剪貼簿有圖就先填它的尺寸（paint.net 的習慣：新增之後直接貼上剛好合身）
+        if (Platform.ClipboardImage.TryGetImageSize() is { } clip)
+            dialog.SuggestSize(clip.Width, clip.Height, "剪貼簿的影像");
         await dialog.ShowDialog(this);
         if (!dialog.Confirmed) return;
 
         if (dialog.FastMode)
         {
             // 快速模式：畫布是代理，文件記著真正的輸出解析度（見 Core.Documents.FastMode）
-            var proxy = ImageCodec.CreateBlankDocument(dialog.ProxyWidth, dialog.ProxyHeight, dialog.DocBackground);
+            var proxy = ImageCodec.CreateBlankDocument(dialog.ProxyWidth, dialog.ProxyHeight, dialog.DocBackground, dpi: dialog.Dpi);
             proxy.SetOutputSize(dialog.DocWidth, dialog.DocHeight);
             SetDocument(proxy);
             Toasts.Show($"快速模式：以 {dialog.ProxyWidth} × {dialog.ProxyHeight} 製作，" +
@@ -1455,7 +1458,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        SetDocument(ImageCodec.CreateBlankDocument(dialog.DocWidth, dialog.DocHeight, dialog.DocBackground));
+        SetDocument(ImageCodec.CreateBlankDocument(dialog.DocWidth, dialog.DocHeight, dialog.DocBackground, dpi: dialog.Dpi));
     }
 
     private async void OnOpenClicked(object? sender, RoutedEventArgs e)

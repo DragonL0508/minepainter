@@ -298,6 +298,18 @@ public class PsdFormatTests
     }
 
     [Fact]
+    public void Load_ReadsResolutionInfo()
+    {
+        var file = PsdWriter.Build(2, 2, [], merged: [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]], dpi: 350);
+        using var doc = PsdFormat.Load(new MemoryStream(file), out _);
+        Assert.Equal(350f, doc.Dpi, 1);
+
+        var plain = PsdWriter.Build(2, 2, [], merged: [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]]);
+        using var doc2 = PsdFormat.Load(new MemoryStream(plain), out _);
+        Assert.Equal(72f, doc2.Dpi);   // Photoshop 沒寫就是 72
+    }
+
+    [Fact]
     public void Load_ReadsPsbLengths()
     {
         var file = PsdWriter.Build(2, 2,
@@ -399,7 +411,8 @@ public class PsdFormatTests
         public static byte[] Build(
             int width, int height, IReadOnlyList<Layer> layers,
             byte[][]? merged = null, int mergedCompression = 0,
-            int depth = 8, int mode = 3, int channels = 3, byte[]? palette = null, bool psb = false, int? globalAngle = null)
+            int depth = 8, int mode = 3, int channels = 3, byte[]? palette = null, bool psb = false, int? globalAngle = null,
+            float? dpi = null)
         {
             var file = new MemoryStream();
             file.Write("8BPS"u8);
@@ -414,7 +427,7 @@ public class PsdFormatTests
             U32(file, (uint)(palette?.Length ?? 0));
             if (palette != null) file.Write(palette);
 
-            WriteImageResources(file, globalAngle);
+            WriteImageResources(file, globalAngle, dpi);
 
             if (layers.Count == 0)
             {
@@ -450,20 +463,31 @@ public class PsdFormatTests
             return file.ToArray();
         }
 
-        /// <summary>影像資源區：只在要測整體光源時放一筆 1037（8BIM + ID + 空名稱 + 長度 + int32）。</summary>
-        private static void WriteImageResources(MemoryStream file, int? globalAngle)
+        /// <summary>影像資源區：整體光源 1037（int32）與解析度 1005（hRes 16.16 定點 + 單位 + 寬單位 + vRes + 單位 + 高單位）。</summary>
+        private static void WriteImageResources(MemoryStream file, int? globalAngle, float? dpi)
         {
-            if (globalAngle == null)
-            {
-                U32(file, 0);
-                return;
-            }
             var res = new MemoryStream();
-            res.Write("8BIM"u8);
-            U16(res, 1037);
-            res.Write(new byte[2]);     // 空的 Pascal 名稱（長度 0 + 補位）
-            U32(res, 4);
-            I32(res, globalAngle.Value);
+            if (globalAngle != null)
+            {
+                res.Write("8BIM"u8);
+                U16(res, 1037);
+                res.Write(new byte[2]);     // 空的 Pascal 名稱（長度 0 + 補位）
+                U32(res, 4);
+                I32(res, globalAngle.Value);
+            }
+            if (dpi != null)
+            {
+                res.Write("8BIM"u8);
+                U16(res, 1005);
+                res.Write(new byte[2]);
+                U32(res, 16);
+                U32(res, (uint)Math.Round(dpi.Value * 65536));
+                U16(res, 1);    // 每英寸
+                U16(res, 1);    // 寬度單位：英寸
+                U32(res, (uint)Math.Round(dpi.Value * 65536));
+                U16(res, 1);
+                U16(res, 1);
+            }
             U32(file, (uint)res.Length);
             res.WriteTo(file);
         }

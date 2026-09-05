@@ -47,4 +47,9 @@
     <ProjectReference Include="..\MinePainter.Core\MinePainter.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- 對話框的內部狀態（像素／dpi 換算）要讓 headless 測試直接驗，不用去模擬打字 -->
+    <InternalsVisibleTo Include="MinePainter.App.Tests" />
+  </ItemGroup>
+
 </Project>

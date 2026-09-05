@@ -27,6 +27,23 @@ public sealed class NumberBox : UserControl
 
     public event Action<double>? ValueChanged;
 
+    /// <summary>顯示幾位小數（0 = 整數）。公分／英寸這種單位才需要。</summary>
+    public int Decimals
+    {
+        get => _decimals;
+        set
+        {
+            _decimals = Math.Clamp(value, 0, 6);
+            _suppress = true;
+            _text.Text = Format(_value);
+            _suppress = false;
+        }
+    }
+    private int _decimals;
+
+    private string Format(double v) => v.ToString(_decimals == 0 ? "0" : "0." + new string('#', _decimals),
+        System.Globalization.CultureInfo.InvariantCulture);
+
     /// <summary>常用值清單（逗號分隔，例如 "1,2,4,8,16"）：設了就在右側多一顆 ▾，點開直接選。</summary>
     public string? Presets
     {
@@ -49,7 +66,7 @@ public sealed class NumberBox : UserControl
             if (Math.Abs(clamped - _value) < 0.0001) return;
             _value = clamped;
             _suppress = true;
-            _text.Text = clamped.ToString("0");
+            _text.Text = Format(clamped);
             _suppress = false;
         }
     }
@@ -114,7 +131,7 @@ public sealed class NumberBox : UserControl
             var value = v;
             var b = new Button
             {
-                Content = value.ToString("0"),
+                Content = Format(value),
                 Width = 40,
                 Height = 24,
                 Margin = new Thickness(2),

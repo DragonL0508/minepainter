@@ -46,6 +46,18 @@ public sealed class Document : IDisposable
     /// <summary>畫布比輸出小＝快速模式。</summary>
     public bool IsFastMode => _outputWidth > Width || _outputHeight > Height;
 
+    private float _dpi = PhysicalUnits.ScreenDpi;
+
+    /// <summary>
+    /// 解析度（每英寸幾個像素）。只影響「印出來多大」的換算與對話框顯示的公分／英寸，
+    /// 不影響任何像素運算。新檔預設 96；印刷預設集 300；.psd 帶進來的用它自己的。
+    /// </summary>
+    public float Dpi
+    {
+        get => _dpi;
+        set => _dpi = float.IsFinite(value) && value > 0 ? Math.Clamp(value, 1f, 10000f) : PhysicalUnits.ScreenDpi;
+    }
+
     /// <summary>輸出比畫布大幾倍（一般模式為 1）。</summary>
     public float OutputScale => IsFastMode ? OutputWidth / (float)Width : 1f;
 

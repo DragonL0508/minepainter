@@ -87,6 +87,37 @@ internal static class ClipboardImage
         return bytes;
     }
 
+    /// <summary>剪貼簿裡影像的尺寸（只看檔頭，不解整張圖）；沒有影像回傳 null。</summary>
+    public static (int Width, int Height)? TryGetImageSize()
+    {
+        if (!OperatingSystem.IsWindows()) return null;
+        if (!TryOpen()) return null;
+        byte[]? png;
+        byte[]? dib;
+        try
+        {
+            png = GetBytes(PngFormat);
+            dib = png == null ? GetBytes(CF_DIBV5) ?? GetBytes(CF_DIB) : null;
+        }
+        finally
+        {
+            CloseClipboard();
+        }
+
+        if (png != null)
+        {
+            using var codec = SKCodec.Create(new SKMemoryStream(png));
+            return codec == null ? null : (codec.Info.Width, codec.Info.Height);
+        }
+        if (dib != null && dib.Length >= 12)
+        {
+            var width = BitConverter.ToInt32(dib, 4);
+            var height = Math.Abs(BitConverter.ToInt32(dib, 8));
+            return width > 0 && height > 0 ? (width, height) : null;
+        }
+        return null;
+    }
+
     /// <summary>從剪貼簿取影像（BGRA premul）。沒有影像或失敗時回傳 null。</summary>
     public static SKImage? TryGetImage()
     {
