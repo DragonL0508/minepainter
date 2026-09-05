@@ -45,6 +45,7 @@ public partial class App : Application
         var settings = Services.AppSettings.Instance;
         AppTheme.Apply(settings.Theme);
         CanvasBackdrop.Set(settings.BackdropPath, settings.BackdropOpacity);
+        Core.Documents.FastMode.ProxyHeight = settings.FastModeProxyHeight;
 
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {

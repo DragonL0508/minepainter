@@ -58,6 +58,60 @@ public class FastModeOutputTests
     public void 只有比FullHD大才提議快速模式(int w, int h, bool offer)
         => Assert.Equal(offer, FastMode.ShouldOffer(w, h));
 
+    /// <summary>
+    /// 門檻是設定值（預設 1080）：調成 720p 之後，大於 720p 的畫布才提示，代理也縮到 720p。
+    /// 靜態狀態，改完一定要還原（同一個 class 裡的測試是循序跑的）。
+    /// </summary>
+    [Fact]
+    public void 代理級別可以調_門檻與代理尺寸都跟著走()
+    {
+        try
+        {
+            FastMode.ProxyHeight = 720;
+
+            Assert.Equal(1280, FastMode.ProxyWidth);
+            Assert.False(FastMode.ShouldOffer(1280, 720));   // 剛好 720p：不必問
+            Assert.True(FastMode.ShouldOffer(1920, 1080));   // 以前不問的，現在要問
+            Assert.Equal((1280, 720), FastMode.ProxySize(1920, 1080));
+            Assert.Equal((1280, 720), FastMode.ProxySize(3840, 2160));
+        }
+        finally
+        {
+            FastMode.ProxyHeight = FastMode.DefaultProxyHeight;
+        }
+
+        Assert.Equal(1920, FastMode.ProxyWidth);
+        Assert.False(FastMode.ShouldOffer(1920, 1080));
+    }
+
+    [Theory]
+    [InlineData(360, 640)]
+    [InlineData(480, 854)]
+    [InlineData(720, 1280)]
+    [InlineData(1080, 1920)]
+    [InlineData(1440, 2560)]
+    [InlineData(2160, 3840)]
+    public void 代理級別的寬度照16比9算(int height, int width)
+        => Assert.Equal(width, FastMode.WidthFor(height));
+
+    /// <summary>手改壞的 settings.json 不該讓代理畫布變成 0 或大得離譜。</summary>
+    [Theory]
+    [InlineData(0, 120)]
+    [InlineData(-5, 120)]
+    [InlineData(99999, 4320)]
+    public void 亂填的代理級別會被夾回合理範圍(int set, int expected)
+    {
+        try
+        {
+            FastMode.ProxyHeight = set;
+            Assert.Equal(expected, FastMode.ProxyHeight);
+        }
+        finally
+        {
+            FastMode.ProxyHeight = FastMode.DefaultProxyHeight;
+        }
+    }
+
     [Theory]
     [InlineData(3840, 2160, 1920, 1080)]   // 4K → 一半
     [InlineData(2560, 1440, 1920, 1080)]

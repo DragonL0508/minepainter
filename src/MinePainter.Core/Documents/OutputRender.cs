@@ -9,7 +9,7 @@ using SkiaSharp;
 namespace MinePainter.Core.Documents;
 
 /// <summary>
-/// 輸出用的算繪：快速模式（見 <see cref="Document.OutputWidth"/>）下，畫布是 1080p 級的代理，
+/// 輸出用的算繪：快速模式（見 <see cref="Document.OutputWidth"/>）下，畫布是縮小的代理，
 /// 真正要出圖時把整份文件複製一份、放大成專案的解析度再合成。
 ///
 /// 「放大」不是把合成好的圖拉大 —— 那樣只是一張模糊的 1080p。這裡放大的是**文件本身**：

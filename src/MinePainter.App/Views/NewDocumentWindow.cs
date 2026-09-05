@@ -167,7 +167,7 @@ public sealed class NewDocumentWindow : ModalDialog
         var bytes = (long)w * h * 4;
         _memoryLabel.Text = $"每個圖層約 {bytes / (1024.0 * 1024.0):0.#} MB";
 
-        // 比 Full HD 大才提議快速模式（見 Core.Documents.FastMode）
+        // 比代理級別大才提議快速模式（預設 Full HD，可在設定改；見 Core.Documents.FastMode）
         var offer = Core.Documents.FastMode.ShouldOffer(w, h);
         _fastMode.IsVisible = offer;
         _fastModeHint.IsVisible = offer;

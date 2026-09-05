@@ -75,7 +75,7 @@
             <MenuItem Header="調整影像大小(_R)…" Click="OnResizeImageClicked" Tag="image.resize" />
             <MenuItem Header="調整畫布大小(_S)…" Click="OnCanvasSizeClicked" Tag="image.canvasSize" />
             <MenuItem x:Name="ToFastModeMenuItem" Header="轉成快速模式（實驗）" Click="OnToFastModeClicked"
-                      ToolTip.Tip="畫布縮到 1080p 級編輯、輸出仍是現在的解析度。文字與效果輸出時重畫；畫過的像素會變成代理解析度（可復原）。" />
+                      ToolTip.Tip="畫布縮到代理級別編輯（預設 1080p，可在設定改）、輸出仍是現在的解析度。文字與效果輸出時重畫；畫過的像素會變成代理解析度（可復原）。" />
             <MenuItem x:Name="ToFullResolutionMenuItem" Header="轉成完整解析度" Click="OnToFullResolutionClicked"
                       ToolTip.Tip="快速模式專用：把整份放大成專案的輸出解析度，之後就是一般專案（可復原）。" />
             <Separator />

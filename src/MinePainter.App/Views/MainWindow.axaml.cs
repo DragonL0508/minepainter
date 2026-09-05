@@ -1693,7 +1693,7 @@ public partial class MainWindow : Window
     /// <summary>
     /// 開檔時問一次要用哪種解析度模式（兩個方向都問）：
     /// 　• 已經是快速模式的專案 → 繼續用代理畫布，或這次以完整解析度開啟
-    /// 　• 一般的大專案／大圖 → 照常開，或改用快速模式（畫布縮到 1080p、輸出仍是原尺寸）
+    /// 　• 一般的大專案／大圖 → 照常開，或改用快速模式（畫布縮到代理級別、輸出仍是原尺寸）
     /// 回傳實際要用的文件（換掉的話舊的會被釋放）。
     /// </summary>
     private async Task<Core.Documents.Document> AskFastModeOnOpen(Core.Documents.Document doc, string what = "這份專案")
@@ -2434,7 +2434,7 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// 一般模式 → 快速模式：畫布縮到 1080p 級，輸出解析度記成現在的尺寸。
+    /// 一般模式 → 快速模式：畫布縮到代理級別（預設 1080p，可在設定改），輸出解析度記成現在的尺寸。
     /// 畫過的像素會變成代理解析度（可復原；存檔前建議另存新檔）。
     /// </summary>
     private async void OnToFastModeClicked(object? sender, RoutedEventArgs e)
@@ -2449,7 +2449,8 @@ public partial class MainWindow : Window
         }
         if (!Core.Documents.FastMode.ShouldOffer(doc.Width, doc.Height))
         {
-            Toasts.Show("這份專案沒有比 Full HD 大，不需要快速模式");
+            Toasts.Show($"這份專案沒有比 {Core.Documents.FastMode.ProxyWidth} × "
+                      + $"{Core.Documents.FastMode.ProxyHeight} 大，不需要快速模式");
             return;
         }
 
@@ -3322,6 +3323,7 @@ public partial class MainWindow : Window
 
         await window.ShowDialog(this);
         Services.AppSettings.Instance.Save();
+        RefreshUiState(); // 快速模式門檻可能改了，「轉成快速模式」能不能按要跟著更新
 
         if (checkUpdates) await CheckUpdatesAsync(silent: false);
     }
