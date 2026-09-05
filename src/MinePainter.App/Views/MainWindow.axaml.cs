@@ -2677,9 +2677,11 @@ public partial class MainWindow : Window
 
     // ---- 調整／效果（paint.net 的 Adjustments / Effects 選單） ----
 
-    /// <summary>「調整」選單順序照 paint.net。</summary>
+    /// <summary>「調整」選單順序照 paint.net；我們自己加的（曝光度、色溫）接在後面。</summary>
     private static readonly string[] AdjustmentMenuOrder =
-        ["blackWhite", "brightnessContrast", "curves", "hueSaturation", "invert", "levels", "posterize", "sepia"];
+        ["blackWhite", "brightnessContrast", "curves", "hueSaturation", "invert", "levels", "posterize", "sepia", "exposure", "temperatureTint"];
+
+    internal static IReadOnlyList<string> AdjustmentMenuOrderForTests => AdjustmentMenuOrder;
 
     private IEffect? _lastEffect;
     private MenuItem? _repeatEffectItem;
@@ -2690,7 +2692,10 @@ public partial class MainWindow : Window
         auto.Click += (_, _) => _ = ApplyAutoLevelAsync();
         AdjustmentsMenu.Items.Add(auto);
 
-        foreach (var typeId in AdjustmentMenuOrder)
+        // 順序表沒列到的登錄項也要出現（2026-09-06 新增的調整就是因為漏列而在選單上看不到）
+        var ordered = AdjustmentMenuOrder
+            .Concat(AdjustmentRegistry.All.Select(e => e.TypeId).Where(id => !AdjustmentMenuOrder.Contains(id)));
+        foreach (var typeId in ordered)
         {
             var entry = AdjustmentRegistry.Find(typeId);
             if (entry == null) continue;
