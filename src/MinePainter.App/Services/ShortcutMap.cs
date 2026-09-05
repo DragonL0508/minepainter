@@ -2,15 +2,18 @@
 
 namespace MinePainter.App.Services;
 
-/// <summary>可自訂的指令定義。</summary>
-public sealed record ShortcutDef(string Id, string Category, string Name, KeyGesture? Default);
+/// <summary>
+/// 可自訂的指令定義。每個指令有兩格手勢：主鍵與副鍵（DefaultAlt）——
+/// 「Ctrl+Shift+Z 也是重做」「0 也是最適大小」這種本來寫死的別名就是靠副鍵表達的。
+/// </summary>
+public sealed record ShortcutDef(
+    string Id, string Category, string Name, KeyGesture? Default, KeyGesture? DefaultAlt = null);
 
 /// <summary>
 /// 快捷鍵表：指令 id ↔ 手勢。預設值 = 原本硬編碼在 MainWindow.OnKeyDown 的那套
 /// （抄 Pinta、與 paint.net 相容）；使用者覆寫存進 <see cref="AppSettings.Shortcuts"/>。
 /// MainWindow 與 CanvasView 的按鍵處理都查這張表，改一處兩邊同步。
-/// 不參與自訂的特殊鍵：Ctrl+Shift+Z（重做別名）、浮動內容的 Enter/Esc、空白鍵平移、
-/// 滾輪平移與 Shift／Ctrl + 滾輪。
+/// 每個指令有主鍵與副鍵兩格；滾輪手勢是另一張表（見 <see cref="WheelMap"/>）。
 /// </summary>
 public static class ShortcutMap
 {
@@ -25,15 +28,20 @@ public static class ShortcutMap
         new("file.closeTab", "檔案", "關閉分頁", new KeyGesture(Key.W, KeyModifiers.Control)),
 
         new("edit.undo", "編輯", "復原", new KeyGesture(Key.Z, KeyModifiers.Control)),
-        new("edit.redo", "編輯", "重做", new KeyGesture(Key.Y, KeyModifiers.Control)),
+        // 副鍵 Ctrl+Shift+Z：paint.net 的重做別名，本來寫死在按鍵處理裡
+        new("edit.redo", "編輯", "重做", new KeyGesture(Key.Y, KeyModifiers.Control),
+            new KeyGesture(Key.Z, KeyModifiers.Control | KeyModifiers.Shift)),
         new("edit.cut", "編輯", "剪下", new KeyGesture(Key.X, KeyModifiers.Control)),
         new("edit.copy", "編輯", "複製", new KeyGesture(Key.C, KeyModifiers.Control)),
         new("edit.paste", "編輯", "貼上", new KeyGesture(Key.V, KeyModifiers.Control)),
         new("edit.selectAll", "編輯", "全選", new KeyGesture(Key.A, KeyModifiers.Control)),
         new("edit.deselect", "編輯", "取消選取", new KeyGesture(Key.D, KeyModifiers.Control)),
         new("edit.invertSelection", "編輯", "反轉選取", new KeyGesture(Key.I, KeyModifiers.Control)),
-        new("edit.erase", "編輯", "清除選取範圍", new KeyGesture(Key.Delete)),
+        // 選中物件時同一組鍵＝刪除那個物件（情境判斷，見 CanvasView）
+        new("edit.erase", "編輯", "清除選取範圍／刪除選中的物件", new KeyGesture(Key.Delete)),
         new("edit.fill", "編輯", "填滿選取範圍", new KeyGesture(Key.Back)),
+        new("edit.commitEdit", "編輯", "套用（變形／浮動內容／鋼筆路徑轉選取）", new KeyGesture(Key.Enter)),
+        new("edit.cancelEdit", "編輯", "取消（變形／浮動內容／路徑）", new KeyGesture(Key.Escape)),
 
         new("image.crop", "影像", "裁切至選取範圍", new KeyGesture(Key.X, KeyModifiers.Control | KeyModifiers.Shift)),
         new("image.rotateCw", "影像", "順時針旋轉 90°", new KeyGesture(Key.H, KeyModifiers.Control)),
@@ -71,8 +79,17 @@ public static class ShortcutMap
 
         new("view.zoomIn", "檢視", "放大", new KeyGesture(Key.OemPlus, KeyModifiers.Control)),
         new("view.zoomOut", "檢視", "縮小", new KeyGesture(Key.OemMinus, KeyModifiers.Control)),
-        new("view.actualSize", "檢視", "實際大小", new KeyGesture(Key.D0, KeyModifiers.Control)),
-        new("view.bestFit", "檢視", "最適大小", new KeyGesture(Key.B, KeyModifiers.Control)),
+        new("view.actualSize", "檢視", "實際大小", new KeyGesture(Key.D0, KeyModifiers.Control),
+            new KeyGesture(Key.D1)),
+        new("view.bestFit", "檢視", "最適大小", new KeyGesture(Key.B, KeyModifiers.Control),
+            new KeyGesture(Key.D0)),
+        // 按住型：壓著就是暫時切成「拖曳畫面」
+        new("view.panHold", "檢視", "平移檢視（按住）", new KeyGesture(Key.Space)),
+
+        new("nudge.left", "微調", "往左一格", new KeyGesture(Key.Left)),
+        new("nudge.right", "微調", "往右一格", new KeyGesture(Key.Right)),
+        new("nudge.up", "微調", "往上一格", new KeyGesture(Key.Up)),
+        new("nudge.down", "微調", "往下一格", new KeyGesture(Key.Down)),
 
         new("tool.brush", "工具", "筆刷", new KeyGesture(Key.B)),
         new("tool.pencil", "工具", "鉛筆", new KeyGesture(Key.N)),
@@ -89,35 +106,44 @@ public static class ShortcutMap
         new("tool.shape", "工具", "形狀", new KeyGesture(Key.O)),
         new("tool.line", "工具", "直線", new KeyGesture(Key.U)),
         new("tool.pen", "工具", "鋼筆", new KeyGesture(Key.P)),
+        new("pen.removeLastPoint", "工具", "鋼筆：退回上一個錨點", new KeyGesture(Key.Back)),
 
         // 按住型：壓著進入對齊模式（移動框時吸附畫布四邊與中線），放開即退出
         new("tool.alignHold", "工具", "對齊模式（按住）", new KeyGesture(Key.Tab)),
     ];
 
-    private static readonly Dictionary<string, KeyGesture?> Current = new();
+    /// <summary>手勢的格數：0 = 主鍵、1 = 副鍵。</summary>
+    public const int Slots = 2;
+
+    /// <summary>副鍵在 settings.json 裡的鍵字尾（主鍵就是 id 本身，舊設定檔照樣讀得進來）。</summary>
+    private const string AltSuffix = "#alt";
+
+    private static readonly Dictionary<string, KeyGesture?[]> Current = new();
 
     /// <summary>快捷鍵表變更後發出（選單顯示文字要跟著換）。</summary>
     public static event Action? Changed;
 
     static ShortcutMap()
     {
-        foreach (var def in Defs) Current[def.Id] = def.Default;
+        foreach (var def in Defs) Current[def.Id] = [def.Default, def.DefaultAlt];
         LoadOverrides();
     }
 
     private static void LoadOverrides()
     {
-        foreach (var (id, text) in AppSettings.Instance.Shortcuts)
+        foreach (var (key, text) in AppSettings.Instance.Shortcuts)
         {
-            if (!Current.ContainsKey(id)) continue;
+            var slot = key.EndsWith(AltSuffix, StringComparison.Ordinal) ? 1 : 0;
+            var id = slot == 1 ? key[..^AltSuffix.Length] : key;
+            if (!Current.TryGetValue(id, out var gestures)) continue;
             if (string.IsNullOrEmpty(text))
             {
-                Current[id] = null;
+                gestures[slot] = null;
                 continue;
             }
             try
             {
-                Current[id] = KeyGesture.Parse(text);
+                gestures[slot] = KeyGesture.Parse(text);
             }
             catch
             {
@@ -126,7 +152,9 @@ public static class ShortcutMap
         }
     }
 
-    public static KeyGesture? GetGesture(string id) => Current.GetValueOrDefault(id);
+    /// <summary>某一格的手勢（slot 0 = 主鍵、1 = 副鍵）。</summary>
+    public static KeyGesture? GetGesture(string id, int slot = 0) =>
+        Current.GetValueOrDefault(id) is { } g && slot >= 0 && slot < Slots ? g[slot] : null;
 
     /// <summary>NumPad 與主鍵盤的等價鍵折疊成同一個鍵（Ctrl+0 用數字鍵區也要通）。</summary>
     public static Key NormalizeKey(Key key) => key switch
@@ -137,64 +165,106 @@ public static class ShortcutMap
         _ => key,
     };
 
-    /// <summary>找出這組按鍵對應的指令 id（modifier 要完全相等）。</summary>
+    /// <summary>
+    /// 找出這組按鍵對應的指令 id（兩格都比；modifier 要完全相等）。
+    ///
+    /// 依 <see cref="Defs"/> 的宣告順序找，不是照字典的雜湊順序 —— 少數幾組鍵預設會被兩個指令
+    /// 共用（Backspace＝填滿選取範圍，鋼筆進行中時＝退一個錨點），那種情境鍵在呼叫這裡之前
+    /// 就先被攔掉了；走到這裡時要穩定地回同一個答案，不能每次執行不一樣。
+    /// </summary>
     public static string? Match(Key key, KeyModifiers modifiers)
     {
         key = NormalizeKey(key);
-        foreach (var (id, gesture) in Current)
+        foreach (var def in Defs)
         {
-            if (gesture != null && gesture.Key == key && gesture.KeyModifiers == modifiers)
-                return id;
+            if (Current.GetValueOrDefault(def.Id) is not { } gestures) continue;
+            foreach (var gesture in gestures)
+            {
+                if (gesture != null && gesture.Key == key && gesture.KeyModifiers == modifiers)
+                    return def.Id;
+            }
         }
         return null;
     }
 
-    public static bool Matches(string id, Key key, KeyModifiers modifiers) =>
-        Current.GetValueOrDefault(id) is { } g &&
-        g.Key == NormalizeKey(key) && g.KeyModifiers == modifiers;
+    /// <summary>這組按鍵是這個指令嗎（主鍵或副鍵任一格命中就算）。</summary>
+    public static bool Matches(string id, Key key, KeyModifiers modifiers)
+    {
+        if (Current.GetValueOrDefault(id) is not { } gestures) return false;
+        key = NormalizeKey(key);
+        foreach (var gesture in gestures)
+        {
+            if (gesture != null && gesture.Key == key && gesture.KeyModifiers == modifiers) return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// 只比按鍵本身、不管修飾鍵。按住型的指令放開時要用這個 ——
+    /// 按住期間修飾鍵可能已經變了，比完整手勢會漏掉 KeyUp。
+    /// </summary>
+    public static bool MatchesKey(string id, Key key)
+    {
+        if (Current.GetValueOrDefault(id) is not { } gestures) return false;
+        key = NormalizeKey(key);
+        foreach (var gesture in gestures)
+        {
+            if (gesture != null && gesture.Key == key) return true;
+        }
+        return false;
+    }
 
     /// <summary>
     /// 重新綁定（null = 清除）。同手勢的其他指令自動解除（回傳被解除的定義，供 UI 提示）。
     /// 覆寫寫進 AppSettings（呼叫端負責 Save）。
     /// </summary>
-    public static ShortcutDef? SetGesture(string id, KeyGesture? gesture)
+    public static ShortcutDef? SetGesture(string id, int slot, KeyGesture? gesture)
     {
-        if (!Current.ContainsKey(id)) return null;
+        if (!Current.ContainsKey(id) || slot < 0 || slot >= Slots) return null;
 
         ShortcutDef? displaced = null;
         if (gesture != null)
         {
+            // 撞到別的指令（不管撞在它的哪一格）就把那一格解除：一組鍵只會做一件事
             foreach (var def in Defs)
             {
                 if (def.Id == id) continue;
-                if (Current.GetValueOrDefault(def.Id) is { } g &&
-                    g.Key == gesture.Key && g.KeyModifiers == gesture.KeyModifiers)
+                if (Current.GetValueOrDefault(def.Id) is not { } g) continue;
+                for (var i = 0; i < Slots; i++)
                 {
+                    if (g[i] is not { } other ||
+                        other.Key != gesture.Key || other.KeyModifiers != gesture.KeyModifiers)
+                    {
+                        continue;
+                    }
                     displaced = def;
-                    StoreOverride(def.Id, null);
+                    StoreOverride(def.Id, i, null);
                     break;
                 }
+                if (displaced != null) break;
             }
         }
 
-        StoreOverride(id, gesture);
+        StoreOverride(id, slot, gesture);
         Changed?.Invoke();
         return displaced;
     }
 
-    private static void StoreOverride(string id, KeyGesture? gesture)
+    private static void StoreOverride(string id, int slot, KeyGesture? gesture)
     {
-        Current[id] = gesture;
+        Current[id][slot] = gesture;
         var def = Defs.First(d => d.Id == id);
-        if (Equals(gesture?.ToString(), def.Default?.ToString()))
-            AppSettings.Instance.Shortcuts.Remove(id); // 回到預設就不用記
+        var key = slot == 0 ? id : id + AltSuffix;
+        var fallback = slot == 0 ? def.Default : def.DefaultAlt;
+        if (Equals(gesture?.ToString(), fallback?.ToString()))
+            AppSettings.Instance.Shortcuts.Remove(key); // 回到預設就不用記
         else
-            AppSettings.Instance.Shortcuts[id] = gesture?.ToString() ?? "";
+            AppSettings.Instance.Shortcuts[key] = gesture?.ToString() ?? "";
     }
 
     public static void ResetAll()
     {
-        foreach (var def in Defs) Current[def.Id] = def.Default;
+        foreach (var def in Defs) Current[def.Id] = [def.Default, def.DefaultAlt];
         AppSettings.Instance.Shortcuts.Clear();
         Changed?.Invoke();
     }

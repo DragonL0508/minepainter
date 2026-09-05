@@ -8,16 +8,17 @@ using MinePainter.App.Services;
 namespace MinePainter.App.Views.Settings;
 
 /// <summary>
-/// 設定 → 快捷鍵：所有指令依分類列出，點一列的按鍵鈕後直接按下新組合鍵重新綁定
-/// （Esc 取消、Backspace 清除）。撞到別的指令會自動解除對方並提示。
-/// 上方搜尋框可依指令名稱／分類／目前按鍵過濾（同 VS Code 的快捷鍵頁）。
+/// 設定 → 快捷鍵：所有指令依分類列出，每個指令兩格（主鍵／副鍵）——
+/// 點一格的按鍵鈕後直接按下新組合鍵重新綁定（Esc 取消、Backspace 清除）。
+/// 撞到別的指令會自動解除對方並提示。
+/// 上方搜尋框可依指令名稱／分類／按鍵過濾（同 VS Code 的快捷鍵頁）。
 /// 變更立即生效（MainWindow 與 CanvasView 查同一張表）；設定視窗關窗後 Save。
 /// </summary>
 public sealed class ShortcutsSettingsPage : SettingsPage
 {
-    public override string Description => "點一列右邊的按鍵鈕，然後直接按下新的組合鍵。";
+    public override string Description => "點一列右邊的按鍵鈕，然後直接按下新的組合鍵。每個指令可以綁兩組鍵。";
 
-    private readonly Dictionary<string, Button> _gestureButtons = new();
+    private readonly Dictionary<(string Id, int Slot), Button> _gestureButtons = new();
     private readonly List<(ShortcutDef Def, Control Row)> _rows = [];
     private readonly List<(string Category, Control Header)> _headers = [];
     private readonly TextBox _search = new()
@@ -35,7 +36,7 @@ public sealed class ShortcutsSettingsPage : SettingsPage
         Text = "",
     };
 
-    private string? _capturingId;
+    private (string Id, int Slot)? _capturing;
 
     public ShortcutsSettingsPage()
     {
@@ -67,7 +68,7 @@ public sealed class ShortcutsSettingsPage : SettingsPage
         var resetButton = new Button { Content = "全部重設", FontSize = 12, Padding = new Thickness(14, 6) };
         resetButton.Click += (_, _) =>
         {
-            _capturingId = null;
+            _capturing = null;
             ShortcutMap.ResetAll();
             RefreshAllButtons();
             ApplyFilter(); // 重設後按鍵字串變了，過濾結果跟著更新
@@ -110,24 +111,32 @@ public sealed class ShortcutsSettingsPage : SettingsPage
             VerticalAlignment = VerticalAlignment.Center,
         };
 
-        var button = new Button
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
+        for (var slot = 0; slot < ShortcutMap.Slots; slot++)
         {
-            FontSize = 11,
-            MinWidth = 130,
-            Height = 24,
-            Padding = new Thickness(8, 2),
-            HorizontalContentAlignment = HorizontalAlignment.Center,
-            VerticalAlignment = VerticalAlignment.Center,
-        };
-        button.Click += (_, _) => BeginCapture(def.Id);
-        _gestureButtons[def.Id] = button;
-        RefreshButton(def.Id);
+            var captured = slot;
+            var button = new Button
+            {
+                FontSize = 11,
+                MinWidth = 116,
+                Height = 24,
+                Padding = new Thickness(8, 2),
+                HorizontalContentAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+                // 空的副鍵看起來要像「可以加一組」，不是壞掉
+                [ToolTip.TipProperty] = captured == 0 ? "主鍵" : "副鍵（第二組，可留空）",
+            };
+            button.Click += (_, _) => BeginCapture(def.Id, captured);
+            _gestureButtons[(def.Id, captured)] = button;
+            buttons.Children.Add(button);
+            RefreshButton(def.Id, captured);
+        }
 
-        DockPanel.SetDock(button, Dock.Right);
+        DockPanel.SetDock(buttons, Dock.Right);
         return new DockPanel
         {
             Margin = new Thickness(8, 0, 0, 0),
-            Children = { button, name },
+            Children = { buttons, name },
         };
     }
 
@@ -139,11 +148,11 @@ public sealed class ShortcutsSettingsPage : SettingsPage
 
         foreach (var (def, row) in _rows)
         {
-            var gesture = ShortcutMap.GetGesture(def.Id)?.ToString() ?? "";
             var match = query.Length == 0
                 || def.Name.Contains(query, StringComparison.OrdinalIgnoreCase)
                 || def.Category.Contains(query, StringComparison.OrdinalIgnoreCase)
-                || gesture.Contains(query, StringComparison.OrdinalIgnoreCase);
+                || GestureText(def.Id, 0).Contains(query, StringComparison.OrdinalIgnoreCase)
+                || GestureText(def.Id, 1).Contains(query, StringComparison.OrdinalIgnoreCase);
             row.IsVisible = match;
             if (match) visibleCategories.Add(def.Category);
         }
@@ -152,28 +161,34 @@ public sealed class ShortcutsSettingsPage : SettingsPage
             header.IsVisible = visibleCategories.Contains(category);
     }
 
-    private void BeginCapture(string id)
+    private void BeginCapture(string id, int slot)
     {
-        // 點另一列會先放掉上一個
-        if (_capturingId != null) RefreshButton(_capturingId);
-        _capturingId = id;
-        _gestureButtons[id].Content = "按下組合鍵…";
+        // 點另一格會先放掉上一個
+        if (_capturing is { } previous) RefreshButton(previous.Id, previous.Slot);
+        _capturing = (id, slot);
+        _gestureButtons[(id, slot)].Content = "按下組合鍵…";
         _hint.Text = "按下新的組合鍵；Esc 取消、Backspace 清除綁定。";
         // 焦點離開按鈕（也離開搜尋框），Space/Enter 才會被當成新綁定捕捉，而不是觸發按鈕
         (TopLevel.GetTopLevel(this) as Window)?.Focus();
     }
 
-    private void RefreshButton(string id) =>
-        _gestureButtons[id].Content = ShortcutMap.GetGesture(id)?.ToString() ?? "—";
+    private static string GestureText(string id, int slot) =>
+        ShortcutMap.GetGesture(id, slot)?.ToString() ?? "";
+
+    private void RefreshButton(string id, int slot)
+    {
+        var text = GestureText(id, slot);
+        _gestureButtons[(id, slot)].Content = text.Length > 0 ? text : slot == 0 ? "—" : "＋";
+    }
 
     private void RefreshAllButtons()
     {
-        foreach (var id in _gestureButtons.Keys) RefreshButton(id);
+        foreach (var (id, slot) in _gestureButtons.Keys) RefreshButton(id, slot);
     }
 
     public override bool HandleKeyDown(KeyEventArgs e)
     {
-        if (_capturingId == null)
+        if (_capturing is not { } capturing)
         {
             // 沒在錄鍵時，Esc 先用來清搜尋（有東西可清才攔，不然照常關窗）
             if (e.Key == Key.Escape && !string.IsNullOrEmpty(_search.Text))
@@ -184,20 +199,20 @@ public sealed class ShortcutsSettingsPage : SettingsPage
             return false;
         }
 
-        var id = _capturingId;
+        var (id, slot) = capturing;
 
         switch (e.Key)
         {
             case Key.Escape:
-                _capturingId = null;
-                RefreshButton(id);
+                _capturing = null;
+                RefreshButton(id, slot);
                 _hint.Text = "已取消。";
                 return true;
 
             case Key.Back:
-                _capturingId = null;
-                ShortcutMap.SetGesture(id, null);
-                RefreshButton(id);
+                _capturing = null;
+                ShortcutMap.SetGesture(id, slot, null);
+                RefreshButton(id, slot);
                 _hint.Text = "已清除綁定。";
                 return true;
 
@@ -207,15 +222,16 @@ public sealed class ShortcutsSettingsPage : SettingsPage
                 return true;
         }
 
-        _capturingId = null;
+        _capturing = null;
         var gesture = new KeyGesture(ShortcutMap.NormalizeKey(e.Key), e.KeyModifiers);
-        var displaced = ShortcutMap.SetGesture(id, gesture);
-        RefreshAllButtons(); // 撞到的那列也要更新
+        var displaced = ShortcutMap.SetGesture(id, slot, gesture);
+        RefreshAllButtons(); // 撞到的那格也要更新
 
         var defName = ShortcutMap.Defs.First(d => d.Id == id).Name;
+        var which = slot == 0 ? "主鍵" : "副鍵";
         _hint.Text = displaced != null
-            ? $"「{defName}」已綁定 {gesture}；原本用這組鍵的「{displaced.Name}」已解除。"
-            : $"「{defName}」已綁定 {gesture}。";
+            ? $"「{defName}」的{which}已綁定 {gesture}；原本用這組鍵的「{displaced.Name}」已解除。"
+            : $"「{defName}」的{which}已綁定 {gesture}。";
         return true;
     }
 }

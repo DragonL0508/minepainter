@@ -3172,8 +3172,7 @@ public partial class MainWindow : Window
     private void OnGlobalKeyUp(object? sender, Avalonia.Input.KeyEventArgs e)
     {
         // 放開只看鍵本身：按住期間修飾鍵可能已變，比對完整手勢會漏掉 KeyUp
-        if (Services.ShortcutMap.GetGesture("tool.alignHold") is { } gesture &&
-            Services.ShortcutMap.NormalizeKey(e.Key) == gesture.Key)
+        if (Services.ShortcutMap.MatchesKey("tool.alignHold", e.Key))
         {
             SetAlignMode(false);
             e.Handled = true;
@@ -3213,77 +3212,68 @@ public partial class MainWindow : Window
         if (_canvasEditBox?.IsFocused == true) return;
         if (FocusManager?.GetFocusedElement() is TextBox or ComboBox or ComboBoxItem) return;
 
-        // 固定別名：Ctrl+Shift+Z = 重做（與 paint.net 一致；不參與自訂）
-        if (e.Key == Avalonia.Input.Key.Z &&
-            e.KeyModifiers == (Avalonia.Input.KeyModifiers.Control | Avalonia.Input.KeyModifiers.Shift))
+        // 情境鍵（套用／取消）：有東西進行中時才輪到它們，所以擺在一般查表之前。
+        // 它們也在快捷鍵表裡，設定 → 快捷鍵 改得到。
+        var commit = Services.ShortcutMap.Matches("edit.commitEdit", e.Key, e.KeyModifiers);
+        var cancel = Services.ShortcutMap.Matches("edit.cancelEdit", e.Key, e.KeyModifiers);
+
+        // 變形框：套用＝落地、取消＝無損還原
+        if (session.Transform != null && (commit || cancel))
         {
-            session.Redo();
+            if (commit)
+            {
+                session.CommitTransform();
+                Toasts.Show("已套用變形");
+            }
+            else
+            {
+                session.CancelTransform();
+                Toasts.Show("已還原變形");
+            }
             RefreshUiState();
             e.Handled = true;
             return;
         }
 
-        // 變形框：Enter 落地、Esc 無損還原（情境鍵，不參與自訂）
-        if (session.Transform != null && e.KeyModifiers == Avalonia.Input.KeyModifiers.None)
+        // 浮動選取內容：套用＝提交、取消＝還原
+        if (session.Floating != null && (commit || cancel))
         {
-            if (e.Key == Avalonia.Input.Key.Enter)
-            {
-                session.CommitTransform();
-                Toasts.Show("已套用變形");
-                RefreshUiState();
-                e.Handled = true;
-                return;
-            }
-            if (e.Key == Avalonia.Input.Key.Escape)
-            {
-                session.CancelTransform();
-                Toasts.Show("已還原變形");
-                RefreshUiState();
-                e.Handled = true;
-                return;
-            }
-        }
-
-        // 浮動選取內容：Enter 提交、Esc 還原（情境鍵，不參與自訂）
-        if (session.Floating != null && e.KeyModifiers == Avalonia.Input.KeyModifiers.None)
-        {
-            if (e.Key == Avalonia.Input.Key.Enter)
+            if (commit)
             {
                 session.CommitFloating();
                 Toasts.Show("已套用移動的選取內容");
-                RefreshUiState();
-                e.Handled = true;
-                return;
             }
-            if (e.Key == Avalonia.Input.Key.Escape)
+            else
             {
                 session.CancelFloating();
                 Toasts.Show("已取消移動");
-                RefreshUiState();
+            }
+            RefreshUiState();
+            e.Handled = true;
+            return;
+        }
+
+        // 鋼筆路徑：轉為選取／退一個錨點／清除
+        if (session.ActiveTool == session.Pen && session.PenPath != null)
+        {
+            if (commit)
+            {
+                PenMakeSelection(); // 「套用」在鋼筆的意思就是把路徑定案成選取
                 e.Handled = true;
                 return;
             }
-        }
-
-        // 鋼筆路徑：Enter 轉為選取、Esc 清除、Backspace 退一個錨點（情境鍵，不參與自訂）
-        if (session.ActiveTool == session.Pen && session.PenPath != null &&
-            e.KeyModifiers == Avalonia.Input.KeyModifiers.None)
-        {
-            switch (e.Key)
+            if (Services.ShortcutMap.Matches("pen.removeLastPoint", e.Key, e.KeyModifiers))
             {
-                case Avalonia.Input.Key.Enter:
-                    PenMakeSelection();
-                    e.Handled = true;
-                    return;
-                case Avalonia.Input.Key.Escape:
-                    PenCommands.Clear(session);
-                    Toasts.Show("已清除路徑");
-                    e.Handled = true;
-                    return;
-                case Avalonia.Input.Key.Back:
-                    PenCommands.RemoveLast(session);
-                    e.Handled = true;
-                    return;
+                PenCommands.RemoveLast(session);
+                e.Handled = true;
+                return;
+            }
+            if (cancel)
+            {
+                PenCommands.Clear(session);
+                Toasts.Show("已清除路徑");
+                e.Handled = true;
+                return;
             }
         }
 

@@ -321,19 +321,22 @@ public sealed class CanvasView : Control
     /// </summary>
     private IDisposable? _nudgeHistoryHold;
 
-    private static (int X, int Y) NudgeDirection(Key key) => key switch
+    /// <summary>微調的四個方向也是可自訂的按鍵（預設方向鍵）；不是微調鍵就回 null。</summary>
+    private static (int X, int Y)? NudgeDirection(Key key)
     {
-        Key.Left => (-1, 0),
-        Key.Right => (1, 0),
-        Key.Up => (0, -1),
-        _ => (0, 1),
-    };
+        if (Services.ShortcutMap.MatchesKey("nudge.left", key)) return (-1, 0);
+        if (Services.ShortcutMap.MatchesKey("nudge.right", key)) return (1, 0);
+        if (Services.ShortcutMap.MatchesKey("nudge.up", key)) return (0, -1);
+        if (Services.ShortcutMap.MatchesKey("nudge.down", key)) return (0, 1);
+        return null;
+    }
 
     /// <summary>方向鍵按下：第一次按記一格，之後的 OS 重複事件交給滑行處理。</summary>
     private void BeginNudge(EditorSession session, Key key, bool shift)
     {
         if (!Core.Tools.MoveTool.HasNudgeTarget(session)) return;
-        var (dirX, dirY) = NudgeDirection(key);
+        if (NudgeDirection(key) is not { } dir) return;
+        var (dirX, dirY) = dir;
         _glide.Shift = shift;
         if (!_glide.Press(dirX, dirY, shift ? 10 : 1)) return; // 按鍵重複：滑行已經在動了
         if (_nudgeUndoBase < 0)
@@ -345,7 +348,8 @@ public sealed class CanvasView : Control
 
     private void EndNudge(Key key)
     {
-        var (dirX, dirY) = NudgeDirection(key);
+        if (NudgeDirection(key) is not { } dir) return;
+        var (dirX, dirY) = dir;
         _glide.Release(dirX, dirY);
     }
 
@@ -959,7 +963,7 @@ public sealed class CanvasView : Control
         var ctrl = e.KeyModifiers.HasFlag(KeyModifiers.Control);
 
         // 復原/重做/取消選取查快捷鍵表（可自訂）——與 MainWindow 是同一張表，改一處兩邊同步。
-        // Ctrl+Shift+Z 是重做的固定別名（與 paint.net 一致），不參與自訂。
+        // Ctrl+Shift+Z 是「重做」的副鍵（本來寫死在這裡，現在也能改）。
         if (session != null)
         {
             if (Services.ShortcutMap.Matches("edit.undo", e.Key, e.KeyModifiers))
@@ -969,8 +973,7 @@ public sealed class CanvasView : Control
                 e.Handled = true;
                 return;
             }
-            if (Services.ShortcutMap.Matches("edit.redo", e.Key, e.KeyModifiers) ||
-                (e.Key == Key.Z && e.KeyModifiers == (KeyModifiers.Control | KeyModifiers.Shift)))
+            if (Services.ShortcutMap.Matches("edit.redo", e.Key, e.KeyModifiers))
             {
                 session.Redo();
                 StateChanged?.Invoke();
@@ -993,43 +996,38 @@ public sealed class CanvasView : Control
             }
         }
 
-        switch (e.Key)
+        // 按住平移（預設空白鍵）
+        if (Services.ShortcutMap.Matches("view.panHold", e.Key, e.KeyModifiers))
         {
-            case Key.Space:
-                _spaceDown = true;
-                e.Handled = true;
-                break;
-            case Key.Delete when session?.SelectedElement is { } sel:
-                if (session.Document.FindLayer(sel.LayerId) is Core.Layers.RasterLayer vlayer &&
-                    vlayer.FindElement(sel.ElementId) is { } element)
-                {
-                    Core.History.VectorCommands.RemoveElement(session.Document, session.History, vlayer, element);
-                    session.SelectedElement = null;
-                    StateChanged?.Invoke();
-                }
-                e.Handled = true;
-                break;
-            case Key.Left or Key.Right or Key.Up or Key.Down
-                when session != null && !ctrl &&
-                     (session.ActiveTool == session.Move || session.SelectedElement != null):
+            _spaceDown = true;
+            e.Handled = true;
+            return;
+        }
+
+        // 「清除選取範圍」那組鍵，選中物件時＝刪除那個物件
+        if (session?.SelectedElement is { } sel &&
+            Services.ShortcutMap.Matches("edit.erase", e.Key, e.KeyModifiers))
+        {
+            if (session.Document.FindLayer(sel.LayerId) is Core.Layers.RasterLayer vlayer &&
+                vlayer.FindElement(sel.ElementId) is { } element)
             {
-                // 方向鍵微調：1px；Shift = 10px（Photoshop／paint.net 的慣例）。
-                // 移動工具下依序動變形框 → 浮動內容 → 選中的文字物件 → 整個圖層／群組。
-                // 按住不放時忽略 OS 的按鍵重複，改由動畫迴圈等速滑行（見 NudgeGlide）
-                _glide.Shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
-                BeginNudge(session, e.Key, _glide.Shift);
-                e.Handled = true;
-                break;
+                Core.History.VectorCommands.RemoveElement(session.Document, session.History, vlayer, element);
+                session.SelectedElement = null;
+                StateChanged?.Invoke();
             }
-            case Key.D0 or Key.NumPad0 when session != null && !ctrl:
-                ZoomToFit();
-                e.Handled = true;
-                break;
-            case Key.D1 or Key.NumPad1 when !ctrl:
-                // 走動畫，跟滾輪縮放一致的手感
-                _targetViewport = _targetViewport.WithScaleAroundCenter(1.0, Bounds.Width, Bounds.Height);
-                e.Handled = true;
-                break;
+            e.Handled = true;
+            return;
+        }
+
+        // 微調（預設方向鍵）：1px；Shift = 10px（Photoshop／paint.net 的慣例）。
+        // 移動工具下依序動變形框 → 浮動內容 → 選中的文字物件 → 整個圖層／群組。
+        // 按住不放時忽略 OS 的按鍵重複，改由動畫迴圈等速滑行（見 NudgeGlide）
+        if (session != null && !ctrl && NudgeDirection(e.Key) != null &&
+            (session.ActiveTool == session.Move || session.SelectedElement != null))
+        {
+            _glide.Shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
+            BeginNudge(session, e.Key, _glide.Shift);
+            e.Handled = true;
         }
     }
 
@@ -1037,12 +1035,13 @@ public sealed class CanvasView : Control
     {
         base.OnKeyUp(e);
         if (e.Key is Key.LeftShift or Key.RightShift) _glide.Shift = false;
-        if (e.Key == Key.Space)
+        // 放開只看鍵本身：按住期間修飾鍵可能已經變了，比完整手勢會漏掉 KeyUp
+        if (Services.ShortcutMap.MatchesKey("view.panHold", e.Key))
         {
             _spaceDown = false;
             e.Handled = true;
         }
-        if (e.Key is Key.Left or Key.Right or Key.Up or Key.Down) EndNudge(e.Key);
+        EndNudge(e.Key);
     }
 
     protected override void OnLostFocus(Avalonia.Interactivity.RoutedEventArgs e)
