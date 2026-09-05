@@ -1,21 +1,24 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
+using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Platform.Storage;
 using MinePainter.App.Controls;
 using MinePainter.App.Services;
 
-namespace MinePainter.App.Views;
+namespace MinePainter.App.Views.Settings;
 
 /// <summary>
-/// 「設定 → 主題」：四種主題（午夜黑／暗色／亮色／極淨白）即點即套用，
+/// 設定 → 外觀：四種主題（午夜黑／暗色／亮色／極淨白）即點即套用，
 /// 加上畫布外圍的背景圖（自選圖片 + 不透明度，預設 10%）。
-/// 變更立即生效並記進 AppSettings（呼叫端關窗後 Save）。
+/// 變更立即生效並記進 AppSettings（設定視窗關窗後 Save）。
 /// </summary>
-public sealed class ThemeWindow : ModalDialog
+public sealed class AppearanceSettingsPage : SettingsPage
 {
+    public override string Description => "配色主題與畫布外圍的背景圖。";
+
     private readonly List<(AppTheme.Palette Palette, Border Card)> _cards = new();
     private readonly TextBlock _backdropLabel = new()
     {
@@ -31,11 +34,13 @@ public sealed class ThemeWindow : ModalDialog
         Label = "不透明度",
         Suffix = "%",
         Height = 26,
+        Width = 300,
+        HorizontalAlignment = HorizontalAlignment.Left,
     };
 
-    public ThemeWindow() : base("主題", 400)
+    public AppearanceSettingsPage()
     {
-        var grid = new UniformGrid { Columns = 2, Rows = 2 };
+        var grid = new UniformGrid { Columns = 4, Rows = 1 };
         foreach (var palette in AppTheme.Palettes)
             grid.Children.Add(BuildThemeCard(palette));
 
@@ -56,14 +61,18 @@ public sealed class ThemeWindow : ModalDialog
             AppSettings.Instance.BackdropOpacity = (int)v;
         };
 
-        var body = new StackPanel
+        Content = SettingsUi.Scroll(new StackPanel
         {
             Spacing = 10,
             Children =
             {
+                SettingsUi.Section("主題"),
                 grid,
-                new Separator { Margin = new Thickness(0, 4) },
-                new TextBlock { Text = "畫布背景圖", FontSize = 12, FontWeight = FontWeight.Bold },
+
+                new Separator { Margin = new Thickness(0, 6) },
+
+                SettingsUi.Section("畫布背景圖"),
+                SettingsUi.Hint("畫布外圍（灰底那一圈）鋪的圖，只影響畫面、不影響輸出。"),
                 new StackPanel
                 {
                     Orientation = Orientation.Horizontal,
@@ -72,9 +81,8 @@ public sealed class ThemeWindow : ModalDialog
                 },
                 _opacityBar,
             },
-        };
+        });
 
-        SetBody(body, ButtonRow(MakeButton("關閉", primary: true)));
         UpdateBackdropLabel();
         HighlightCurrent();
     }
@@ -122,7 +130,7 @@ public sealed class ThemeWindow : ModalDialog
             CornerRadius = new CornerRadius(5),
             Padding = new Thickness(6),
             Margin = new Thickness(3),
-            Cursor = new Avalonia.Input.Cursor(Avalonia.Input.StandardCursorType.Hand),
+            Cursor = new Cursor(StandardCursorType.Hand),
             Child = new StackPanel
             {
                 Spacing = 5,
@@ -159,7 +167,10 @@ public sealed class ThemeWindow : ModalDialog
 
     private async void OnPickBackdrop(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
-        var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        var storage = TopLevel.GetTopLevel(this)?.StorageProvider;
+        if (storage == null) return;
+
+        var files = await storage.OpenFilePickerAsync(new FilePickerOpenOptions
         {
             Title = "選擇背景圖",
             AllowMultiple = false,

@@ -80,8 +80,6 @@ public partial class MainWindow : Window
     public MainWindow(string? initialFile)
     {
         InitializeComponent();
-        StartupSoundMenuItem.IsChecked = Services.AppSettings.Instance.StartupSounds;
-        CheckUpdatesMenuItem.IsChecked = Services.AppSettings.Instance.CheckUpdatesOnStartup;
 
         // 預設最大化（使用者上次是視窗模式就沿用）；要在 Show 之前設好，
         // 不然會先閃一下 1360×860 再放大，浮動面板也要跟著重排一次
@@ -2981,13 +2979,6 @@ public partial class MainWindow : Window
 
     private void OnCheckUpdatesClicked(object? sender, RoutedEventArgs e) => _ = CheckUpdatesAsync(silent: false);
 
-    private void OnToggleCheckUpdatesClicked(object? sender, RoutedEventArgs e)
-    {
-        Services.AppSettings.Instance.CheckUpdatesOnStartup = CheckUpdatesMenuItem.IsChecked;
-        Services.AppSettings.Instance.Save();
-        Toasts.Show(CheckUpdatesMenuItem.IsChecked ? "啟動時檢查更新：開" : "啟動時檢查更新：關");
-    }
-
     /// <summary>
     /// 查 GitHub 最新版。silent＝啟動時的靜默檢查：沒新版、查不到、開發建置、使用者略過的版本都不出聲；
     /// 手動檢查則每種結果都回報。
@@ -3042,13 +3033,6 @@ public partial class MainWindow : Window
                 Close(); // 走正常關閉流程（未儲存會問）；真的關掉時才啟動 updater
                 break;
         }
-    }
-
-    private void OnToggleStartupSoundClicked(object? sender, RoutedEventArgs e)
-    {
-        Services.AppSettings.Instance.StartupSounds = StartupSoundMenuItem.IsChecked;
-        Services.AppSettings.Instance.Save();
-        Toasts.Show(StartupSoundMenuItem.IsChecked ? "啟動音效：開" : "啟動音效：關");
     }
 
     private void OnTogglePixelGridClicked(object? sender, RoutedEventArgs e)
@@ -3314,22 +3298,32 @@ public partial class MainWindow : Window
 
     // ---- 設定 ----
 
-    private async void OnShortcutsClicked(object? sender, RoutedEventArgs e)
+    /// <summary>
+    /// 設定選單的每一項都開同一個設定視窗，只是直接跳到對應分類
+    /// （CommandParameter＝<see cref="Settings.SettingsWindow.Page"/> 的名字）。
+    /// 設定改動是即時生效的，關窗時統一存檔一次。
+    /// </summary>
+    private async void OnSettingsClicked(object? sender, RoutedEventArgs e)
     {
-        await new ShortcutsWindow().ShowDialog(this);
-        Services.AppSettings.Instance.Save();
-    }
+        var page = Settings.SettingsWindow.Page.General;
+        if ((sender as MenuItem)?.CommandParameter is string name &&
+            Enum.TryParse<Settings.SettingsWindow.Page>(name, out var parsed))
+        {
+            page = parsed;
+        }
 
-    private async void OnThemeClicked(object? sender, RoutedEventArgs e)
-    {
-        await new ThemeWindow().ShowDialog(this);
-        Services.AppSettings.Instance.Save();
-    }
+        var window = new Settings.SettingsWindow(page);
+        var checkUpdates = false;
+        window.CheckUpdatesRequested += () =>
+        {
+            checkUpdates = true;
+            window.Close();
+        };
 
-    private async void OnFileAssociationsClicked(object? sender, RoutedEventArgs e)
-    {
-        await new FileAssociationsWindow().ShowDialog(this);
+        await window.ShowDialog(this);
         Services.AppSettings.Instance.Save();
+
+        if (checkUpdates) await CheckUpdatesAsync(silent: false);
     }
 
     /// <summary>

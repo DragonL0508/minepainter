@@ -147,16 +147,14 @@
                       Tag="gadget.youtubePreview" />
           </MenuItem>
 
+          <!-- 設定：每一項都是「開同一個設定視窗、直接跳到那一頁」（同 VS Code） -->
           <MenuItem Header="設定(_S)">
-            <MenuItem Header="快捷鍵(_K)…" Click="OnShortcutsClicked" />
-            <MenuItem Header="主題(_T)…" Click="OnThemeClicked" />
-            <MenuItem Header="檔案關聯(_A)…" Click="OnFileAssociationsClicked" />
-            <MenuItem x:Name="StartupSoundMenuItem" Header="啟動音效" ToggleType="CheckBox"
-                      Click="OnToggleStartupSoundClicked" />
+            <MenuItem Header="一般(_G)…" Click="OnSettingsClicked" CommandParameter="General" />
+            <MenuItem Header="外觀(_T)…" Click="OnSettingsClicked" CommandParameter="Appearance" />
+            <MenuItem Header="快捷鍵(_K)…" Click="OnSettingsClicked" CommandParameter="Shortcuts" />
+            <MenuItem Header="檔案關聯(_A)…" Click="OnSettingsClicked" CommandParameter="FileAssociations" />
             <Separator />
             <MenuItem Header="檢查更新(_U)…" Click="OnCheckUpdatesClicked" />
-            <MenuItem x:Name="CheckUpdatesMenuItem" Header="啟動時檢查更新" ToggleType="CheckBox"
-                      Click="OnToggleCheckUpdatesClicked" />
           </MenuItem>
         </controls:ClickSubmenuMenu>
       </DockPanel>

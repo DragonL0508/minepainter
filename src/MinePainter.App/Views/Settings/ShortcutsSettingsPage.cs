@@ -5,17 +5,28 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using MinePainter.App.Services;
 
-namespace MinePainter.App.Views;
+namespace MinePainter.App.Views.Settings;
 
 /// <summary>
-/// 「設定 → 快捷鍵」：所有指令依分類列出，點一列的按鍵鈕後直接按下新組合鍵重新綁定
+/// 設定 → 快捷鍵：所有指令依分類列出，點一列的按鍵鈕後直接按下新組合鍵重新綁定
 /// （Esc 取消、Backspace 清除）。撞到別的指令會自動解除對方並提示。
-/// 變更立即生效（MainWindow 與 CanvasView 查同一張表）；呼叫端關窗後 Save。
+/// 上方搜尋框可依指令名稱／分類／目前按鍵過濾（同 VS Code 的快捷鍵頁）。
+/// 變更立即生效（MainWindow 與 CanvasView 查同一張表）；設定視窗關窗後 Save。
 /// </summary>
-public sealed class ShortcutsWindow : ModalDialog
+public sealed class ShortcutsSettingsPage : SettingsPage
 {
+    public override string Description => "點一列右邊的按鍵鈕，然後直接按下新的組合鍵。";
+
     private readonly Dictionary<string, Button> _gestureButtons = new();
-    private string? _capturingId;
+    private readonly List<(ShortcutDef Def, Control Row)> _rows = [];
+    private readonly List<(string Category, Control Header)> _headers = [];
+    private readonly TextBox _search = new()
+    {
+        Watermark = "搜尋指令、分類或按鍵…",
+        FontSize = 12,
+        Height = 28,
+        Padding = new Thickness(8, 3),
+    };
     private readonly TextBlock _hint = new()
     {
         FontSize = 11,
@@ -24,7 +35,9 @@ public sealed class ShortcutsWindow : ModalDialog
         Text = "",
     };
 
-    public ShortcutsWindow() : base("快捷鍵", 440)
+    private string? _capturingId;
+
+    public ShortcutsSettingsPage()
     {
         var list = new StackPanel { Spacing = 2 };
         string? lastCategory = null;
@@ -33,23 +46,23 @@ public sealed class ShortcutsWindow : ModalDialog
             if (def.Category != lastCategory)
             {
                 lastCategory = def.Category;
-                list.Children.Add(new TextBlock
+                var header = new TextBlock
                 {
                     Text = def.Category,
                     FontSize = 12,
                     FontWeight = FontWeight.Bold,
                     Margin = new Thickness(0, list.Children.Count == 0 ? 0 : 10, 0, 3),
-                });
+                };
+                _headers.Add((def.Category, header));
+                list.Children.Add(header);
             }
-            list.Children.Add(BuildRow(def));
+
+            var row = BuildRow(def);
+            _rows.Add((def, row));
+            list.Children.Add(row);
         }
 
-        var scroll = new ScrollViewer
-        {
-            MaxHeight = 460,
-            Content = list,
-            HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled,
-        };
+        _search.TextChanged += (_, _) => ApplyFilter();
 
         var resetButton = new Button { Content = "全部重設", FontSize = 12, Padding = new Thickness(14, 6) };
         resetButton.Click += (_, _) =>
@@ -57,27 +70,35 @@ public sealed class ShortcutsWindow : ModalDialog
             _capturingId = null;
             ShortcutMap.ResetAll();
             RefreshAllButtons();
+            ApplyFilter(); // 重設後按鍵字串變了，過濾結果跟著更新
             _hint.Text = "已全部重設為預設值。";
         };
 
-        var body = new StackPanel { Spacing = 8, Children = { scroll, _hint } };
+        // 搜尋框釘在上面、提示與「全部重設」釘在下面，中間那段清單才捲
+        _search.Margin = new Thickness(0, 0, 0, 8);
+        DockPanel.SetDock(_search, Dock.Top);
 
-        var closeButton = MakeButton("關閉", primary: true);
-        SetBody(body, new DockPanel
+        var footer = new StackPanel
         {
+            Spacing = 6,
+            Margin = new Thickness(0, 8, 0, 0),
             Children =
             {
-                Docked(resetButton, Dock.Left),
-                Docked(closeButton, Dock.Right),
+                _hint,
+                new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    HorizontalAlignment = HorizontalAlignment.Left,
+                    Children = { resetButton },
+                },
             },
-        });
+        };
+        DockPanel.SetDock(footer, Dock.Bottom);
 
-        static Control Docked(Control c, Dock dock)
+        Content = new DockPanel
         {
-            DockPanel.SetDock(c, dock);
-            c.HorizontalAlignment = dock == Dock.Left ? HorizontalAlignment.Left : HorizontalAlignment.Right;
-            return c;
-        }
+            Children = { _search, footer, SettingsUi.Scroll(list) },
+        };
     }
 
     private Control BuildRow(ShortcutDef def)
@@ -110,6 +131,27 @@ public sealed class ShortcutsWindow : ModalDialog
         };
     }
 
+    /// <summary>依搜尋字串顯示／隱藏列；一個分類底下全被濾掉時連標題一起收起來。</summary>
+    private void ApplyFilter()
+    {
+        var query = (_search.Text ?? "").Trim();
+        var visibleCategories = new HashSet<string>();
+
+        foreach (var (def, row) in _rows)
+        {
+            var gesture = ShortcutMap.GetGesture(def.Id)?.ToString() ?? "";
+            var match = query.Length == 0
+                || def.Name.Contains(query, StringComparison.OrdinalIgnoreCase)
+                || def.Category.Contains(query, StringComparison.OrdinalIgnoreCase)
+                || gesture.Contains(query, StringComparison.OrdinalIgnoreCase);
+            row.IsVisible = match;
+            if (match) visibleCategories.Add(def.Category);
+        }
+
+        foreach (var (category, header) in _headers)
+            header.IsVisible = visibleCategories.Contains(category);
+    }
+
     private void BeginCapture(string id)
     {
         // 點另一列會先放掉上一個
@@ -117,7 +159,8 @@ public sealed class ShortcutsWindow : ModalDialog
         _capturingId = id;
         _gestureButtons[id].Content = "按下組合鍵…";
         _hint.Text = "按下新的組合鍵；Esc 取消、Backspace 清除綁定。";
-        Focus(); // 焦點離開按鈕，Space/Enter 才能被當成新綁定捕捉，而不是觸發按鈕
+        // 焦點離開按鈕（也離開搜尋框），Space/Enter 才會被當成新綁定捕捉，而不是觸發按鈕
+        (TopLevel.GetTopLevel(this) as Window)?.Focus();
     }
 
     private void RefreshButton(string id) =>
@@ -128,15 +171,19 @@ public sealed class ShortcutsWindow : ModalDialog
         foreach (var id in _gestureButtons.Keys) RefreshButton(id);
     }
 
-    protected override void OnKeyDown(KeyEventArgs e)
+    public override bool HandleKeyDown(KeyEventArgs e)
     {
         if (_capturingId == null)
         {
-            base.OnKeyDown(e); // 一般狀態：Esc 關窗等預設行為
-            return;
+            // 沒在錄鍵時，Esc 先用來清搜尋（有東西可清才攔，不然照常關窗）
+            if (e.Key == Key.Escape && !string.IsNullOrEmpty(_search.Text))
+            {
+                _search.Text = "";
+                return true;
+            }
+            return false;
         }
 
-        e.Handled = true;
         var id = _capturingId;
 
         switch (e.Key)
@@ -145,19 +192,19 @@ public sealed class ShortcutsWindow : ModalDialog
                 _capturingId = null;
                 RefreshButton(id);
                 _hint.Text = "已取消。";
-                return;
+                return true;
 
             case Key.Back:
                 _capturingId = null;
                 ShortcutMap.SetGesture(id, null);
                 RefreshButton(id);
                 _hint.Text = "已清除綁定。";
-                return;
+                return true;
 
             // 純修飾鍵：等實際按鍵一起來
             case Key.LeftCtrl or Key.RightCtrl or Key.LeftShift or Key.RightShift
                 or Key.LeftAlt or Key.RightAlt or Key.LWin or Key.RWin:
-                return;
+                return true;
         }
 
         _capturingId = null;
@@ -169,5 +216,6 @@ public sealed class ShortcutsWindow : ModalDialog
         _hint.Text = displaced != null
             ? $"「{defName}」已綁定 {gesture}；原本用這組鍵的「{displaced.Name}」已解除。"
             : $"「{defName}」已綁定 {gesture}。";
+        return true;
     }
 }
