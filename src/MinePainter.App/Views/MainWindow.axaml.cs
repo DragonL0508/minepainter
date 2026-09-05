@@ -3024,19 +3024,17 @@ public partial class MainWindow : Window
 
     /// <summary>
     /// 分離選取的文字：正在畫布上編輯文字、且框選了一段 → 先落地這次編輯，再把那一段拆成獨立圖層
-    /// （前／中／後收進一個群組，像素位置不變）。沒有選取範圍就提示怎麼用。
+    /// （前／中／後收進一個群組，像素位置不變）。
     /// 這是我們對「一段文字多種樣式」的作法：不做混合樣式，改用分開的圖層各自調（使用者 2026-09-06 明示）。
+    /// 只從選取框旁的小按鈕叫（按鈕不可聚焦）—— 放在選單上一點，焦點就離開編輯框、編輯先落地、
+    /// 狀態被清掉，什麼都不會發生（使用者回報「點了沒有用」）。
     /// </summary>
-    private void OnSplitTextClicked(object? sender, RoutedEventArgs e)
+    private void SplitSelectedText()
     {
         var box = _canvasEditBox;
         var layer = _canvasEditLayer;
         var elementId = _canvasEditElement?.Id;
-        if (box == null || layer == null || elementId == null)
-        {
-            Toasts.Show("先用文字工具進入編輯、選取要分離的文字，再按一次");
-            return;
-        }
+        if (box == null || layer == null || elementId == null) return;
         var start = Math.Min(box.SelectionStart, box.SelectionEnd);
         var length = Math.Abs(box.SelectionEnd - box.SelectionStart);
         if (length <= 0)
@@ -3202,7 +3200,6 @@ public partial class MainWindow : Window
             ["layer.duplicate"] = () => OnDuplicateLayerClicked(null, new RoutedEventArgs()),
             ["layer.mergeDown"] = () => OnMergeLayerDownClicked(null, new RoutedEventArgs()),
             ["layer.flattenText"] = () => OnFlattenTextClicked(null, new RoutedEventArgs()),
-            ["layer.splitText"] = () => OnSplitTextClicked(null, new RoutedEventArgs()),
 
             ["view.zoomIn"] = () => Canvas.ZoomBy(1.25),
             ["view.zoomOut"] = () => Canvas.ZoomBy(1 / 1.25),
@@ -4371,6 +4368,7 @@ public partial class MainWindow : Window
 
     private Border _frameActions = null!;
     private Button _frameResetButton = null!;
+    private Button _frameSplitButton = null!;
     private Rect _frameActionsLast = default;
 
     /// <summary>
@@ -4382,6 +4380,10 @@ public partial class MainWindow : Window
     {
         _frameResetButton = FrameActionButton(MaterialIconKind.Restore, "重置角度與比例（轉回 0°、回到原始比例）");
         _frameResetButton.Click += (_, _) => ResetFrameTransform();
+        // 只在「編輯文字且框選了一段」時出現：把那一段拆成獨立的文字圖層（前／中／後收進群組）各自改樣式
+        _frameSplitButton = FrameActionButton(MaterialIconKind.ContentCut, "分離選取的文字成獨立圖層（前／中／後收進一個群組，位置不變）");
+        _frameSplitButton.IsVisible = false;
+        _frameSplitButton.Click += (_, _) => SplitSelectedText();
 
         _frameActions = new Border
         {
@@ -4395,7 +4397,7 @@ public partial class MainWindow : Window
             {
                 Orientation = Avalonia.Layout.Orientation.Horizontal,
                 Spacing = 1,
-                Children = { _frameResetButton },
+                Children = { _frameResetButton, _frameSplitButton },
             },
         };
         EditHost.Children.Add(_frameActions);
@@ -4430,6 +4432,7 @@ public partial class MainWindow : Window
         var hasText = SelectedText != null;
         _frameResetButton.IsEnabled = session.CanResetTransform;
         _frameResetButton.Opacity = _frameResetButton.IsEnabled ? 1.0 : 0.4;
+        _frameSplitButton.IsVisible = _canvasEditBox is { } editBox && editBox.SelectionStart != editBox.SelectionEnd;
 
         // 框可能整個旋轉（變形 session）：取四個角旋轉後的外接矩形
         var deg = session.SelectionHandlesRotation;

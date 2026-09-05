@@ -98,8 +98,6 @@
             <MenuItem Header="向下合併(_M)" Click="OnMergeLayerDownClicked" Tag="layer.mergeDown" />
             <MenuItem Header="圖層文字平面化(_R)" Click="OnFlattenTextClicked" Tag="layer.flattenText"
                       ToolTip.Tip="把本圖層的文字物件烙成像素（之後不能再編輯文字內容）" />
-            <MenuItem Header="分離選取的文字(_S)" Click="OnSplitTextClicked" Tag="layer.splitText"
-                      ToolTip.Tip="編輯文字時先選取一段，就能把它拆成獨立的文字圖層（前／中／後收進一個群組），各自改樣式" />
             <Separator />
             <MenuItem Header="水平翻轉" Click="OnFlipLayerHorizontalClicked" Tag="layer.flipH" />
             <MenuItem Header="垂直翻轉" Click="OnFlipLayerVerticalClicked" Tag="layer.flipV" />
