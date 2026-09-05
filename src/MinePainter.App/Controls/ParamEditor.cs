@@ -17,6 +17,9 @@ public sealed class ParamEditor : StackPanel
     private readonly Func<object, IReadOnlyList<ParamDef>> _defs;
     private bool _suppress;
 
+    /// <summary>目前長出來的選點器：任何參數一動就把範圍圈同步上去（半徑滑桿動、圈也要跟著動）。</summary>
+    private readonly List<(PointPicker Picker, PointParam Def)> _pickers = [];
+
     /// <summary>「全新的同型別物件」，用來取得各參數的預設值（滑桿雙擊回預設）。建不出來就是 null。</summary>
     private readonly object? _defaults;
 
@@ -87,14 +90,26 @@ public sealed class ParamEditor : StackPanel
     {
         if (_suppress) return;
         Current = next;
+        SyncGuides();
         Changed?.Invoke(Current);
         if (commit) Committed?.Invoke(Current);
+    }
+
+    private void SyncGuides()
+    {
+        foreach (var (picker, def) in _pickers)
+        {
+            if (def.Guide == null) continue;
+            var g = def.Guide(Current);
+            if (g != picker.Guide) picker.Guide = g;
+        }
     }
 
     private void Rebuild()
     {
         _suppress = true;
         Children.Clear();
+        _pickers.Clear();
         foreach (var def in _defs(Current))
         {
             switch (def)
@@ -374,13 +389,26 @@ public sealed class ParamEditor : StackPanel
 
     private Control BuildPoint(PointParam pt)
     {
-        var picker = new PointPicker { Thumbnail = Thumbnail, Value = pt.Get(Current) };
+        var picker = new PointPicker
+        {
+            Thumbnail = Thumbnail,
+            Value = pt.Get(Current),
+            Guide = pt.Guide?.Invoke(Current),
+            GuideDraggable = pt.WithGuide != null,
+        };
         picker.ValueChanged += v => { if (!_suppress) Update(pt.With(Current, v), commit: false); };
+        picker.GuideChanged += g =>
+        {
+            if (_suppress || pt.WithGuide == null) return;
+            Update(pt.WithGuide(Current, g), commit: false);
+            SyncSliders(); // 拖圈＝改半徑／過渡，滑桿要跟著走
+        };
         picker.DragCompleted += _ => { if (!_suppress) Committed?.Invoke(Current); };
+        _pickers.Add((picker, pt));
 
         var label = new TextBlock
         {
-            Text = pt.Label + "（雙擊回中心）",
+            Text = pt.Label + (pt.WithGuide != null ? "（拖十字搬中心、拖圈改範圍、雙擊回中心）" : "（雙擊回中心）"),
             FontSize = 11,
             Foreground = AppTheme.TextMutedBrush,
         };

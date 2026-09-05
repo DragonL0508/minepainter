@@ -203,7 +203,12 @@ public sealed record VignetteEffect : IEffect
         new SliderParam("amount", "強度", 0, 1, o => ((VignetteEffect)o).Amount,
             (o, v) => ((VignetteEffect)o) with { Amount = (float)v }, "", 2),
         new PointParam("center", "中心", o => (((VignetteEffect)o).CenterX, ((VignetteEffect)o).CenterY),
-            (o, v) => ((VignetteEffect)o) with { CenterX = v.X, CenterY = v.Y }),
+            (o, v) => ((VignetteEffect)o) with { CenterX = v.X, CenterY = v.Y })
+        {
+            // 暈影只有一圈：半徑處完全變暗，圓內漸暗；導引畫出「變暗到底」的位置
+            Guide = o => new PointGuide(0f, Math.Clamp(((VignetteEffect)o).Radius, 0.1f, 4f)),
+            WithGuide = (o, g) => ((VignetteEffect)o) with { Radius = Math.Clamp(MathF.Round(g.Outer, 2), 0.1f, 4f) },
+        },
     ];
     public IReadOnlyList<ParamDef> Parameters => Params;
 

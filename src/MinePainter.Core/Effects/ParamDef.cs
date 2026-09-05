@@ -50,7 +50,24 @@ public sealed record AngleParam(
 /// </summary>
 public sealed record PointParam(
     string Key, string Label,
-    Func<object, (float X, float Y)> Get, Func<object, (float X, float Y), object> With) : ParamDef(Key, Label);
+    Func<object, (float X, float Y)> Get, Func<object, (float X, float Y), object> With) : ParamDef(Key, Label)
+{
+    /// <summary>
+    /// 圍著中心點的範圍導引（聚焦的清楚範圍與過渡帶、暈影的半徑）：選點器把它畫在縮圖上，
+    /// 使用者調滑桿時看得到範圍跟著變，不用每次都等預覽。沒有＝只畫十字。
+    /// </summary>
+    public Func<object, PointGuide?>? Guide { get; init; }
+
+    /// <summary>使用者在選點器上直接拖曳導引圓時回寫參數（沒有＝導引只能看不能拖）。</summary>
+    public Func<object, PointGuide, object>? WithGuide { get; init; }
+}
+
+/// <summary>
+/// 選點器上的範圍導引：兩個以中心為圓心的圓，半徑都是「範圍半對角線」的倍率（與暈影、聚焦的尺度一致）。
+/// Inner = 完全不受影響的範圍（實線），Outer = 效果達到最大的位置（虛線）；只有一圈的效果兩個給一樣。
+/// Elliptical = 圓跟著範圍長寬比拉成橢圓；Invert = 效果在圓內而不是圓外（畫法反過來提示）。
+/// </summary>
+public sealed record PointGuide(float Inner, float Outer, bool Elliptical = false, bool Invert = false);
 
 /// <summary>顏色。UsePrimaryByDefault = 從選單新增時先帶入目前主色。</summary>
 public sealed record ColorParam(
