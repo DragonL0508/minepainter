@@ -27,6 +27,11 @@ public sealed record BackgroundRemovalOptions
     /// <summary>邊緣收縮（負）／擴張（正）px。</summary>
     public int Shift { get; init; }
     /// <summary>
+    /// 硬邊切出（預設開）：遮罩切成二值、清碎片補洞、輪廓磨圓，邊緣只留一像素寬的抗鋸齒，
+    /// 邊上被背景汙染的顏色換成內部的顏色 —— 結果沒有半透明的毛邊（見 <see cref="HardEdgeCut"/>）。
+    /// </summary>
+    public bool HardEdge { get; init; } = true;
+    /// <summary>
     /// 只處理選取範圍（doc 座標；null = 整個圖層）。
     /// 有給時只把選取範圍內的像素送進模型（範圍外對模型是黑），模型的解析度全用在使用者圈出的物件上；
     /// 選取範圍外的像素一律清成透明，選取的軟邊（羽化／抗鋸齒）也乘進遮罩。
@@ -164,7 +169,17 @@ public static class BackgroundRemovalCommand
 
                 var sourceMask = ComputeMask(sourcePixels, hiResRegion.Width, hiResRegion.Height, sourceCoverage, options,
                     shift: (int)MathF.Round(options.Shift * ratio), ct);
-                sourceAfter = sourceBefore.MaskedInSourceSpace(hiResRegion, sourceMask, ct);
+                if (options.HardEdge)
+                {
+                    // 硬邊：在來源解析度切、去汙染，像素直接換進原圖
+                    var (hardMask, hardPixels) = HardEdgeCut.Apply(sourceMask, sourcePixels, hiResRegion.Width, hiResRegion.Height);
+                    sourceMask = hardMask;
+                    sourceAfter = sourceBefore.WithRegionPixels(hiResRegion, hardPixels, ct);
+                }
+                else
+                {
+                    sourceAfter = sourceBefore.MaskedInSourceSpace(hiResRegion, sourceMask, ct);
+                }
                 // 代理畫布用的是同一份遮罩縮回來的（取樣平均），兩邊看到的是同一個輪廓
                 mask = sourceBefore.ResampleMaskToLayer(sourceMask, hiResRegion, crop);
             }
@@ -174,6 +189,14 @@ public static class BackgroundRemovalCommand
                 // 原始高清來源也套同一份遮罩（依來源矩陣反查、雙線性取樣），成為新的來源
                 sourceAfter = sourceBefore?.Masked(crop, mask, ct: ct);
             }
+            // 圖層（代理）像素：硬邊模式連顏色一起換；否則只乘遮罩
+            uint[]? layerPixels = null;
+            if (options.HardEdge)
+            {
+                var (hardMask, hardPixels) = HardEdgeCut.Apply(mask, pixels, crop.Width, crop.Height);
+                mask = hardMask;
+                layerPixels = hardPixels;
+            }
             ct.ThrowIfCancellationRequested();
 
             // ---- 4. 套 alpha（鎖內）：顏色永遠是原圖的原解析度像素，只乘上遮罩 ----
@@ -182,7 +205,8 @@ public static class BackgroundRemovalCommand
                 if (layer.Document != doc) { sourceAfter?.Dispose(); Rollback(); return false; }
                 // 目前掛著的來源（原始的、或平面化後算好的）拿下來：ApplyMask 換了像素版本後它會被當失效釋放
                 if (sourceBefore != null) layer.TakePixelSource();
-                ApplyMask(layer.Surface, crop, mask);
+                if (layerPixels != null) WriteRegion(layer.Surface, crop, layerPixels);
+                else ApplyMask(layer.Surface, crop, mask);
                 affected = Union(affected, crop);
                 if (selection != null)
                 {
@@ -417,6 +441,26 @@ public static class BackgroundRemovalCommand
 
     /// <summary>premul 像素四通道乘上 m/255。</summary>
     private static uint Scale(uint p, byte m) => LayerPixelSource.ScalePremul(p, m);
+
+    /// <summary>把 rect（圖層座標）的像素整塊換成 <paramref name="pixels"/>（premul；0 就是透明）。</summary>
+    internal static unsafe void WriteRegion(TileSurface surface, SKRectI rect, uint[] pixels)
+    {
+        foreach (var idx in TileIndex.CoveringRect(rect))
+        {
+            var tileRect = idx.ToPixelRect();
+            var inter = SKRectI.Intersect(tileRect, rect);
+            if (inter.Width <= 0 || inter.Height <= 0) continue;
+            var tile = surface.GetTileForWrite(idx);
+            var dst = (uint*)tile.Pixels;
+            for (var y = inter.Top; y < inter.Bottom; y++)
+            {
+                var row = dst + (y - tileRect.Top) * Tile.Size + (inter.Left - tileRect.Left);
+                pixels.AsSpan((y - rect.Top) * rect.Width + (inter.Left - rect.Left), inter.Width)
+                    .CopyTo(new Span<uint>(row, inter.Width));
+            }
+            if (tile.IsBlank()) surface.RemoveTile(idx);
+        }
+    }
 
     /// <summary>premul 像素四通道乘上 mask/255（rect 為圖層座標）。</summary>
     private static unsafe void ApplyMask(TileSurface surface, SKRectI rect, byte[] mask)

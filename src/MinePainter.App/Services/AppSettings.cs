@@ -88,6 +88,9 @@ public sealed class AppSettings
     /// <summary>去背邊緣收縮（負）／擴張（正）px。</summary>
     public int RemoveBgShift { get; set; }
 
+    /// <summary>去背後硬邊切出：沒有半透明毛邊、邊緣去背景色汙染（預設開）。</summary>
+    public bool RemoveBgHardEdge { get; set; } = true;
+
     /// <summary>主視窗啟動時最大化（預設是）。</summary>
     public bool WindowMaximized { get; set; } = true;
 

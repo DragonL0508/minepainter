@@ -190,6 +190,31 @@ public sealed class LayerPixelSource : IDisposable
         }
     }
 
+    /// <summary>
+    /// 把原圖某一塊的像素整塊換掉（premul），區域外一律透明 —— 硬邊去背在來源解析度算好顏色與 alpha 之後用這個寫回。
+    /// Revision 未對齊，呼叫端要設。
+    /// </summary>
+    internal unsafe LayerPixelSource WithRegionPixels(SKRectI region, uint[] pixels, CancellationToken ct = default)
+    {
+        var bitmap = new SKBitmap(new SKImageInfo(Pixels.Width, Pixels.Height, SKColorType.Bgra8888, SKAlphaType.Premul));
+        try
+        {
+            var w = bitmap.Width;
+            var dst = (uint*)bitmap.GetPixels();
+            for (var y = region.Top; y < region.Bottom; y++)
+            {
+                if ((y & 63) == 0) ct.ThrowIfCancellationRequested();
+                pixels.AsSpan((y - region.Top) * region.Width, region.Width).CopyTo(new Span<uint>(dst + y * w + region.Left, region.Width));
+            }
+            var image = SKImage.FromBitmap(bitmap) ?? throw new InvalidOperationException("複製原始像素失敗");
+            return new LayerPixelSource(image, Bounds, Matrix, BaseOffset, TargetRect, RotationDeg, OriginalSize, 0);
+        }
+        finally
+        {
+            bitmap.Dispose();
+        }
+    }
+
     /// <summary>原始像素座標的遮罩 → 圖層座標（縮小時取樣平均，不會有鋸齒）。</summary>
     internal byte[] ResampleMaskToLayer(byte[] sourceMask, SKRectI region, SKRectI layerRect) =>
         ResampleMask(sourceMask, region, SourceToLayer, layerRect);
