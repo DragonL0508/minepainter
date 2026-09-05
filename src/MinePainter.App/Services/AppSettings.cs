@@ -31,9 +31,6 @@ public sealed class AppSettings
     /// <summary>最近開啟／儲存過的檔案（完整路徑，最新在前）。</summary>
     public List<string> RecentFiles { get; set; } = new();
 
-    /// <summary>效果／調整套用時記錄在圖層的效果堆疊（非破壞性），而不是直接改像素。</summary>
-    public bool NonDestructiveEffects { get; set; } = true;
-
     /// <summary>檢視 → 放大時平滑取樣（預設關：放大顯示真實像素，同 paint.net）。</summary>
     public bool SmoothZoom { get; set; }
 
@@ -51,9 +48,6 @@ public sealed class AppSettings
 
     /// <summary>每種效果上次確定套用的參數（效果 id → 參數字典），下次開同一個效果沿用。</summary>
     public Dictionary<string, Dictionary<string, string>> EffectParams { get; set; } = new();
-
-    /// <summary>移動工具拖曳時覆疊層帶著效果堆疊結果（外框／陰影／漸層跟著走）；關掉省效能。</summary>
-    public bool RenderEffectsWhileDragging { get; set; } = true;
 
     /// <summary>
     /// 快速模式的代理級別（高度，預設 1080＝Full HD）：畫布比這個大才會提示可以用快速模式，

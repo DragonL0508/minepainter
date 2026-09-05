@@ -2726,7 +2726,7 @@ public partial class MainWindow : Window
     private void BuildEffectMenus()
     {
         var auto = new MenuItem { Header = "自動色階", Tag = "adjust.autoLevel", Icon = MenuIcon(MaterialIconKind.AutoFix) };
-        auto.Click += (_, _) => _ = ApplyAutoLevelAsync();
+        auto.Click += (_, _) => ApplyAutoLevel();
         AdjustmentsMenu.Items.Add(auto);
 
         // 順序表沒列到的登錄項也要出現（2026-09-06 新增的調整就是因為漏列而在選單上看不到）
@@ -2749,43 +2749,9 @@ public partial class MainWindow : Window
         _repeatEffectItem = new MenuItem { Header = "重複上次效果", Tag = "effect.repeat", IsEnabled = false, Icon = MenuIcon(MaterialIconKind.Repeat) };
         _repeatEffectItem.Click += (_, _) => OnRepeatEffect();
         EffectsMenu.Items.Add(_repeatEffectItem);
+        EffectsMenu.Items.Add(new Separator());
 
         // 非破壞性：效果／調整記錄在圖層的效果堆疊（圖層屬性可回頭改、排序、存預設集）
-        var nonDestructive = new MenuItem
-        {
-            Header = "記錄在圖層（非破壞性）",
-            ToggleType = MenuItemToggleType.CheckBox,
-            IsChecked = Services.AppSettings.Instance.NonDestructiveEffects,
-        };
-        nonDestructive.Click += (_, _) =>
-        {
-            Services.AppSettings.Instance.NonDestructiveEffects = nonDestructive.IsChecked;
-            Services.AppSettings.Instance.Save();
-            Toasts.Show(nonDestructive.IsChecked
-                ? "效果將記錄在圖層效果堆疊（可在圖層屬性重新調整）"
-                : "效果將直接寫入像素");
-        };
-        EffectsMenu.Items.Add(nonDestructive);
-
-        var fxWhileDrag = new MenuItem
-        {
-            Header = "拖曳時即時顯示效果",
-            ToggleType = MenuItemToggleType.CheckBox,
-            IsChecked = Services.AppSettings.Instance.RenderEffectsWhileDragging,
-        };
-        Core.Tools.EditorSession.RenderEffectsWhileDragging = fxWhileDrag.IsChecked;
-        fxWhileDrag.Click += (_, _) =>
-        {
-            Services.AppSettings.Instance.RenderEffectsWhileDragging = fxWhileDrag.IsChecked;
-            Services.AppSettings.Instance.Save();
-            Core.Tools.EditorSession.RenderEffectsWhileDragging = fxWhileDrag.IsChecked;
-            Toasts.Show(fxWhileDrag.IsChecked
-                ? "移動物件／圖層時會連同外框、陰影等效果一起顯示"
-                : "移動時只顯示基底像素，放開後才套用效果（較省效能）");
-        };
-        EffectsMenu.Items.Add(fxWhileDrag);
-
-        EffectsMenu.Items.Add(new Separator());
 
         foreach (var category in EffectRegistry.Categories)
         {
@@ -2804,7 +2770,7 @@ public partial class MainWindow : Window
     private Task ApplyAdjustmentAsync(AdjustmentRegistry.Entry entry) =>
         ApplyEffectAsync(Services.EffectParamMemory.Recall(new AdjustmentEffect(entry.CreateDefault()), Canvas.Session?.Foreground ?? SKColors.Black), entry.DisplayName, entry.HasDialog);
 
-    private async Task ApplyAutoLevelAsync()
+    private void ApplyAutoLevel()
     {
         var session = CommitPending();
         if (session == null) return;
@@ -2829,17 +2795,12 @@ public partial class MainWindow : Window
         using var fx = new EffectSession(session, layer);
         if (fx.IsEmpty) return;
         var levels = LevelsAdjustment.FromHistogram(fx.Histogram());
-        if (Services.AppSettings.Instance.NonDestructiveEffects || layer.IsTextLayer)
-        {
-            var effect = new AdjustmentEffect(levels);
-            LayerEffectCommands.Add(session.Document, session.History, layer,
-                LayerEffect.Create(effect, session.Selection?.Clone().Mask, session.Foreground));
-            _lastEffect = effect;
-            Toasts.Show("自動色階（已記錄在圖層）");
-            AfterEffect();
-            return;
-        }
-        await ApplyImmediateAsync(fx, new AdjustmentEffect(levels), "自動色階");
+        // 效果一律記錄在圖層效果堆疊（非破壞性；使用者 2026-09-06 明示不再提供直接寫入像素的選項）
+        var effect = new AdjustmentEffect(levels);
+        LayerEffectCommands.Add(session.Document, session.History, layer,
+            LayerEffect.Create(effect, session.Selection?.Clone().Mask, session.Foreground));
+        _lastEffect = effect;
+        Toasts.Show("自動色階（已記錄在圖層）");
         AfterEffect();
     }
 
@@ -2863,45 +2824,8 @@ public partial class MainWindow : Window
             Toasts.Show("請先選擇一個點陣圖層或群組");
             return;
         }
-        if (Services.AppSettings.Instance.NonDestructiveEffects || layer.IsTextLayer)
-        {
-            // 文字圖層永遠不含像素：效果一律記錄在堆疊（破壞性套用會把效果寫成像素）
-            if (!Services.AppSettings.Instance.NonDestructiveEffects) Toasts.Show("文字圖層的效果一律記錄在圖層效果堆疊");
-            await ApplyToLayerStackAsync(session, layer, effect, name, showDialog);
-            return;
-        }
-
-        using var fx = new EffectSession(session, layer);
-        if (fx.IsEmpty)
-        {
-            Toasts.Show("沒有可套用的範圍");
-            return;
-        }
-
-        if (!showDialog)
-        {
-            await ApplyImmediateAsync(fx, effect, name);
-            AfterEffect();
-            return;
-        }
-
-        var dialog = new EffectDialog(fx, effect, name);
-        await dialog.ShowDialog(this);
-        await dialog.WaitIdleAsync();
-        if (dialog.Confirmed)
-        {
-            if (fx.Commit(name))
-            {
-                _lastEffect = dialog.Result;
-                Services.EffectParamMemory.Remember(dialog.Result);
-                Toasts.Show(name);
-            }
-        }
-        else
-        {
-            fx.Cancel();
-        }
-        AfterEffect();
+        // 效果一律記錄在圖層效果堆疊（非破壞性），可在圖層屬性重新調整；不再提供直接寫入像素的模式
+        await ApplyToLayerStackAsync(session, layer, effect, name, showDialog);
     }
 
     /// <summary>非破壞性：效果進圖層效果堆疊（有選取就帶遮罩），對話框即時預覽由合成器背景重算。</summary>
@@ -2951,25 +2875,6 @@ public partial class MainWindow : Window
         }
         else preview.Cancel();
         AfterEffect();
-    }
-
-    private async Task ApplyImmediateAsync(EffectSession fx, IEffect effect, string name)
-    {
-        try
-        {
-            await ProgressDialog.RunAsync(this, name, _ => fx.RenderAndApply(effect));
-        }
-        catch (Exception ex)
-        {
-            fx.Cancel();
-            Toasts.Show($"{name} 失敗：{ex.Message}");
-            return;
-        }
-        if (fx.Commit(name))
-        {
-            _lastEffect = effect;
-            Toasts.Show(name);
-        }
     }
 
     private void AfterEffect()
@@ -3262,7 +3167,7 @@ public partial class MainWindow : Window
         _shortcutActions["layer.removeBackgroundLocal"] = () => OnRemoveBackgroundLocalClicked(null, new RoutedEventArgs());
         _shortcutActions["gadget.youtubePreview"] = () => OnYouTubePreviewClicked(null, new RoutedEventArgs());
 
-        _shortcutActions["adjust.autoLevel"] = () => _ = ApplyAutoLevelAsync();
+        _shortcutActions["adjust.autoLevel"] = () => ApplyAutoLevel();
         foreach (var entry in AdjustmentRegistry.All)
         {
             var e = entry;
