@@ -67,7 +67,6 @@ public sealed class BackgroundRemovalWindow : ModalDialog
     private Button _cancelButton = null!;
     private CancellationTokenSource? _cts;
     private bool _running;
-    private string? _keyImportedFrom;
 
     /// <summary>已套用到圖層。</summary>
     public bool Applied { get; private set; }
@@ -96,11 +95,6 @@ public sealed class BackgroundRemovalWindow : ModalDialog
         var settings = AppSettings.Instance;
         _sizeCombo.SelectedIndex = settings.RemoveBgPreview ? 1 : 0;
         _apiKeyBox.Text = settings.RemoveBgApiKey ?? "";
-        if (string.IsNullOrWhiteSpace(_apiKeyBox.Text) && TryImportPaintNetKey() is { } imported)
-        {
-            _apiKeyBox.Text = imported;
-            _keyImportedFrom = "paint.net 的 Remove Background 插件";
-        }
 
         var keyLink = new TextBlock
         {
@@ -232,9 +226,7 @@ public sealed class BackgroundRemovalWindow : ModalDialog
         if (_running) return;
         if (IsRemote)
         {
-            _status.Text = _keyImportedFrom != null
-                ? $"已從{_keyImportedFrom}帶入 API Key。需要網路；每張圖扣 remove.bg 點數（預覽尺寸走免費額度）。"
-                : "需要網路；每張圖扣 remove.bg 點數（預覽尺寸走免費額度）。";
+            _status.Text = "需要網路；每張圖扣 remove.bg 點數（帳號沒點數時只給預覽解析度，走免費額度）。";
             return;
         }
         if (SelectedLocalModel is not { } model)
@@ -256,31 +248,6 @@ public sealed class BackgroundRemovalWindow : ModalDialog
         var keep = IsRemote ? RemoveBgName : SelectedLocalModel?.Name;
         FillModelCombo(dialog.Installed && keep == RemoveBgName ? null : keep);
         OnModelChanged();
-    }
-
-    /// <summary>
-    /// 從 paint.net 的 Remove Background 插件設定（文件\paint.net App Files\Effects\config.json 的 "api-key"）
-    /// 帶入 API Key；沒有那個檔或讀不出來回 null。
-    /// </summary>
-    private static string? TryImportPaintNetKey()
-    {
-        try
-        {
-            var docs = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
-            var path = Path.Combine(docs, "paint.net App Files", "Effects", "config.json");
-            if (!File.Exists(path)) return null;
-            using var json = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
-            if (json.RootElement.TryGetProperty("api-key", out var key) && key.ValueKind == System.Text.Json.JsonValueKind.String)
-            {
-                var value = key.GetString();
-                return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
-            }
-        }
-        catch
-        {
-            // 讀不到就當沒有
-        }
-        return null;
     }
 
     private static void OpenUrl(string url)
