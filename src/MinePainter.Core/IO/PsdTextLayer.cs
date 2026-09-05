@@ -23,9 +23,11 @@ internal static class PsdTextLayer
 {
     /// <summary>
     /// 解出可編輯文字；<paramref name="failure"/> 說明為什麼不行（呼叫端退回點陣並提示）。
-    /// <paramref name="notes"/> 收有損但仍可編輯的地方。
+    /// 回傳一個或多個物件：一段文字裡有多種樣式（字型／字級／顏色…）時，每一段各一個物件、
+    /// 各自擺在原本字面的位置（呼叫端收進一個群組）—— 這是我們對「混合樣式」的作法，
+    /// 與「分離文字」指令產出的結構一致。
     /// </summary>
-    public static TextElement? TryBuild(byte[] block, List<string> notes, out string? failure)
+    public static IReadOnlyList<TextElement>? TryBuild(byte[] block, List<string> notes, out string? failure)
     {
         failure = null;
         var reader = new PsdByteReader(block);
@@ -68,18 +70,15 @@ internal static class PsdTextLayer
         }
         var engine = PsdEngineData.Parse(engineBytes);
 
-        var content = (PsdEngineData.Text(engine, "EngineDict", "Editor", "Text") ?? text.Text("Txt ") ?? "")
-            .Replace("\r\n", "\n").Replace('\r', '\n').Replace('\u2028', '\n').Replace('\u2029', '\n');
-        if (content.EndsWith('\n')) content = content[..^1];
-        if (content.Length == 0)
+        var raw = PsdEngineData.Text(engine, "EngineDict", "Editor", "Text") ?? text.Text("Txt ") ?? "";
+        // 統一換行；結尾的換行不算內容（PS 段落文字結尾都帶一個 \r）
+        var normalized = raw.Replace("\r\n", "\n").Replace('\r', '\n').Replace('\u2028', '\n').Replace('\u2029', '\n');
+        var trimmedEnd = normalized.EndsWith('\n') ? normalized.Length - 1 : normalized.Length;
+        if (trimmedEnd == 0)
         {
             failure = "沒有文字內容";
             return null;
         }
-
-        var style = DominantStyle(engine, notes);
-        var paragraph = PsdEngineData.Dict(engine, "EngineDict", "ParagraphRun", "RunArray", 0, "ParagraphSheet", "Properties")
-            ?? PsdEngineData.Dict(engine, "ResourceDict", "ParagraphSheetSet", 0, "Properties");
 
         // 矩陣：x' = xx·x + yx·y + tx，y' = xy·x + yy·y + ty。旋轉取第一欄，縮放各取欄長。
         var scaleX = Math.Sqrt(xx * xx + xy * xy);
@@ -91,23 +90,8 @@ internal static class PsdTextLayer
         }
         var rotation = (float)(Math.Atan2(xy, xx) * 180 / Math.PI);
 
-        var fontSizePt = style.Number("FontSize") ?? 12;
-        var fontSize = (float)(fontSizePt * scaleY);
-        var horizontalScale = style.Number("HorizontalScale") ?? 1;
-        var verticalScale = style.Number("VerticalScale") ?? 1;
-        fontSize = (float)(fontSize * verticalScale);
-
-        var fontIndex = (int)(style.Number("Font") ?? 0);
-        var postScriptName = PsdEngineData.Text(engine, "ResourceDict", "FontSet", fontIndex, "Name") ?? "";
-        var font = PsdFontName.Resolve(postScriptName);
-
-        var tracking = style.Number("Tracking") ?? 0;
-        var leadingScale = TextElement.DefaultLineHeightScale;
-        if (style.Bool("AutoLeading") != false)
-            leadingScale = (float)(PsdEngineData.Number(paragraph, "AutoLeading") ?? 1.2);
-        else if (style.Number("Leading") is { } leading && leading > 0 && fontSizePt > 0)
-            leadingScale = (float)(leading / fontSizePt);
-
+        var paragraph = PsdEngineData.Dict(engine, "EngineDict", "ParagraphRun", "RunArray", 0, "ParagraphSheet", "Properties")
+            ?? PsdEngineData.Dict(engine, "ResourceDict", "ParagraphSheetSet", 0, "Properties");
         var justification = (int)(PsdEngineData.Number(paragraph, "Justification") ?? 0);
         var alignment = justification switch
         {
@@ -115,8 +99,146 @@ internal static class PsdTextLayer
             2 or 5 => TextAlign.Center,
             _ => TextAlign.Left,
         };
+        var autoLeading = (float)(PsdEngineData.Number(paragraph, "AutoLeading") ?? 1.2);
 
-        var element = new TextElement
+        // 樣式段落：把相鄰、樣式相同的合起來；長度以原文（含結尾換行）計
+        var runs = MergeRuns(engine, normalized.Length);
+        var elements = new List<TextElement>();
+        var bounds = text.Child("bounds");
+        var boundsLeft = (bounds?.Number("Left") ?? 0) * scaleX;
+        var boundsRight = (bounds?.Number("Rght") ?? 0) * scaleX;
+
+        if (runs.Count == 1)
+        {
+            var single = ElementFor(runs[0].Style, engine, normalized[..trimmedEnd], scaleX, scaleY, rotation, autoLeading);
+            single = single with { Alignment = alignment };
+            single = single with { Position = Anchor(single, boundsLeft, boundsRight, tx, ty, rotation) };
+            elements.Add(single);
+            return elements;
+        }
+
+        // 多段樣式：逐行、逐段擺放。每一行的基線一條，各段字級不同也貼在同一條基線上。
+        notes.Add("文字含多種樣式，已拆成多個文字圖層收在群組裡（各段可分別改）。");
+        var templates = runs.Select(r => ElementFor(r.Style, engine, "", scaleX, scaleY, rotation, autoLeading)).ToList();
+        var lines = normalized[..trimmedEnd].Split('\n');
+        var offset = 0;         // 這一行第一個字在 normalized 裡的索引
+        var baseline = 0.0;     // 相對錨點（第一行基線 = 0）
+        var rad = rotation * Math.PI / 180;
+        var cos = Math.Cos(rad);
+        var sin = Math.Sin(rad);
+        for (var li = 0; li < lines.Length; li++)
+        {
+            var line = lines[li];
+            // 這一行拆成（段索引, 文字）
+            var segments = new List<(int Run, string Text)>();
+            var pos = offset;
+            var lineEnd = offset + line.Length;
+            while (pos < lineEnd)
+            {
+                var runIndex = RunAt(runs, pos);
+                var runEnd = Math.Min(lineEnd, runs[runIndex].Start + runs[runIndex].Length);
+                if (runEnd <= pos) runEnd = pos + 1;
+                segments.Add((runIndex, normalized[pos..runEnd]));
+                pos = runEnd;
+            }
+
+            var widths = segments.Select(seg => templates[seg.Run].MeasureLineWidth(seg.Text) * templates[seg.Run].ScaleX).ToList();
+            var lineWidth = widths.Sum();
+            var lineStart = alignment switch
+            {
+                TextAlign.Center => (boundsLeft + boundsRight) / 2 - lineWidth / 2,
+                TextAlign.Right => boundsRight - lineWidth,
+                _ => boundsLeft,
+            };
+            var maxSize = segments.Count == 0 ? templates[0].FontSize : segments.Max(seg => templates[seg.Run].FontSize);
+            if (li > 0) baseline += maxSize * templates[segments.Count == 0 ? 0 : segments[0].Run].LineHeightScale;
+
+            var x = lineStart;
+            for (var si = 0; si < segments.Count; si++)
+            {
+                var template = templates[segments[si].Run];
+                var dx = x;
+                var dy = baseline - Ascent(template);
+                var element = template with
+                {
+                    Id = Guid.NewGuid(),
+                    Text = segments[si].Text,
+                    Alignment = TextAlign.Left,
+                    Position = new SKPoint((float)(tx + dx * cos - dy * sin), (float)(ty + dx * sin + dy * cos)),
+                };
+                elements.Add(element);
+                x += widths[si];
+            }
+            offset = lineEnd + 1;
+        }
+        return elements.Count > 0 ? elements : null;
+    }
+
+    private readonly record struct StyleRun(int Start, int Length, StyleView Style);
+
+    /// <summary>StyleRun.RunArray／RunLengthArray → 相鄰同樣式合併後的段落清單（涵蓋整段文字）。</summary>
+    private static List<StyleRun> MergeRuns(Dictionary<string, object?> engine, int textLength)
+    {
+        var normalIndex = (int)(PsdEngineData.Number(engine, "ResourceDict", "TheNormalStyleSheet") ?? 0);
+        var normal = PsdEngineData.Dict(engine, "ResourceDict", "StyleSheetSet", normalIndex, "StyleSheetData");
+        var runs = PsdEngineData.List(engine, "EngineDict", "StyleRun", "RunArray") ?? [];
+        var lengths = PsdEngineData.List(engine, "EngineDict", "StyleRun", "RunLengthArray") ?? [];
+
+        var result = new List<StyleRun>();
+        var start = 0;
+        for (var i = 0; i < runs.Count && start < textLength; i++)
+        {
+            var data = PsdEngineData.Dict(runs[i], "StyleSheet", "StyleSheetData");
+            var length = (int)Math.Min(i < lengths.Count ? lengths[i] as double? ?? 0 : 0, textLength - start);
+            if (length <= 0) continue;
+            var style = new StyleView(data, normal);
+            if (result.Count > 0 && SameStyle(result[^1].Style, style))
+                result[^1] = result[^1] with { Length = result[^1].Length + length };
+            else
+                result.Add(new StyleRun(start, length, style));
+            start += length;
+        }
+        if (result.Count == 0) result.Add(new StyleRun(0, textLength, new StyleView(null, normal)));
+        else if (start < textLength) result[^1] = result[^1] with { Length = result[^1].Length + (textLength - start) };
+        return result;
+    }
+
+    private static int RunAt(List<StyleRun> runs, int index)
+    {
+        for (var i = 0; i < runs.Count; i++)
+            if (index < runs[i].Start + runs[i].Length) return i;
+        return runs.Count - 1;
+    }
+
+    /// <summary>看得出來的樣式差異才算不同段（自動 kerning 這種不算）。</summary>
+    private static bool SameStyle(StyleView a, StyleView b) =>
+        a.Number("Font") == b.Number("Font")
+        && Math.Abs((a.Number("FontSize") ?? 0) - (b.Number("FontSize") ?? 0)) < 0.01
+        && ReadColor(a, "FillColor") == ReadColor(b, "FillColor")
+        && a.Bool("FauxBold") == b.Bool("FauxBold") && a.Bool("FauxItalic") == b.Bool("FauxItalic")
+        && a.Bool("Underline") == b.Bool("Underline") && a.Bool("Strikethrough") == b.Bool("Strikethrough")
+        && Math.Abs((a.Number("Tracking") ?? 0) - (b.Number("Tracking") ?? 0)) < 0.01
+        && Math.Abs((a.Number("HorizontalScale") ?? 1) - (b.Number("HorizontalScale") ?? 1)) < 0.001;
+
+    /// <summary>一段樣式 → 文字物件（位置與對齊由呼叫端補）。</summary>
+    private static TextElement ElementFor(StyleView style, Dictionary<string, object?> engine, string content,
+        double scaleX, double scaleY, float rotation, float autoLeading)
+    {
+        var fontSizePt = style.Number("FontSize") ?? 12;
+        var verticalScale = style.Number("VerticalScale") ?? 1;
+        var horizontalScale = style.Number("HorizontalScale") ?? 1;
+        var fontSize = (float)(fontSizePt * scaleY * verticalScale);
+
+        var fontIndex = (int)(style.Number("Font") ?? 0);
+        var postScriptName = PsdEngineData.Text(engine, "ResourceDict", "FontSet", fontIndex, "Name") ?? "";
+        var font = PsdFontName.Resolve(postScriptName);
+
+        var tracking = style.Number("Tracking") ?? 0;
+        var leadingScale = TextElement.DefaultLineHeightScale;
+        if (style.Bool("AutoLeading") != false) leadingScale = autoLeading;
+        else if (style.Number("Leading") is { } leading && leading > 0 && fontSizePt > 0) leadingScale = (float)(leading / fontSizePt);
+
+        return new TextElement
         {
             Text = content,
             FontFamily = font.Family,
@@ -131,52 +253,7 @@ internal static class PsdTextLayer
             Rotation = rotation,
             LetterSpacing = (float)(tracking / 1000.0 * fontSize),
             LineHeightScale = Math.Clamp(leadingScale, 0.3f, 5f),
-            Alignment = alignment,
         };
-
-        element = element with { Position = Anchor(element, text, tx, ty, scaleX, scaleY, rotation) };
-        return element;
-    }
-
-    /// <summary>
-    /// 樣式段落（StyleRun）裡最長的那段當代表；沒填的鍵回退到「正常」樣式表。
-    /// 其他段落若字型／字級／顏色不同，提示一次。
-    /// </summary>
-    private static StyleView DominantStyle(Dictionary<string, object?> engine, List<string> notes)
-    {
-        var normalIndex = (int)(PsdEngineData.Number(engine, "ResourceDict", "TheNormalStyleSheet") ?? 0);
-        var normal = PsdEngineData.Dict(engine, "ResourceDict", "StyleSheetSet", normalIndex, "StyleSheetData");
-        var runs = PsdEngineData.List(engine, "EngineDict", "StyleRun", "RunArray") ?? [];
-        var lengths = PsdEngineData.List(engine, "EngineDict", "StyleRun", "RunLengthArray") ?? [];
-
-        Dictionary<string, object?>? best = null;
-        var bestLength = -1.0;
-        var all = new List<Dictionary<string, object?>>();
-        for (var i = 0; i < runs.Count; i++)
-        {
-            var data = PsdEngineData.Dict(runs[i], "StyleSheet", "StyleSheetData");
-            if (data == null) continue;
-            all.Add(data);
-            var length = i < lengths.Count ? lengths[i] as double? ?? 0 : 0;
-            if (length > bestLength)
-            {
-                bestLength = length;
-                best = data;
-            }
-        }
-
-        var view = new StyleView(best, normal);
-        foreach (var other in all)
-        {
-            var o = new StyleView(other, normal);
-            if (o.Number("Font") != view.Number("Font") || Math.Abs((o.Number("FontSize") ?? 0) - (view.Number("FontSize") ?? 0)) > 0.01
-                || ReadColor(o, "FillColor") != ReadColor(view, "FillColor"))
-            {
-                notes.Add("文字含多種字型或顏色，只保留最長那段的樣式。");
-                break;
-            }
-        }
-        return view;
     }
 
     /// <summary>FillColor：{/Type 1 /Values [a r g b]}（0..1）。</summary>
@@ -189,16 +266,12 @@ internal static class PsdTextLayer
     }
 
     /// <summary>
-    /// 從 PS 的基線錨點推我們的左上角。bounds 是文字空間（未縮放）相對錨點的排版框；
+    /// 從 PS 的基線錨點推我們的左上角。bounds 是（已乘 scaleX 的）相對錨點的排版框；
     /// 對齊決定錨在框的哪一側。算出的本地偏移再照旋轉轉回文件座標（PS 以錨點為軸旋轉）。
     /// </summary>
-    private static SKPoint Anchor(TextElement element, PsdDescriptor text, double tx, double ty, double scaleX, double scaleY, float rotation)
+    private static SKPoint Anchor(TextElement element, double left, double right, double tx, double ty, float rotation)
     {
-        var bounds = text.Child("bounds");
-        var left = (bounds?.Number("Left") ?? 0) * scaleX;
-        var right = (bounds?.Number("Rght") ?? 0) * scaleX;
         var width = element.UnscaledWidth * element.ScaleX;
-
         var dx = element.Alignment switch
         {
             TextAlign.Center => (left + right) / 2 - width / 2,

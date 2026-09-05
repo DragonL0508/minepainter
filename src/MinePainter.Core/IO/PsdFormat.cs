@@ -3,6 +3,7 @@ using System.IO.Compression;
 using System.Text;
 using MinePainter.Core.Documents;
 using MinePainter.Core.Effects;
+using MinePainter.Core.History;
 using MinePainter.Core.Layers;
 using MinePainter.Core.Vectors;
 using SkiaSharp;
@@ -638,7 +639,15 @@ public static class PsdFormat
                             }
                             break;
                         }
-                        var layer = BuildRasterLayer(record, header, palette, notes, record.Clipped ? clipBase : null, out var bgra);
+                        var layer = BuildRasterLayer(record, header, palette, notes, record.Clipped ? clipBase : null, out var bgra, out var textGroup);
+                        if (textGroup != null)
+                        {
+                            // 多種樣式的文字：一個群組、每段一層（位置各自算好）；像素快照只給剪裁／群組 alpha 用
+                            Current().Add(textGroup);
+                            if (textGroup.IsVisible && bgra != null) planes.Peek().Accumulate(bgra, record.Rect, textGroup.Opacity);
+                            if (!record.Clipped) clipBase = new ClipBase(bgra, bgra == null ? SKRectI.Empty : record.Rect, null, textGroup.IsVisible);
+                            break;
+                        }
                         if (layer == null) break;
                         Current().Add(layer);
                         if (record.Clipped && clipBase is { Visible: false }) layer.IsVisible = false;   // 底層藏著，剪裁上去的也看不到
@@ -840,9 +849,11 @@ public static class PsdFormat
     /// <paramref name="bgra"/> 回傳這層算好的直通 alpha 像素，供下一層當剪裁的底。
     /// </summary>
     private static RasterLayer? BuildRasterLayer(
-        LayerRecord record, Header header, byte[]? palette, List<string> notes, ClipBase? clipBase, out byte[]? bgra)
+        LayerRecord record, Header header, byte[]? palette, List<string> notes, ClipBase? clipBase, out byte[]? bgra,
+        out GroupLayer? textGroup)
     {
         bgra = null;
+        textGroup = null;
         var layer = new RasterLayer();
         ApplyProperties(layer, record, notes, isGroup: false);
         try
@@ -872,11 +883,32 @@ public static class PsdFormat
             if (style is { Unsupported.Count: > 0 })
                 notes.Add($"「{layer.Name}」的圖層樣式裡，{string.Join("、", style.Unsupported.Distinct())}沒有對應，已略過。");
 
-            if (record.TextData != null && BuildText(record, layer.Name, notes) is { } text)
+            if (record.TextData != null && BuildText(record, layer.Name, notes) is { Count: > 0 } texts)
             {
                 // 文字圖層不變式：有物件就沒有像素。點陣快照只留給剪裁／群組 alpha 當底用
-                layer.AddElement(text);
-                return layer;
+                if (texts.Count == 1)
+                {
+                    layer.AddElement(texts[0]);
+                    return layer;
+                }
+
+                // 多段樣式：群組沿用圖層的名字、可見性；每段一層，效果與不透明度各帶一份（與「分離文字」同構）
+                var group = new GroupLayer { Name = layer.Name, IsVisible = layer.IsVisible };
+                foreach (var text in texts)
+                {
+                    var piece = new RasterLayer
+                    {
+                        Name = VectorCommands.TextLayerNameFor(text.Text),
+                        Opacity = layer.Opacity,
+                        BlendMode = layer.BlendMode,
+                    };
+                    piece.AddElement(text);
+                    if (layer.HasEffects) piece.SetEffects([.. layer.Effects.Select(fx => fx with { Id = Guid.NewGuid() })]);
+                    group.Add(piece);
+                }
+                layer.Dispose();
+                textGroup = group;
+                return null;
             }
 
             if (!IsFullyTransparent(bgra)) CopyUnpremultiplied(layer, bgra, record.Rect);
@@ -1008,10 +1040,10 @@ public static class PsdFormat
         }
     }
 
-    /// <summary>解出可編輯文字；解不出來提示原因並回 null（呼叫端退回點陣）。</summary>
-    private static TextElement? BuildText(LayerRecord record, string name, List<string> notes)
+    /// <summary>解出可編輯文字（多段樣式會是多個）；解不出來提示原因並回 null（呼叫端退回點陣）。</summary>
+    private static IReadOnlyList<TextElement>? BuildText(LayerRecord record, string name, List<string> notes)
     {
-        TextElement? text;
+        IReadOnlyList<TextElement>? text;
         string? failure;
         try
         {

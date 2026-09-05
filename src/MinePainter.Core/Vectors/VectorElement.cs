@@ -707,6 +707,85 @@ public sealed record TextElement : VectorElement
     private TextShaper CreateShaper() =>
         new(FontFamily, CreateFontStyle(), FontSize, Bold, Italic, LetterSpacing);
 
+    /// <summary>一行文字的排版寬度（未套 ScaleX；含字距，與繪製同一套量法）。</summary>
+    public float MeasureLineWidth(string line)
+    {
+        using var shaper = CreateShaper();
+        return shaper.MeasureLine(line);
+    }
+
+    /// <summary>
+    /// 排版座標（第一行左上為原點、未套 ScaleX）→ 文件座標：繪製時是 Translate(Position) → Rotate → Scale(ScaleX, 1)，
+    /// 這裡照同一順序算回去。不含 <see cref="Deform"/>。
+    /// </summary>
+    public SKPoint LayoutToDoc(float x, float y)
+    {
+        var sx = x * ScaleX;
+        if (Math.Abs(Rotation) < 0.01f) return new SKPoint(Position.X + sx, Position.Y + y);
+        var rad = Rotation * MathF.PI / 180f;
+        var cos = MathF.Cos(rad);
+        var sin = MathF.Sin(rad);
+        return new SKPoint(Position.X + sx * cos - y * sin, Position.Y + sx * sin + y * cos);
+    }
+
+    /// <summary>
+    /// 把文字拆成「選取範圍之前／之中／之後」的獨立物件，每一段都擺在原本字面所在的位置
+    /// （像素位置一模一樣）。跨行的段落再依行切開 —— 每一段都是單行、靠左對齊，
+    /// 位置＝原本那一行的起點加上前面文字的寬度，所以換字型、換顏色之後其他字不會動。
+    /// 回傳依原文順序排列；<paramref name="selectedIndex"/> 是選取範圍那些段在清單裡的索引。
+    /// 有非仿射變形（<see cref="Deform"/>）的文字拆不了（每段各自的變形對不上），回傳空清單。
+    /// </summary>
+    public IReadOnlyList<TextElement> SplitPieces(int start, int length, out List<int> selectedIndex)
+    {
+        selectedIndex = [];
+        var pieces = new List<TextElement>();
+        if (HasDeform || Text.Length == 0) return pieces;
+        start = Math.Clamp(start, 0, Text.Length);
+        var end = Math.Clamp(start + Math.Max(0, length), start, Text.Length);
+
+        using var shaper = CreateShaper();
+        var lines = Text.Split('\n');
+        var widths = new float[lines.Length];
+        var maxWidth = 0f;
+        for (var i = 0; i < lines.Length; i++)
+        {
+            widths[i] = shaper.MeasureLine(lines[i]);
+            maxWidth = Math.Max(maxWidth, widths[i]);
+        }
+
+        var offset = 0;   // 這一行第一個字在 Text 裡的索引
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i];
+            var lineX = Alignment switch
+            {
+                TextAlign.Center => (maxWidth - widths[i]) / 2,
+                TextAlign.Right => maxWidth - widths[i],
+                _ => 0f,
+            };
+            // 這一行被選取範圍切成最多三段：[0, s) [s, e) [e, len)
+            var s = Math.Clamp(start - offset, 0, line.Length);
+            var e = Math.Clamp(end - offset, 0, line.Length);
+            foreach (var (from, to, selected) in new[] { (0, s, false), (s, e, true), (e, line.Length, false) })
+            {
+                if (to <= from) continue;
+                var prefix = shaper.MeasureLine(line[..from]);
+                var position = LayoutToDoc(lineX + prefix, i * LineHeight);
+                pieces.Add(this with
+                {
+                    Id = Guid.NewGuid(),
+                    Text = line[from..to],
+                    Alignment = TextAlign.Left,
+                    Position = position,
+                    Deform = null,
+                });
+                if (selected) selectedIndex.Add(pieces.Count - 1);
+            }
+            offset += line.Length + 1;   // 加上換行字元
+        }
+        return pieces;
+    }
+
     /// <summary>
     /// 逐字字面後備的排版器：Skia 的 DrawText 不做字型後備，選到不含中文（或任何缺字）
     /// 的字型時會畫出 .notdef 豆腐框 —— 這裡把每行拆成「同字面的連續段」，缺字的段用

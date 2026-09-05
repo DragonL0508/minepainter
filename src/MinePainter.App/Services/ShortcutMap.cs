@@ -72,6 +72,7 @@ public static class ShortcutMap
         new("layer.duplicate", "圖層", "複製圖層", new KeyGesture(Key.D, KeyModifiers.Control | KeyModifiers.Shift)),
         new("layer.mergeDown", "圖層", "向下合併", new KeyGesture(Key.M, KeyModifiers.Control)),
         new("layer.flattenText", "圖層", "圖層文字平面化", null),
+        new("layer.splitText", "圖層", "分離選取的文字", new KeyGesture(Key.J, KeyModifiers.Control | KeyModifiers.Shift)),
         new("layer.import", "圖層", "從檔案匯入圖層", null),
         new("layer.flipH", "圖層", "水平翻轉圖層", null),
         new("layer.flipV", "圖層", "垂直翻轉圖層", null),

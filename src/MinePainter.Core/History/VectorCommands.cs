@@ -195,6 +195,97 @@ public static class VectorCommands
     }
 
     /// <summary>文字內容 → 圖層名（第一行，最多 24 字）。</summary>
+    /// <summary>
+    /// 把文字物件依選取範圍拆成獨立的文字圖層（之前／之中／之後，跨行再依行切），
+    /// 全部收進一個群組（名字沿用原圖層）。每一段都擺在原本字面的位置（見 <see cref="TextElement.SplitPieces"/>），
+    /// 圖層的效果、不透明度、混合模式每一段各帶一份，之後可以分別改樣式。
+    /// 一步 undo。回傳新群組與「選取那一段」的圖層；拆不了（範圍為空、只有一段、有彎曲變形）回 null。
+    /// </summary>
+    public static (GroupLayer Group, RasterLayer Selected)? SplitText(Document doc, HistoryManager history,
+        RasterLayer layer, TextElement element, int start, int length)
+    {
+        var parent = layer.Parent;
+        if (parent == null || layer.FindElement(element.Id) is not TextElement current) return null;
+        var pieces = current.SplitPieces(start, length, out var selectedIndex);
+        if (pieces.Count < 2 || selectedIndex.Count == 0) return null;
+
+        var group = new GroupLayer { Name = layer.Name };
+        var pieceLayers = new List<RasterLayer>();
+        foreach (var piece in pieces)
+        {
+            var pieceLayer = new RasterLayer
+            {
+                Name = TextLayerNameFor(piece.Text),
+                Offset = layer.Offset,
+                Opacity = layer.Opacity,
+                BlendMode = layer.BlendMode,
+                IsVisible = layer.IsVisible,
+            };
+            pieceLayer.AddElement(piece);
+            if (layer.HasEffects)
+                pieceLayer.SetEffects([.. layer.Effects.Select(fx => fx with { Id = Guid.NewGuid() })]);
+            pieceLayers.Add(pieceLayer);
+        }
+
+        // 原圖層上還有別的物件就留在群組最底下（只拿掉被拆的那一個）；只有這一個就整層換掉
+        var keepOriginal = layer.Elements.Count > 1;
+        int index;
+        lock (doc.SyncRoot)
+        {
+            index = parent.IndexOf(layer);
+            if (keepOriginal)
+            {
+                layer.RemoveElement(current.Id);
+                parent.RemoveAt(index);
+                group.Add(layer);
+            }
+            else
+            {
+                parent.RemoveAt(index);
+            }
+            foreach (var pieceLayer in pieceLayers) group.Add(pieceLayer);
+            parent.Insert(index, group);
+            doc.ActiveLayer = pieceLayers[selectedIndex[0]];
+        }
+
+        history.Push(new ActionHistoryEntry("分離文字", doc.Bounds,
+            undo: d =>
+            {
+                if (group.Children.Contains(d.ActiveLayer!) || ReferenceEquals(d.ActiveLayer, group)) d.ActiveLayer = layer;
+                parent.Remove(group);
+                foreach (var pieceLayer in pieceLayers) group.Remove(pieceLayer);
+                if (keepOriginal)
+                {
+                    group.Remove(layer);
+                    layer.AddElement(current);
+                }
+                parent.Insert(Math.Min(index, parent.Children.Count), layer);
+            },
+            redo: d =>
+            {
+                parent.Remove(layer);
+                if (keepOriginal)
+                {
+                    layer.RemoveElement(current.Id);
+                    group.Add(layer);
+                }
+                foreach (var pieceLayer in pieceLayers) group.Add(pieceLayer);
+                parent.Insert(Math.Min(index, parent.Children.Count), group);
+                d.ActiveLayer = pieceLayers[selectedIndex[0]];
+            },
+            onDispose: () =>
+            {
+                if (group.Document == null)
+                {
+                    foreach (var pieceLayer in pieceLayers) if (pieceLayer.Document == null) pieceLayer.Dispose();
+                    if (group.Children.Count == 0) group.Dispose();
+                }
+                else if (!keepOriginal && layer.Document == null) layer.Dispose();
+            }));
+        doc.NotifyChanged(doc.Bounds);
+        return (group, pieceLayers[selectedIndex[0]]);
+    }
+
     public static string TextLayerNameFor(string text)
     {
         var line = (text ?? "").Split('\n').Select(l => l.Trim()).FirstOrDefault(l => l.Length > 0) ?? "";

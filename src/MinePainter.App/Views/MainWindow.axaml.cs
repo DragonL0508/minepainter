@@ -3022,6 +3022,50 @@ public partial class MainWindow : Window
                 Toasts.Show("已將文字平面化為像素");
         });
 
+    /// <summary>
+    /// 分離選取的文字：正在畫布上編輯文字、且框選了一段 → 先落地這次編輯，再把那一段拆成獨立圖層
+    /// （前／中／後收進一個群組，像素位置不變）。沒有選取範圍就提示怎麼用。
+    /// 這是我們對「一段文字多種樣式」的作法：不做混合樣式，改用分開的圖層各自調（使用者 2026-09-06 明示）。
+    /// </summary>
+    private void OnSplitTextClicked(object? sender, RoutedEventArgs e)
+    {
+        var box = _canvasEditBox;
+        var layer = _canvasEditLayer;
+        var elementId = _canvasEditElement?.Id;
+        if (box == null || layer == null || elementId == null)
+        {
+            Toasts.Show("先用文字工具進入編輯、選取要分離的文字，再按一次");
+            return;
+        }
+        var start = Math.Min(box.SelectionStart, box.SelectionEnd);
+        var length = Math.Abs(box.SelectionEnd - box.SelectionStart);
+        if (length <= 0)
+        {
+            Toasts.Show("先選取要分離的那幾個字");
+            return;
+        }
+
+        CommitCanvasTextEdit();   // 這次編輯先進 history，分離另算一步
+        var session = Canvas.Session;
+        if (session == null || layer.FindElement(elementId.Value) is not TextElement element) return;
+        if (element.Deform is { IsIdentity: false })
+        {
+            Toasts.Show("有彎曲／透視變形的文字不能分離，先重設變形");
+            return;
+        }
+
+        session.SelectedElement = null;
+        var result = VectorCommands.SplitText(session.Document, session.History, layer, element, start, length);
+        if (result == null)
+        {
+            Toasts.Show("這段選取拆不出新的圖層（整段都選了？）");
+            return;
+        }
+        _layersContent.Refresh();
+        RefreshUiState();
+        Toasts.Show($"已分離成 {result.Value.Group.Children.Count} 個文字圖層，收在群組「{result.Value.Group.Name}」");
+    }
+
     // ---- 檢視 ----
 
     private void OnZoomInClicked(object? sender, RoutedEventArgs e) => Canvas.ZoomBy(1.25);
@@ -3158,6 +3202,7 @@ public partial class MainWindow : Window
             ["layer.duplicate"] = () => OnDuplicateLayerClicked(null, new RoutedEventArgs()),
             ["layer.mergeDown"] = () => OnMergeLayerDownClicked(null, new RoutedEventArgs()),
             ["layer.flattenText"] = () => OnFlattenTextClicked(null, new RoutedEventArgs()),
+            ["layer.splitText"] = () => OnSplitTextClicked(null, new RoutedEventArgs()),
 
             ["view.zoomIn"] = () => Canvas.ZoomBy(1.25),
             ["view.zoomOut"] = () => Canvas.ZoomBy(1 / 1.25),

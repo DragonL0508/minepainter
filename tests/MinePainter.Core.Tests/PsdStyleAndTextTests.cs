@@ -191,6 +191,32 @@ public class PsdStyleAndTextTests
     }
 
     [Fact]
+    public void Load_MixedStyleTextBecomesGroupOfPositionedPieces()
+    {
+        // 「AB」小字 + 「CD」大字紅色：兩個文字圖層收在群組裡，第二段的 x 緊接在第一段量出來的寬度之後
+        var engine = Desc.EngineData("ABCD\r", ["Arial-BoldMT", "Arial-BoldMT"],
+            [(2, 0, 20, [1.0, 0, 0, 0]), (3, 1, 40, [1.0, 1.0, 0, 0])], tracking: 0, justification: 0, autoLeading: 1.2);
+        var tySh = Desc.TySh(engine, tx: 100, ty: 200, boundsLeft: 0, boundsRight: 0, text: "ABCD\r");
+        var file = PsdFormatTests.PsdWriter.Build(400, 300, [Raster("mixed", 40, new() { ["TySh"] = tySh })]);
+
+        using var doc = PsdFormat.Load(new MemoryStream(file), out var warnings);
+
+        var group = Assert.IsType<GroupLayer>(Assert.Single(doc.Root.Children));
+        Assert.Equal("mixed", group.Name);
+        Assert.Equal(2, group.Children.Count);
+        var first = Assert.IsType<TextElement>(Assert.Single(((RasterLayer)group.Children[0]).Elements));
+        var second = Assert.IsType<TextElement>(Assert.Single(((RasterLayer)group.Children[1]).Elements));
+        Assert.Equal(("AB", 20f), (first.Text, first.FontSize));
+        Assert.Equal(("CD", 40f, new SKColor(255, 0, 0, 255)), (second.Text, second.FontSize, second.Color));
+
+        // 兩段都貼在同一條基線（y = 200）；第二段從第一段的寬度之後開始
+        Assert.Equal(100f, first.Position.X, 1);
+        Assert.Equal(100f + first.UnscaledWidth, second.Position.X, 1);
+        Assert.True(second.Position.Y < first.Position.Y, "大字的頂端要更高，才會貼在同一條基線上");
+        Assert.Contains(warnings, w => w.Contains("多種樣式"));
+    }
+
+    [Fact]
     public void Load_TextFallsBackToRasterWhenWarpedOrVertical()
     {
         var engine = Desc.EngineData("Arc\r", "Arial-BoldMT", 20, 0, [1.0, 0, 0, 0], 0, 1.2);
@@ -322,7 +348,12 @@ public class PsdStyleAndTextTests
         }
 
         public static byte[] EngineData(string text, string fontName, double fontSize, double tracking, double[] fill,
-            int justification, double autoLeading)
+            int justification, double autoLeading) =>
+            EngineData(text, [fontName], [(text.Length, 0, fontSize, fill)], tracking, justification, autoLeading);
+
+        /// <summary>多段樣式：每段（長度、FontSet 索引、字級、顏色）。</summary>
+        public static byte[] EngineData(string text, string[] fontNames, (int Length, int Font, double Size, double[] Fill)[] runs,
+            double tracking, int justification, double autoLeading)
         {
             var s = new MemoryStream();
             void W(string t) => s.Write(Encoding.ASCII.GetBytes(t));
@@ -330,16 +361,25 @@ public class PsdStyleAndTextTests
             s.Write(EngineString(text));
             W(" >> /ParagraphRun << /RunArray [ << /ParagraphSheet << /Properties << /Justification ");
             W($"{justification} /AutoLeading {autoLeading:0.0###} >> >> >> ] /RunLengthArray [ {text.Length} ] >>");
-            W(" /StyleRun << /RunArray [ << /StyleSheet << /StyleSheetData << /Font 0 /FontSize ");
-            W($"{fontSize:0.0###} /Tracking {tracking:0.0###} /AutoLeading true /FillColor << /Type 1 /Values [ ");
-            W(string.Join(' ', fill.Select(v => v.ToString("0.0###"))));
-            W($" ] >> >> >> >> ] /RunLengthArray [ {text.Length} ] >> >>");
+            W(" /StyleRun << /RunArray [ ");
+            foreach (var run in runs)
+            {
+                W($"<< /StyleSheet << /StyleSheetData << /Font {run.Font} /FontSize {run.Size:0.0###} /Tracking {tracking:0.0###} /AutoLeading true /FillColor << /Type 1 /Values [ ");
+                W(string.Join(' ', run.Fill.Select(v => v.ToString("0.0###"))));
+                W(" ] >> >> >> >> ");
+            }
+            W($"] /RunLengthArray [ {string.Join(' ', runs.Select(r => r.Length))} ] >> >>");
             W(" /ResourceDict << /TheNormalStyleSheet 0 /StyleSheetSet [ << /Name ");
             s.Write(EngineString("Normal"));
-            W(" /StyleSheetData << /Font 1 /FontSize 12.0 /FauxBold false /FauxItalic false /Underline false /Strikethrough false /HorizontalScale 1.0 /VerticalScale 1.0 >> >> ]");
-            W(" /FontSet [ << /Name ");
-            s.Write(EngineString(fontName));
-            W(" /Script 0 /FontType 1 >> << /Name ");
+            W(" /StyleSheetData << /Font 0 /FontSize 12.0 /FauxBold false /FauxItalic false /Underline false /Strikethrough false /HorizontalScale 1.0 /VerticalScale 1.0 >> >> ]");
+            W(" /FontSet [ ");
+            foreach (var name in fontNames)
+            {
+                W("<< /Name ");
+                s.Write(EngineString(name));
+                W(" /Script 0 /FontType 1 >> ");
+            }
+            W("<< /Name ");
             s.Write(EngineString("AdobeInvisFont"));
             W(" /Script 0 /FontType 0 >> ] >> >>");
             return s.ToArray();
