@@ -80,6 +80,8 @@ public static class EffectRegistry
         new("objectShadow", "物件", "陰影", () => new ObjectShadowEffect()),
         new("objectGlow", "物件", "光暈", () => new ObjectGlowEffect()),
         new("innerGlow", "物件", "內光暈", () => new InnerGlowEffect()),
+        new("innerShadow", "物件", "內陰影", () => new InnerShadowEffect()),
+        new("bevelEmboss", "物件", "斜角和浮雕", () => new BevelEmbossEffect()),
         new("objectFill", "物件", "塗色", () => new ObjectFillEffect()),
         new("objectGradient", "物件", "漸層", () => new ObjectGradientEffect()),
         new("objectFeather", "物件", "羽化", () => new ObjectFeatherEffect()),

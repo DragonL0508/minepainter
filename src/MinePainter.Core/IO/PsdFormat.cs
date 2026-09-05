@@ -740,17 +740,18 @@ public static class PsdFormat
                 else notes.Add($"「{layer.Name}」設了剪裁但底下沒有圖層，已當成一般圖層。");
             }
 
+            // 圖層樣式一律掛成效果堆疊（文字圖層也是），在圖層屬性的效果面板就能改
             var style = ParseStyle(record, header, layer.Name, notes);
-            if (record.TextData != null && BuildText(record, style, layer.Name, notes) is { } text)
+            if (style is { IsEmpty: false }) layer.SetEffects(style.ToLayerEffects());
+            if (style is { Unsupported.Count: > 0 })
+                notes.Add($"「{layer.Name}」的圖層樣式裡，{string.Join("、", style.Unsupported.Distinct())}沒有對應，已略過。");
+
+            if (record.TextData != null && BuildText(record, layer.Name, notes) is { } text)
             {
                 // 文字圖層不變式：有物件就沒有像素。點陣快照只留給剪裁／群組 alpha 當底用
                 layer.AddElement(text);
                 return layer;
             }
-
-            if (style is { IsEmpty: false }) layer.SetEffects(style.ToLayerEffects());
-            if (style is { Unsupported.Count: > 0 })
-                notes.Add($"「{layer.Name}」的圖層樣式裡，{string.Join("、", style.Unsupported.Distinct())}沒有對應，已略過。");
 
             if (!IsFullyTransparent(bgra)) CopyUnpremultiplied(layer, bgra, record.Rect);
             return layer;
@@ -881,8 +882,8 @@ public static class PsdFormat
         }
     }
 
-    /// <summary>解出可編輯文字並套上樣式；解不出來提示原因並回 null（呼叫端退回點陣）。</summary>
-    private static TextElement? BuildText(LayerRecord record, PsdLayerStyle? style, string name, List<string> notes)
+    /// <summary>解出可編輯文字；解不出來提示原因並回 null（呼叫端退回點陣）。</summary>
+    private static TextElement? BuildText(LayerRecord record, string name, List<string> notes)
     {
         TextElement? text;
         string? failure;
@@ -900,13 +901,6 @@ public static class PsdFormat
         {
             notes.Add($"文字圖層「{name}」已轉成像素（{failure}）。");
             return null;
-        }
-
-        if (style != null)
-        {
-            text = style.ApplyTo(text);
-            if (style.Unsupported.Count > 0)
-                notes.Add($"文字「{name}」的圖層樣式裡，{string.Join("、", style.Unsupported.Distinct())}沒有對應，已略過。");
         }
         return text;
     }

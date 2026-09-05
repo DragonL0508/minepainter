@@ -50,29 +50,76 @@ public class PsdStyleAndTextTests
 
         var layer = Assert.IsType<RasterLayer>(Assert.Single(doc.Root.Children));
         var effects = layer.Effects.Select(e => e.Effect).ToList();
-        Assert.Equal(4, effects.Count);
+        Assert.Equal(5, effects.Count);   // 塗色、內陰影、外框、光暈、陰影（PS 由下往上的順序）
 
         var fill = Assert.IsType<ObjectFillEffect>(effects[0]);
         Assert.Equal(new SKColor(10, 20, 30), fill.Color);
         Assert.Equal(40, fill.Opacity);
 
-        var outline = Assert.IsType<ObjectOutlineEffect>(effects[1]);
+        var innerShadow = Assert.IsType<InnerShadowEffect>(effects[1]);
+        Assert.Equal(35, innerShadow.Opacity);
+
+        var outline = Assert.IsType<ObjectOutlineEffect>(effects[2]);
         Assert.Equal(3, outline.Width);
         Assert.Equal(new SKColor(0, 0, 255, 255), outline.Color);
 
-        var glow = Assert.IsType<ObjectGlowEffect>(effects[2]);
+        var glow = Assert.IsType<ObjectGlowEffect>(effects[3]);
         Assert.Equal(8, glow.Size);
         Assert.Equal(4, glow.Spread);   // 50% 的 8
         Assert.Equal(50, glow.Opacity);
 
-        var shadow = Assert.IsType<ObjectShadowEffect>(effects[3]);
+        var shadow = Assert.IsType<ObjectShadowEffect>(effects[4]);
         Assert.Equal(5, shadow.OffsetX);
         Assert.Equal(9, shadow.OffsetY);
         Assert.Equal(6, shadow.Blur);
         Assert.Equal(75, shadow.Opacity);
         Assert.Equal(new SKColor(255, 0, 0), shadow.Color);
 
-        Assert.Contains(warnings, w => w.Contains("內陰影"));
+        Assert.DoesNotContain(warnings, w => w.Contains("內陰影"));
+    }
+
+    [Fact]
+    public void Load_MapsBevelInnerShadowAndStrokePosition()
+    {
+        var lfx2 = Desc.Lfx2(
+            ("ebbl", Desc.Fx(("bvlS", Desc.Enum("BESl", "OtrB")), ("bvlD", Desc.Enum("BESs", "Out")), ("Sz  ", Desc.Px(7)),
+                ("srgR", Desc.Prc(250)), ("Sftn", Desc.Px(2)), ("lagl", Desc.Ang(45)), ("Lald", Desc.Ang(60)),
+                ("hglC", Desc.Rgb(255, 255, 0)), ("hglO", Desc.Prc(60)), ("sdwC", Desc.Rgb(0, 0, 40)), ("sdwO", Desc.Prc(90)))),
+            ("IrSh", Desc.Fx(("Clr ", Desc.Rgb(10, 0, 0)), ("Opct", Desc.Prc(40)), ("lagl", Desc.Ang(90)), ("Dstn", Desc.Px(6)),
+                ("Ckmt", Desc.Px(20)), ("blur", Desc.Px(9)))),
+            ("FrFX", Desc.Fx(("Styl", Desc.Enum("FStl", "InsF")), ("Opct", Desc.Prc(100)), ("Sz  ", Desc.Px(5)), ("Clr ", Desc.Rgb(1, 2, 3)))));
+
+        var file = PsdFormatTests.PsdWriter.Build(16, 16, [Raster("styled", 16, new() { ["lfx2"] = lfx2 })]);
+        using var doc = PsdFormat.Load(new MemoryStream(file), out var warnings);
+
+        var layer = Assert.IsType<RasterLayer>(Assert.Single(doc.Root.Children));
+        var effects = layer.Effects.Select(e => e.Effect).ToList();
+        Assert.Equal(3, effects.Count);
+
+        var innerShadow = Assert.IsType<InnerShadowEffect>(effects[0]);
+        Assert.Equal(90f, innerShadow.Angle);
+        Assert.Equal(6, innerShadow.Distance);
+        Assert.Equal(9, innerShadow.Size);
+        Assert.Equal(20, innerShadow.Choke);
+        Assert.Equal(40, innerShadow.Opacity);
+
+        var bevel = Assert.IsType<BevelEmbossEffect>(effects[1]);
+        Assert.Equal(1, bevel.Style);
+        Assert.False(bevel.Up);
+        Assert.Equal(7, bevel.Size);
+        Assert.Equal(250, bevel.Depth);
+        Assert.Equal(2, bevel.Soften);
+        Assert.Equal(45f, bevel.Angle);
+        Assert.Equal(60f, bevel.Altitude);
+        Assert.Equal(new SKColor(255, 255, 0), bevel.HighlightColor);
+        Assert.Equal(60, bevel.HighlightOpacity);
+        Assert.Equal(90, bevel.ShadowOpacity);
+
+        var stroke = Assert.IsType<ObjectOutlineEffect>(effects[2]);
+        Assert.Equal(2, stroke.Position);
+        Assert.Equal(5, stroke.Width);
+
+        Assert.DoesNotContain(warnings, w => w.Contains("沒有對應"));
     }
 
     [Fact]
@@ -128,15 +175,17 @@ public class PsdStyleAndTextTests
         var width = text.UnscaledWidth * text.ScaleX;
         Assert.InRange(text.Position.X + width / 2, 99, 101);
 
-        var stroke = text.Stroke;
-        Assert.NotNull(stroke);
-        Assert.Equal(4f, stroke.Width, 2);
+        // 圖層樣式掛在圖層的效果堆疊（文字也一樣，統一在效果面板編輯）
+        var effects = layer.Effects.Select(e => e.Effect).ToList();
+        var stroke = Assert.IsType<ObjectOutlineEffect>(Assert.Single(effects, e => e is ObjectOutlineEffect));
+        Assert.Equal(4, stroke.Width);
+        Assert.Equal(0, stroke.Position);
         Assert.Equal(new SKColor(0, 0, 255, 255), stroke.Color);
-        var glow = text.Glow;
-        Assert.NotNull(glow);
-        Assert.Equal(12f, glow.Size, 2);
-        Assert.Equal(3f, glow.Spread, 2);
-        Assert.Equal(204, glow.Color.Alpha);
+        var glow = Assert.IsType<ObjectGlowEffect>(Assert.Single(effects, e => e is ObjectGlowEffect));
+        Assert.Equal(12, glow.Size);
+        Assert.Equal(3, glow.Spread);
+        Assert.Equal(80, glow.Opacity);
+        Assert.Null(text.Stroke);
 
         Assert.DoesNotContain(warnings, w => w.Contains("轉成像素"));
     }

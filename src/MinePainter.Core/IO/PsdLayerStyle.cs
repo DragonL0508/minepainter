@@ -1,32 +1,37 @@
 using MinePainter.Core.Effects;
-using MinePainter.Core.Vectors;
 using SkiaSharp;
 
 namespace MinePainter.Core.IO;
 
 /// <summary>
-/// Photoshop 圖層樣式（<c>lfx2</c>）→ 我們的效果。點陣圖層掛成非破壞性效果堆疊
-/// （<see cref="ObjectShadowEffect"/>、<see cref="ObjectGlowEffect"/>、<see cref="ObjectOutlineEffect"/>…），
-/// 文字圖層則寫進 <see cref="TextElement"/> 自己的外框／陰影／光暈／漸層。
+/// Photoshop 圖層樣式（<c>lfx2</c>）→ 我們的非破壞性效果堆疊
+/// （<see cref="ObjectShadowEffect"/>、<see cref="ObjectGlowEffect"/>、<see cref="ObjectOutlineEffect"/>、
+/// <see cref="InnerShadowEffect"/>、<see cref="BevelEmbossEffect"/>…）。文字圖層也一樣掛在圖層上 ——
+/// 統一在圖層屬性的效果面板編輯（之前文字寫進 TextElement 自己的外框／陰影，使用者找不到地方改）。
 ///
 /// 數值單位：描述子裡的長度就是文件像素（拿 350 ppi 的真檔對過 Photoshop 自己的合成影像：
 /// 乘上根目錄的 <c>Scl</c> 會大 4.86 倍，所以 <c>Scl</c> 不能用）；「展開／填塞」（Ckmt）是模糊大小的百分比。
 /// 角度是數學慣例（逆時針、0 = 右），光源角度指「光從哪來」，陰影落在對面；
 /// 勾了「使用整體光源」的用影像資源 1037 的整體角度。
 ///
-/// 對不上的（內陰影、斜角浮雕、緞面、圖樣覆蓋、內側筆畫、效果本身的混合模式）列在
-/// <see cref="Unsupported"/>，由呼叫端提示。
+/// 對不上的（緞面、圖樣覆蓋、效果本身的混合模式、輪廓曲線）列在 <see cref="Unsupported"/>，由呼叫端提示。
 /// </summary>
 internal sealed class PsdLayerStyle
 {
     public sealed record Stroke(float Size, SKColor Color, string Position, GradientStops? Gradient, float GradientAngle);
     public sealed record Shadow(SKColor Color, float Angle, float Distance, float Blur, float Spread);
+    /// <summary>內陰影：角度是 PS 原始的光源角度（數學慣例），InnerShadowEffect 直接吃。</summary>
+    public sealed record InnerShadowStyle(SKColor Color, float LightAngle, float Distance, float Size, int ChokePercent);
     public sealed record Glow(SKColor Color, float Size, float Spread);
+    public sealed record Bevel(int Style, bool Up, float Size, int Depth, float Soften, float LightAngle, float Altitude,
+        SKColor Highlight, int HighlightOpacity, SKColor ShadowColor, int ShadowOpacity);
     public sealed record Overlay(SKColor Color, int Opacity);
     public sealed record GradientOverlay(GradientStops Stops, float Angle, bool Radial, int Opacity);
 
     public List<Stroke> Strokes { get; } = [];
     public Shadow? DropShadow { get; private set; }
+    public InnerShadowStyle? InnerShadow { get; private set; }
+    public Bevel? BevelEmboss { get; private set; }
     public Glow? OuterGlow { get; private set; }
     public Glow? InnerGlow { get; private set; }
     public Overlay? ColorOverlay { get; private set; }
@@ -34,7 +39,7 @@ internal sealed class PsdLayerStyle
     public List<string> Unsupported { get; } = [];
 
     public bool IsEmpty => Strokes.Count == 0 && DropShadow == null && OuterGlow == null && InnerGlow == null
-        && ColorOverlay == null && Gradient == null;
+        && ColorOverlay == null && Gradient == null && InnerShadow == null && BevelEmboss == null;
 
     /// <summary>解析 lfx2 區塊；整組被關掉（masterFXSwitch）或格式不對回 null。</summary>
     public static PsdLayerStyle? Parse(byte[] block, int globalAngle)
@@ -61,8 +66,10 @@ internal sealed class PsdLayerStyle
         foreach (var fx in Instances(root, "GrFl", "gradientFillMulti"))
             style.Gradient ??= ReadGradient(fx);
 
-        if (Instances(root, "IrSh", "innerShadowMulti").Any()) style.Unsupported.Add("內陰影");
-        if (Instances(root, "ebbl", null).Any()) style.Unsupported.Add("斜角和浮雕");
+        foreach (var fx in Instances(root, "IrSh", "innerShadowMulti"))
+            style.InnerShadow ??= ReadInnerShadow(fx, scale, globalAngle);
+        foreach (var fx in Instances(root, "ebbl", null))
+            style.BevelEmboss ??= ReadBevel(fx, scale, globalAngle);
         if (Instances(root, "ChFX", null).Any()) style.Unsupported.Add("緞面");
         if (Instances(root, "patternFill", null).Any()) style.Unsupported.Add("圖樣覆蓋");
 
@@ -96,6 +103,42 @@ internal sealed class PsdLayerStyle
         return new Shadow(color, shadowAngle, (float)(fx.Number("Dstn") ?? 0) * scale, blur, SpreadOf(fx, blur));
     }
 
+    private static InnerShadowStyle ReadInnerShadow(PsdDescriptor fx, float scale, int globalAngle)
+    {
+        var color = WithOpacity(fx.Color("Clr ") ?? SKColors.Black, fx);
+        var lightAngle = (float)(fx.Bool("uglg") == true ? globalAngle : fx.Number("lagl") ?? 120);
+        return new InnerShadowStyle(color, lightAngle,
+            (float)(fx.Number("Dstn") ?? 0) * scale,
+            (float)(fx.Number("blur") ?? 0) * scale,
+            (int)Math.Clamp(Math.Round(fx.Number("Ckmt") ?? 0), 0, 100));
+    }
+
+    /// <summary>
+    /// 斜角和浮雕：bvlS 樣式（InrB 內斜角／OtrB 外斜角／Embs 浮雕／PlEb 枕狀浮雕／strokeEmboss 筆畫浮雕→浮雕）、
+    /// bvlD 方向（In 上／Out 下）、Sz 大小、srgR 深度 %、Sftn 柔化、lagl／Lald 光源方位與高度、
+    /// hglC／hglO 亮部色與不透明度、sdwC／sdwO 陰影色與不透明度。
+    /// </summary>
+    private static Bevel ReadBevel(PsdDescriptor fx, float scale, int globalAngle)
+    {
+        var style = fx.Enum("bvlS") switch
+        {
+            "OtrB" => 1,
+            "Embs" or "strokeEmboss" => 2,
+            "PlEb" => 3,
+            _ => 0,
+        };
+        var up = fx.Enum("bvlD") != "Out";
+        var lightAngle = (float)(fx.Bool("uglg") == true ? globalAngle : fx.Number("lagl") ?? 120);
+        return new Bevel(style, up,
+            (float)(fx.Number("Sz  ") ?? 5) * scale,
+            (int)Math.Clamp(Math.Round(fx.Number("srgR") ?? 100), 1, 1000),
+            (float)(fx.Number("Sftn") ?? 0) * scale,
+            lightAngle,
+            (float)(fx.Number("Lald") ?? 30),
+            fx.Color("hglC") ?? SKColors.White, (int)Math.Clamp(Math.Round(fx.Number("hglO") ?? 75), 0, 100),
+            fx.Color("sdwC") ?? SKColors.Black, (int)Math.Clamp(Math.Round(fx.Number("sdwO") ?? 75), 0, 100));
+    }
+
     private static Glow ReadGlow(PsdDescriptor fx, float scale)
     {
         var size = (float)(fx.Number("blur") ?? 0) * scale;
@@ -111,7 +154,6 @@ internal sealed class PsdLayerStyle
         var size = (float)(fx.Number("Sz  ") ?? 0) * scale;
         if (size <= 0) return null;
         var position = fx.Enum("Styl") ?? "OutF";
-        if (position == "InsF") unsupported.Add("內側筆畫");
 
         var paint = fx.Enum("PntT") ?? "SClr";
         if (paint == "Ptrn") unsupported.Add("圖樣筆畫");
@@ -162,8 +204,9 @@ internal sealed class PsdLayerStyle
     // ---- 套到點陣圖層 ----
 
     /// <summary>
-    /// 效果堆疊的順序有講究：覆蓋類不會長大、先做；外框描在內容外；光暈與陰影最後
-    /// —— 它們算的是「內容 + 外框」的形狀，才會像 PS 那樣包在筆畫外面。
+    /// 效果堆疊的順序有講究（PS 由下往上：陰影、外光暈、內容、覆蓋、內光暈、內陰影、斜角、筆畫）：
+    /// 覆蓋類不會長大、先做；內光暈／內陰影／斜角只畫在內容裡；外框描在內容外；
+    /// 光暈與陰影最後 —— 它們算的是「內容 + 外框」的形狀，才會像 PS 那樣包在筆畫外面。
     /// </summary>
     public IReadOnlyList<LayerEffect> ToLayerEffects()
     {
@@ -181,12 +224,27 @@ internal sealed class PsdLayerStyle
                 Color = inner.Color.WithAlpha(255), Opacity = Percent(inner.Color.Alpha),
                 Size = Math.Clamp((int)Math.Round(inner.Size), 1, 100), Spread = Math.Clamp((int)Math.Round(inner.Spread), 0, 30),
             }, color: inner.Color));
+        if (InnerShadow is { } innerShadow)
+            effects.Add(LayerEffect.Create(new InnerShadowEffect
+            {
+                Color = innerShadow.Color.WithAlpha(255), Opacity = Percent(innerShadow.Color.Alpha),
+                Angle = innerShadow.LightAngle, Distance = Math.Clamp((int)Math.Round(innerShadow.Distance), 0, 50),
+                Size = Math.Clamp((int)Math.Round(innerShadow.Size), 0, 50), Choke = innerShadow.ChokePercent, RelativeToObject = false,
+            }, color: innerShadow.Color));
+        if (BevelEmboss is { } bevel)
+            effects.Add(LayerEffect.Create(new BevelEmbossEffect
+            {
+                Style = bevel.Style, Up = bevel.Up, Size = Math.Clamp((int)Math.Round(bevel.Size), 1, 50), Depth = bevel.Depth,
+                Soften = Math.Clamp((int)Math.Round(bevel.Soften), 0, 16), Angle = bevel.LightAngle, Altitude = bevel.Altitude,
+                HighlightColor = bevel.Highlight, HighlightOpacity = bevel.HighlightOpacity,
+                ShadowColor = bevel.ShadowColor, ShadowOpacity = bevel.ShadowOpacity, RelativeToObject = false,
+            }));
         foreach (var stroke in Strokes.OrderBy(s => s.Size))
         {
-            var width = stroke.Position == "CtrF" ? stroke.Size / 2 : stroke.Size;
             effects.Add(LayerEffect.Create(new ObjectOutlineEffect
             {
-                Width = Math.Clamp((int)Math.Round(width), 1, 100), Color = stroke.Color,
+                Width = Math.Clamp((int)Math.Round(stroke.Size), 1, 100), Color = stroke.Color,
+                Position = stroke.Position switch { "InsF" => 2, "CtrF" => 1, _ => 0 },
                 Gradient = stroke.Gradient != null, GradientAngle = stroke.GradientAngle, RelativeToObject = false,
                 GradientStops = stroke.Gradient ?? GradientStops.Two(stroke.Color, SKColors.White),
             }, color: stroke.Color));
@@ -212,66 +270,4 @@ internal sealed class PsdLayerStyle
     }
 
     private static int Percent(byte alpha) => (int)Math.Round(alpha / 2.55);
-
-    // ---- 套到文字 ----
-
-    /// <summary>文字用自己的外框／陰影／光暈／漸層；內光暈文字沒有，記到 <see cref="Unsupported"/>。</summary>
-    public TextElement ApplyTo(TextElement text)
-    {
-        if (InnerGlow != null) Unsupported.Add("內光暈");
-
-        if (Strokes.Count > 0)
-        {
-            // PS 多重筆畫：清單前面的畫在上面；同為外側時，粗的被細的蓋住只露出差值 → 由內而外的寬度取差
-            var layers = new List<TextStroke>();
-            var previous = 0f;
-            foreach (var stroke in Strokes.OrderBy(s => s.Size))
-            {
-                var visible = (stroke.Position == "CtrF" ? stroke.Size / 2 : stroke.Size) - previous;
-                if (visible <= 0.5f) continue;
-                previous += visible;
-                layers.Add(new TextStroke
-                {
-                    Color = stroke.Color, Width = visible,
-                    Gradient = stroke.Gradient == null ? null : new TextGradient
-                    {
-                        Start = stroke.Gradient.First, End = stroke.Gradient.Last, Angle = stroke.GradientAngle,
-                    },
-                });
-            }
-            text = text with { Stroke = TextStroke.FromLayers(layers) };
-        }
-
-        if (DropShadow is { } shadow)
-            text = text with
-            {
-                Shadow = new TextShadow
-                {
-                    Color = shadow.Color, Angle = shadow.Angle, Distance = shadow.Distance, Blur = shadow.Blur, Spread = shadow.Spread,
-                },
-            };
-
-        if (OuterGlow is { } glow)
-            text = text with { Glow = new TextGlow { Color = glow.Color, Size = Math.Max(1, glow.Size), Spread = glow.Spread } };
-
-        if (Gradient is { } gradient)
-            text = text with
-            {
-                Gradient = new TextGradient
-                {
-                    Start = gradient.Stops.First, End = gradient.Stops.Last, Angle = gradient.Angle, Radial = gradient.Radial,
-                },
-            };
-        else if (ColorOverlay is { } overlay)
-            text = text with { Color = Blend(text.Color, overlay.Color, overlay.Opacity) };
-
-        return text;
-    }
-
-    private static SKColor Blend(SKColor under, SKColor over, int percent)
-    {
-        var t = percent / 100f;
-        byte Mix(byte a, byte b) => (byte)Math.Round(a + (b - a) * t);
-        return new SKColor(Mix(under.Red, over.Red), Mix(under.Green, over.Green), Mix(under.Blue, over.Blue), under.Alpha);
-    }
 }

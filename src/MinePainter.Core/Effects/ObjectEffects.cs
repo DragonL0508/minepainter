@@ -338,11 +338,25 @@ public sealed record ObjectOutlineEffect : IEffect
     /// 與傾斜、漸層的同名選項是同一件事（見 <see cref="EffectContext.ContentRotation"/>）。</summary>
     public bool RelativeToObject { get; init; } = true;
 
+    public static readonly string[] PositionNames = ["外側", "中央", "內側"];
+
+    /// <summary>
+    /// 外框畫在邊緣的哪一側（PS 筆畫的「位置」）：0 外側（預設，往外長）、1 中央（內外各一半）、2 內側（往內長，不會變胖）。
+    /// 內側那一半以「到透明的距離」量，只畫在物件本身的像素上，形狀外框不會長大。
+    /// </summary>
+    public int Position { get; init; }
+
     public string Name => "外框";
     public string Category => "物件";
 
     private int ClampedWidth => Math.Min(Width, 100);
     private int ClampedSmooth => Math.Clamp(Smooth, 0, 20);
+
+    /// <summary>往外長的那一部分寬度（外側＝全部、中央＝一半、內側＝0）。</summary>
+    private int OuterWidth => Position switch { 1 => (ClampedWidth + 1) / 2, 2 => 0, _ => ClampedWidth };
+
+    /// <summary>往內長的那一部分寬度。</summary>
+    private int InnerWidth => Position switch { 1 => ClampedWidth / 2, 2 => ClampedWidth, _ => 0 };
 
     /// <summary>
     /// 漸層要看整個內容的外接框，所以得整層算；純色只需要外框寬度的來源餘裕。
@@ -350,13 +364,16 @@ public sealed record ObjectOutlineEffect : IEffect
     /// </summary>
     public int SourceMargin => Gradient ? EffectContext.WholeLayer : ClampedWidth + ClampedSmooth * 2 + 2;
 
-    /// <summary>輸出會延伸到內容外多遠（快取範圍用）：補平的凹縫最遠離原內容 r。</summary>
-    public int OutputMargin => ClampedWidth + ClampedSmooth + 2;
+
+    /// <summary>輸出會延伸到內容外多遠（快取範圍用）：補平的凹縫最遠離原內容 r；內側外框不會長出去。</summary>
+    public int OutputMargin => OuterWidth == 0 ? 0 : OuterWidth + ClampedSmooth + 2;
 
     private static readonly ParamDef[] Params =
     [
         new SliderParam("width", "寬度", 1, 60, o => ((ObjectOutlineEffect)o).Width,
             (o, v) => ((ObjectOutlineEffect)o) with { Width = (int)v }) { Geometric = true },
+        new ChoiceParam("position", "位置", PositionNames, o => ((ObjectOutlineEffect)o).Position,
+            (o, v) => ((ObjectOutlineEffect)o) with { Position = Math.Clamp(v, 0, 2) }),
         new SliderParam("softness", "柔邊", 0, 100, o => ((ObjectOutlineEffect)o).Softness,
             (o, v) => ((ObjectOutlineEffect)o) with { Softness = (int)v }),
         new SliderParam("smooth", "平滑", 0, 20, o => ((ObjectOutlineEffect)o).Smooth,
@@ -378,9 +395,12 @@ public sealed record ObjectOutlineEffect : IEffect
     public void Render(EffectContext ctx)
     {
         var width = ClampedWidth;
+        var outer = OuterWidth;
+        var inner = InnerWidth;
         var smooth = ClampedSmooth;
         var pad = width + smooth * 2 + 2;
-        var dist = DistanceTransform.FromAlphaClosed(ctx, pad, smooth, Math.Min(smooth, width / 2));
+        var dist = outer > 0 ? DistanceTransform.FromAlphaClosed(ctx, pad, smooth, Math.Min(smooth, outer / 2)) : null;
+        var distIn = inner > 0 ? DistanceTransform.ToTransparent(ctx, pad, canvasEdge: false) : null;
         var dw = ctx.Width + pad * 2;
         var soft = Math.Max(0.5f, width * Softness / 100f);
         var color = Color;
@@ -403,18 +423,36 @@ public sealed record ObjectOutlineEffect : IEffect
             for (var x = 0; x < ctx.Width; x++)
             {
                 var src = ctx.SrcAt(x, y);
-                var d = dist[(y + pad) * dw + (x + pad)];
-                var coverage = soft <= 0.5f
-                    ? Math.Clamp(width - d + 0.5f, 0f, 1f)
-                    : Math.Clamp((width - d + 0.5f) / soft, 0f, 1f);
-                if (coverage <= 0f)
+                var i = (y + pad) * dw + (x + pad);
+                var result = src;
+                SKColor? c = null;
+                if (dist != null)
                 {
-                    ctx.Dst[y * ctx.Width + x] = src;
-                    continue;
+                    // 外側：墊在內容底下
+                    var d = dist[i];
+                    var coverage = soft <= 0.5f
+                        ? Math.Clamp(outer - d + 0.5f, 0f, 1f)
+                        : Math.Clamp((outer - d + 0.5f) / soft, 0f, 1f);
+                    if (coverage > 0f)
+                    {
+                        c ??= ramp?.At(x, y) ?? color;
+                        result = Over(result, FromColor(c.Value, (int)(c.Value.Alpha * coverage)));
+                    }
                 }
-                var c = ramp?.At(x, y) ?? color;
-                var outline = FromColor(c, (int)(c.Alpha * coverage));
-                ctx.Dst[y * ctx.Width + x] = Over(src, outline);
+                if (distIn != null && A(src) > 0)
+                {
+                    // 內側：離透明愈近愈滿；畫在內容上面、只畫在物件自己的像素上（乘上自己的 alpha）
+                    var d = distIn[i];
+                    var coverage = soft <= 0.5f
+                        ? Math.Clamp(inner - d + 0.5f, 0f, 1f)
+                        : Math.Clamp((inner - d + 0.5f) / soft, 0f, 1f);
+                    if (coverage > 0f)
+                    {
+                        c ??= ramp?.At(x, y) ?? color;
+                        result = Over(FromColor(c.Value, (int)(c.Value.Alpha * coverage * A(src) / 255f)), result);
+                    }
+                }
+                ctx.Dst[y * ctx.Width + x] = result;
             }
         });
     }
