@@ -45,18 +45,23 @@ public static class SelectionCommands
         return true;
     }
 
+    /// <summary>
+    /// 修飾鍵 → 選取的合併方式。減選一律是「反向鍵」：Alt（Photoshop 的鍵，
+    /// 與其他工具的 Alt＝反向一致）或 Ctrl（本來就有的鍵，留著不動）都算。
+    /// 加選 Shift；兩個一起按＝交集。
+    /// </summary>
     public static SelectionCombineMode ModeFrom(ToolModifiers mods)
     {
         var shift = mods.HasFlag(ToolModifiers.Shift);
-        var ctrl = mods.HasFlag(ToolModifiers.Ctrl);
-        if (shift && ctrl) return SelectionCombineMode.Intersect;
+        var subtract = mods.HasFlag(ToolModifiers.Ctrl) || mods.HasFlag(ToolModifiers.Alt);
+        if (shift && subtract) return SelectionCombineMode.Intersect;
         if (shift) return SelectionCombineMode.Add;
-        if (ctrl) return SelectionCombineMode.Subtract;
+        if (subtract) return SelectionCombineMode.Subtract;
         return SelectionCombineMode.Replace;
     }
 }
 
-/// <summary>矩形選取：拖曳出矩形，Shift 加選 / Ctrl 減選 / Shift+Ctrl 交集。</summary>
+/// <summary>矩形選取：拖曳出矩形，Shift 加選 / Alt（或 Ctrl）減選 / 兩個一起按＝交集。</summary>
 public sealed class RectangleSelectTool : ITool
 {
     public string Name => "矩形選取";
@@ -132,7 +137,7 @@ public sealed class RectangleSelectTool : ITool
 }
 
 /// <summary>
-/// 橢圓（圓形）選取：拖出外接矩形。Ctrl 減選 / Shift+Ctrl 交集（與矩形選取同一套），
+/// 橢圓（圓形）選取：拖出外接矩形。Alt（或 Ctrl）減選 / 再加 Shift＝交集（與矩形選取同一套），
 /// **Shift 拖出正圓**（與形狀工具同一個約束，見 <see cref="ShapeTool.Constrain"/>）——
 /// Shift 在選取工具裡本來就是「加選」，兩件事會同時發生：加一個正圓進選取範圍。
 /// </summary>

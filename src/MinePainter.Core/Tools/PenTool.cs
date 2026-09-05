@@ -41,6 +41,10 @@ public sealed class PenTool : ITool
 
     public void OnPointerDown(ToolPointerEvent e, EditorSession session)
     {
+        // 文字圖層拒收：路徑最後只有「轉為選取／描邊／填滿」三條出路，三條在文字圖層上都會被擋
+        // （同不變式：有物件的圖層沒有像素）。讓人畫了半天路徑才發現不能用是最糟的。
+        if (PenCommands.RefuseOnTextLayer(session)) return;
+
         var p = e.DocPosition;
         _tolerance = ToleranceFor(e);
         _press = p;
@@ -256,6 +260,16 @@ public static class PenCommands
             IsAntialias = true,
         };
         return Rasterize(session, "填滿路徑", sk.Bounds, canvas => canvas.DrawPath(sk, paint));
+    }
+
+    /// <summary>
+    /// 文字圖層上不給用鋼筆：路徑的三個出口（轉為選取／描邊／填滿）在文字圖層都會被拒絕。
+    /// </summary>
+    public static bool RefuseOnTextLayer(EditorSession session)
+    {
+        if (session.Document.ActiveLayer is not RasterLayer { IsTextLayer: true }) return false;
+        session.Notify("文字圖層不能用鋼筆；要畫路徑請先「圖層文字平面化」或換一個圖層");
+        return true;
     }
 
     /// <summary>把繪製動作烙進作用中圖層（doc 座標），記單一步 undo（同形狀工具）。</summary>

@@ -19,10 +19,10 @@ public sealed class ToolsPanelContent : UserControl
     private static readonly (string Key, MaterialIconKind Icon, string Tip)[][] Groups =
     [
         [
-            ("rectselect", MaterialIconKind.Select, "矩形選取 (S)"),
-            ("ellipseselect", MaterialIconKind.SelectionEllipse, "橢圓選取 (C)：拖出外接矩形；Shift 加選、Ctrl 減選"),
-            ("lasso", MaterialIconKind.Lasso, "套索選取 (L)"),
-            ("wand", MaterialIconKind.AutoFix, "魔術棒 (W)"),
+            ("rectselect", MaterialIconKind.Select, "矩形選取 (S)：Shift 加選、Alt（或 Ctrl）減選、兩個一起按＝交集"),
+            ("ellipseselect", MaterialIconKind.SelectionEllipse, "橢圓選取 (C)：拖出外接矩形；Shift 加選、Alt（或 Ctrl）減選"),
+            ("lasso", MaterialIconKind.Lasso, "套索選取 (L)：Shift 加選、Alt（或 Ctrl）減選"),
+            ("wand", MaterialIconKind.AutoFix, "魔術棒 (W)：Shift 加選、Alt（或 Ctrl）減選"),
             ("move", MaterialIconKind.CursorMove, "移動 (M)"),
             ("pen", MaterialIconKind.VectorBezier, "鋼筆 (P)：點一下加角點、按住拖曳拉出曲線、點回起點封閉；Enter 轉為選取、Backspace 退一點、Esc 清除"),
         ],
