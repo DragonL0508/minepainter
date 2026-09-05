@@ -23,7 +23,10 @@ namespace MinePainter.Core.IO;
 /// 每個通道各存一份（planar），壓縮方式有原始、PackBits RLE、zlib、zlib＋逐列差分預測。
 /// 通道編號 0／1／2 是 R／G／B（灰階與索引色只有 0），−1 是透明度，−2 是使用者遮色片。
 ///
-/// 刻意不做的：調整圖層與填色圖層（沒有像素，略過並提示）、剪裁遮色片、
+/// 剪裁遮色片（clipping）烙成像素：被剪裁圖層的 alpha 乘上底下那層的 alpha。剪裁到群組時，
+/// 底是群組合成後的透明度，所以每個群組邊讀邊累加一張畫布大小的 alpha（混合模式不影響 alpha，只看不透明度）。
+///
+/// 刻意不做的：調整圖層與填色圖層（沒有像素，略過並提示）、圖層樣式（陰影、外框…只提示）、
 /// 智慧型物件的可編輯性（只拿它的點陣結果）、32 位元／通道的 HDR 檔。
 /// 文字圖層拿 Photoshop 存好的點陣快照匯入成像素圖層（字型、字距在 PSD 裡是私有格式）。
 /// </summary>
@@ -187,6 +190,7 @@ public static class PsdFormat
         public int SectionType;     // lsct：0 一般、1／2 群組本體、3 群組底部界線
         public bool IsText;
         public bool IsAdjustmentOrFill;
+        public bool HasLayerStyle;
     }
 
     /// <summary>附加資訊區塊中，PSB 用 8 位元組長度的那幾個 key（其餘仍是 4 位元組）。</summary>
@@ -256,9 +260,6 @@ public static class PsdFormat
             }
         }
 
-        // 混合模式與剪裁的提醒放在讀完之後，避免同一句話在每個通道重複
-        if (records.Any(r => r.Clipped && r.SectionType == 0))
-            notes.Add("剪裁遮色片沒有對應，被剪裁的圖層已當成一般圖層。");
         return records;
     }
 
@@ -370,6 +371,10 @@ public static class PsdFormat
                 break;
             case "TySh":
                 record.IsText = true;
+                break;
+            case "lfx2":
+            case "lrFX":
+                record.HasLayerStyle = true;
                 break;
             default:
                 if (AdjustmentAndFillKeys.Contains(key)) record.IsAdjustmentOrFill = true;
@@ -531,6 +536,12 @@ public static class PsdFormat
         var opened = new List<GroupLayer>();
         GroupLayer Current() => stack.Count > 0 ? stack.Peek() : document.Root;
 
+        // 剪裁的底：最近一個沒被剪裁的點陣圖層（含它的遮色片），或剛收尾的群組（它累加出來的 alpha）。
+        // 進入新群組時清掉 —— 群組裡第一層不可能剪裁到群組外面。
+        ClipBase? clipBase = null;
+        var planes = new Stack<AlphaPlane>();
+        planes.Push(new AlphaPlane(document.Width, document.Height));
+
         try
         {
             foreach (var record in records)
@@ -541,6 +552,8 @@ public static class PsdFormat
                         var group = new GroupLayer();
                         stack.Push(group);
                         opened.Add(group);
+                        planes.Push(new AlphaPlane(document.Width, document.Height));
+                        clipBase = null;
                         break;
 
                     case 1:
@@ -554,11 +567,20 @@ public static class PsdFormat
                         opened.Remove(finished);
                         ApplyProperties(finished, record, notes, isGroup: true);
                         Current().Add(finished);
+
+                        var groupPlane = planes.Pop();
+                        if (finished.IsVisible) planes.Peek().Accumulate(groupPlane, finished.Opacity);
+                        clipBase = new ClipBase(null, SKRectI.Empty, groupPlane, finished.IsVisible);
                         break;
 
                     default:
-                        var layer = BuildRasterLayer(record, header, palette, notes);
-                        if (layer != null) Current().Add(layer);
+                        var layer = BuildRasterLayer(record, header, palette, notes, record.Clipped ? clipBase : null, out var bgra);
+                        if (layer == null) break;
+                        Current().Add(layer);
+                        if (record.Clipped && clipBase is { Visible: false }) layer.IsVisible = false;   // 底層藏著，剪裁上去的也看不到
+                        if (layer.IsVisible && bgra != null) planes.Peek().Accumulate(bgra, record.Rect, layer.Opacity);
+                        if (!record.Clipped)
+                            clipBase = new ClipBase(bgra, bgra == null ? SKRectI.Empty : record.Rect, null, layer.IsVisible);
                         break;
                 }
             }
@@ -588,8 +610,68 @@ public static class PsdFormat
         node.BlendMode = MapBlendMode(record.BlendKey, node.Name, isGroup, notes);
     }
 
-    private static RasterLayer? BuildRasterLayer(LayerRecord record, Header header, byte[]? palette, List<string> notes)
+    /// <summary>
+    /// 剪裁的底層：點陣圖層給直通 alpha 的 BGRA 與它在文件上的範圍（空範圍＝沒有像素，剪裁後全透明）；
+    /// 群組給累加好的畫布 alpha。<paramref name="Visible"/> 是底層本身有沒有顯示。
+    /// </summary>
+    private sealed record ClipBase(byte[]? Bgra, SKRectI Rect, AlphaPlane? Plane, bool Visible);
+
+    /// <summary>畫布大小的透明度累加器：一層層 src-over 疊上去，就是群組合成後的 alpha。畫布外的不記（剪裁到畫布外看不到）。</summary>
+    private sealed class AlphaPlane
     {
+        private readonly byte[] _alpha;
+        private readonly int _width;
+        private readonly int _height;
+
+        public AlphaPlane(int width, int height)
+        {
+            _width = width;
+            _height = height;
+            _alpha = new byte[width * height];
+        }
+
+        public byte At(int x, int y) =>
+            x < 0 || y < 0 || x >= _width || y >= _height ? (byte)0 : _alpha[y * _width + x];
+
+        public void Accumulate(byte[] bgra, SKRectI rect, float opacity)
+        {
+            var scale = (int)Math.Round(opacity * 255);
+            var left = Math.Max(rect.Left, 0);
+            var top = Math.Max(rect.Top, 0);
+            var right = Math.Min(rect.Right, _width);
+            var bottom = Math.Min(rect.Bottom, _height);
+            for (var y = top; y < bottom; y++)
+            {
+                for (var x = left; x < right; x++)
+                {
+                    var a = bgra[((y - rect.Top) * rect.Width + (x - rect.Left)) * 4 + 3] * scale / 255;
+                    Over(y * _width + x, a);
+                }
+            }
+        }
+
+        public void Accumulate(AlphaPlane other, float opacity)
+        {
+            var scale = (int)Math.Round(opacity * 255);
+            for (var i = 0; i < _alpha.Length; i++)
+                Over(i, other._alpha[i] * scale / 255);
+        }
+
+        private void Over(int index, int a)
+        {
+            if (a == 0) return;
+            _alpha[index] = (byte)(a + _alpha[index] * (255 - a) / 255);
+        }
+    }
+
+    /// <summary>
+    /// 組出一個點陣圖層。<paramref name="clipBase"/> 非 null 時把它的 alpha 乘進來（Photoshop 的剪裁遮色片）；
+    /// <paramref name="bgra"/> 回傳這層算好的直通 alpha 像素，供下一層當剪裁的底。
+    /// </summary>
+    private static RasterLayer? BuildRasterLayer(
+        LayerRecord record, Header header, byte[]? palette, List<string> notes, ClipBase? clipBase, out byte[]? bgra)
+    {
+        bgra = null;
         var layer = new RasterLayer();
         ApplyProperties(layer, record, notes, isGroup: false);
         try
@@ -607,9 +689,16 @@ public static class PsdFormat
 
             if (record.IsText)
                 notes.Add($"文字圖層「{layer.Name}」已轉成像素（Photoshop 的文字排版無法對應）。");
+            if (record.HasLayerStyle)
+                notes.Add($"「{layer.Name}」的圖層樣式（陰影、外框等）沒有匯入。");
 
-            var bgra = ComposeBgra(record, header, palette);
+            bgra = ComposeBgra(record, header, palette);
             if (record.HasMask) ApplyMask(bgra, record);
+            if (record.Clipped)
+            {
+                if (clipBase != null) ApplyClip(bgra, record.Rect, clipBase);
+                else notes.Add($"「{layer.Name}」設了剪裁但底下沒有圖層，已當成一般圖層。");
+            }
             if (!IsFullyTransparent(bgra)) CopyUnpremultiplied(layer, bgra, record.Rect);
             return layer;
         }
@@ -717,6 +806,29 @@ public static class PsdFormat
 
                 var i = (y * width + x) * 4 + 3;
                 bgra[i] = (byte)((bgra[i] * coverage + 127) / 255);
+            }
+        }
+    }
+
+    /// <summary>剪裁遮色片：只留底層有像素的地方。底層範圍外一律透明。</summary>
+    private static void ApplyClip(byte[] bgra, SKRectI rect, ClipBase clipBase)
+    {
+        var width = rect.Width;
+        for (var y = 0; y < rect.Height; y++)
+        {
+            var docY = rect.Top + y;
+            for (var x = 0; x < width; x++)
+            {
+                var docX = rect.Left + x;
+                var i = (y * width + x) * 4 + 3;
+                int baseAlpha;
+                if (clipBase.Plane != null)
+                    baseAlpha = clipBase.Plane.At(docX, docY);
+                else if (clipBase.Bgra != null && clipBase.Rect.Contains(docX, docY))
+                    baseAlpha = clipBase.Bgra[((docY - clipBase.Rect.Top) * clipBase.Rect.Width + (docX - clipBase.Rect.Left)) * 4 + 3];
+                else
+                    baseAlpha = 0;
+                bgra[i] = (byte)((bgra[i] * baseAlpha + 127) / 255);
             }
         }
     }

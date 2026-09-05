@@ -156,6 +156,60 @@ public class PsdFormatTests
     }
 
     [Fact]
+    public void Load_ClipsToLayerBelowAndToGroupAlpha()
+    {
+        // 底層只有左半有像素；剪裁上去的整張紅只能留在左半。
+        // 群組（半透明的子層）收尾後，剪裁到群組的整張綠：alpha = 綠 × 群組 alpha（128 × 50% 不透明度）
+        static Dictionary<int, byte[]> Rgb(byte r, byte g, byte b, byte[] alpha) =>
+            new() { [0] = Solid(4, 2, r), [1] = Solid(4, 2, g), [2] = Solid(4, 2, b), [-1] = alpha };
+
+        var file = PsdWriter.Build(4, 2,
+        [
+            new PsdWriter.Layer("base", new SKRectI(0, 0, 4, 2)) { Channels = Rgb(0, 0, 255, Plane(4, 2, (x, _) => x < 2 ? (byte)255 : (byte)0)) },
+            new PsdWriter.Layer("clipped", new SKRectI(0, 0, 4, 2)) { Clipped = true, Channels = Rgb(255, 0, 0, Solid(4, 2, 255)) },
+            new PsdWriter.Layer("</Layer group>", SKRectI.Empty) { SectionType = 3 },
+            new PsdWriter.Layer("inner", new SKRectI(0, 0, 4, 2)) { Opacity = 128, Channels = Rgb(1, 2, 3, Solid(4, 2, 128)) },
+            new PsdWriter.Layer("group", SKRectI.Empty) { SectionType = 1 },
+            new PsdWriter.Layer("onGroup", new SKRectI(0, 0, 4, 2)) { Clipped = true, Channels = Rgb(0, 255, 0, Solid(4, 2, 255)) },
+        ]);
+
+        using var doc = PsdFormat.Load(new MemoryStream(file), out var warnings);
+
+        Assert.Empty(warnings);
+        Assert.Equal(4, doc.Root.Children.Count);
+        var clipped = Assert.IsType<RasterLayer>(doc.Root.Children[1]);
+        Assert.Equal(new SKColor(255, 0, 0, 255), GetLayerPixel(clipped, 1, 0));
+        Assert.Equal(SKColors.Empty, GetLayerPixel(clipped, 2, 0));
+
+        var onGroup = Assert.IsType<RasterLayer>(doc.Root.Children[3]);
+        var alpha = GetLayerPixel(onGroup, 0, 0).Alpha;
+        Assert.InRange(alpha, 62, 66);   // 128/255 × 128/255 ≈ 0.25
+    }
+
+    [Fact]
+    public void Load_HidesLayersClippedToHiddenBase()
+    {
+        var file = PsdWriter.Build(2, 2,
+        [
+            new PsdWriter.Layer("base", new SKRectI(0, 0, 2, 2))
+            {
+                Hidden = true,
+                Channels = { [0] = Solid(2, 2, 0), [1] = Solid(2, 2, 0), [2] = Solid(2, 2, 0), [-1] = Solid(2, 2, 255) },
+            },
+            new PsdWriter.Layer("clipped", new SKRectI(0, 0, 2, 2))
+            {
+                Clipped = true,
+                Channels = { [0] = Solid(2, 2, 9), [1] = Solid(2, 2, 9), [2] = Solid(2, 2, 9), [-1] = Solid(2, 2, 255) },
+            },
+        ]);
+
+        using var doc = PsdFormat.Load(new MemoryStream(file), out _);
+        var clipped = Assert.IsType<RasterLayer>(doc.Root.Children[1]);
+        Assert.False(clipped.IsVisible);
+        Assert.Equal(new SKColor(9, 9, 9, 255), GetLayerPixel(clipped, 0, 0));   // 像素還在，只是跟著底層藏起來
+    }
+
+    [Fact]
     public void Load_Reads16BitLayersFromLr16WithZipPrediction()
     {
         // 16 位元：正規圖層清單長度 0，圖層在 Lr16 區塊；樣本 0x8000 應轉成 128
@@ -326,12 +380,13 @@ public class PsdFormatTests
             public SKRectI Rect { get; } = rect;
             public string? UnicodeName { get; init; }
             public bool Hidden { get; init; }
+            public bool Clipped { get; init; }
             public byte Opacity { get; init; } = 255;
             public string BlendKey { get; init; } = "norm";
             public int SectionType { get; init; }
             /// <summary>0 原始、1 RLE、2 zip、3 zip＋預測。</summary>
             public int Compression { get; init; }
-            public Dictionary<int, byte[]> Channels { get; } = new();
+            public Dictionary<int, byte[]> Channels { get; init; } = new();
             public SKRectI? MaskRect { get; init; }
             public byte MaskDefault { get; init; } = 255;
             public byte MaskFlags { get; init; }
@@ -423,7 +478,7 @@ public class PsdFormatTests
                 info.Write("8BIM"u8);
                 info.Write(Encoding.ASCII.GetBytes(layer.BlendKey));
                 info.WriteByte(layer.Opacity);
-                info.WriteByte(0);
+                info.WriteByte((byte)(layer.Clipped ? 1 : 0));
                 info.WriteByte((byte)(layer.Hidden ? 0x02 : 0x00));
                 info.WriteByte(0);
 
