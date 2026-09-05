@@ -1,4 +1,4 @@
-using Avalonia;
+﻿using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Layout;
@@ -9,7 +9,7 @@ namespace MinePainter.App.Views.Settings;
 
 /// <summary>
 /// 設定 → 快捷鍵：所有指令依分類列出，每個指令兩格（主鍵／副鍵）——
-/// 點一格的按鍵鈕後直接按下新組合鍵重新綁定（Esc 取消、Backspace 清除）。
+/// 點一格的按鍵鈕後直接按下新組合鍵重新綁定（Esc 清除綁定）。
 /// 撞到別的指令會自動解除對方並提示。
 ///
 /// 最後一段是「滾輪」：滾輪手勢錄不進按鍵表（沒有 Key 可以填），所以另外一張表
@@ -242,7 +242,7 @@ public sealed class ShortcutsSettingsPage : SettingsPage
         _capturing = null;
         _capturingWheel = id;
         _wheelButtons[id].Content = "在這裡滾一下滑鼠…";
-        _hint.Text = "壓著想要的修飾鍵（可以都不壓）在按鈕上滾一下；Esc 取消、Backspace 取消綁定。";
+        _hint.Text = "壓著想要的修飾鍵（可以都不壓）在按鈕上滾一下；Esc 取消綁定。";
     }
 
     /// <summary>
@@ -321,7 +321,7 @@ public sealed class ShortcutsSettingsPage : SettingsPage
         }
         _capturing = (id, slot);
         _gestureButtons[(id, slot)].Content = "按下組合鍵…";
-        _hint.Text = "按下新的組合鍵；Esc 取消、Backspace 清除綁定。";
+        _hint.Text = "按下新的組合鍵；Esc 清除綁定。";
         // 焦點離開按鈕（也離開搜尋框），Space/Enter 才會被當成新綁定捕捉，而不是觸發按鈕
         (TopLevel.GetTopLevel(this) as Window)?.Focus();
     }
@@ -346,22 +346,15 @@ public sealed class ShortcutsSettingsPage : SettingsPage
 
     public override bool HandleKeyDown(KeyEventArgs e)
     {
-        // 滾輪錄製中：只認 Esc（取消）與 Backspace（取消綁定），其餘等滾輪
+        // 滾輪錄製中：只認 Esc（取消綁定），其餘等滾輪
         if (_capturingWheel is { } wheelId)
         {
-            switch (e.Key)
+            if (e.Key == Key.Escape)
             {
-                case Key.Escape:
-                    _capturingWheel = null;
-                    RefreshWheelButton(wheelId);
-                    _hint.Text = "已取消。";
-                    return true;
-                case Key.Back:
-                    _capturingWheel = null;
-                    WheelMap.Set(wheelId, null);
-                    RefreshWheelButton(wheelId);
-                    _hint.Text = "已取消綁定。";
-                    return true;
+                _capturingWheel = null;
+                WheelMap.Set(wheelId, null);
+                RefreshWheelButton(wheelId);
+                _hint.Text = "已取消綁定。";
             }
             return true;
         }
@@ -381,13 +374,8 @@ public sealed class ShortcutsSettingsPage : SettingsPage
 
         switch (e.Key)
         {
+            // Esc＝清空這一格（沒有「取消錄製」鍵；點別格或關窗就是放掉）
             case Key.Escape:
-                _capturing = null;
-                RefreshButton(id, slot);
-                _hint.Text = "已取消。";
-                return true;
-
-            case Key.Back:
                 _capturing = null;
                 ShortcutMap.SetGesture(id, slot, null);
                 RefreshButton(id, slot);
