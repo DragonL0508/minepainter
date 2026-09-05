@@ -112,8 +112,7 @@
             <MenuItem Header="圖層文字平面化(_R)" Click="OnFlattenTextClicked" Tag="layer.flattenText"
                       ToolTip.Tip="把本圖層的文字物件烙成像素（之後不能再編輯文字內容）" />
             <Separator />
-            <MenuItem Header="AI 去背(_B)" Click="OnRemoveBackgroundClicked" Tag="layer.removeBackground"
-                      ToolTip.Tip="用 remove.bg 把背景變透明（同 paint.net 的 Remove Background 插件；會先把本圖層的效果與文字平面化成像素）。有選取範圍時只處理範圍內、範圍外一併清除。API Key 在 設定 → AI 去背" />
+            <MenuItem Header="AI 去背(_B)" Click="OnRemoveBackgroundClicked" Tag="layer.removeBackground" />
             <Separator />
             <MenuItem Header="圖層屬性(_P)…" Click="OnLayerPropertiesClicked" Tag="layer.properties" />
           </MenuItem>

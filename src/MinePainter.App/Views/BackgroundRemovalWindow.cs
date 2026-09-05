@@ -1,6 +1,5 @@
 using Avalonia.Controls;
 using Avalonia.Threading;
-using MinePainter.Core.AI;
 using MinePainter.Core.History;
 using MinePainter.Core.Layers;
 using MinePainter.Core.Tools;
@@ -8,9 +7,8 @@ using MinePainter.Core.Tools;
 namespace MinePainter.App.Views;
 
 /// <summary>
-/// 圖層 → AI 去背 的進度視窗：一開就送 remove.bg，跑完自己關；只有「取消」可按。
-/// 結果直接寫進圖層（一步 undo）。設定（API Key、解析度、後處理）在 設定 → AI 去背。
-/// 用模態視窗擋住編輯：命令開始時讀像素、結束時乘遮罩，中間若讓使用者改圖層會對不上。
+/// AI 去背的進度視窗：一開就跑，跑完自己關，只能取消。
+/// 模態是為了擋住編輯：命令開始時讀像素、結束時乘遮罩，中間改圖層會對不上。
 /// </summary>
 public sealed class BackgroundRemovalWindow : ModalDialog
 {
@@ -32,9 +30,6 @@ public sealed class BackgroundRemovalWindow : ModalDialog
     /// <summary>失敗訊息（null = 沒失敗或使用者取消）。</summary>
     public string? Error { get; private set; }
 
-    /// <summary>成功時的補充說明（伺服器回的解析度、扣幾點）；沒有回 null。</summary>
-    public string? Note { get; private set; }
-
     public BackgroundRemovalWindow(EditorSession session, RasterLayer layer, BackgroundRemovalOptions options)
         : base("AI 去背", 360)
     {
@@ -42,10 +37,7 @@ public sealed class BackgroundRemovalWindow : ModalDialog
         _layer = layer;
         _options = options;
 
-        _status.Text = (layer.HasActiveEffects || layer.HasElements
-            ? "先把本圖層的效果堆疊／文字物件平面化，再上傳到 remove.bg 處理中…"
-            : "上傳到 remove.bg 處理中…") +
-            (options.Selection != null ? "（只處理選取範圍，範圍外一併清除）" : "");
+        _status.Text = "處理中…";
 
         var body = new StackPanel
         {
@@ -67,7 +59,6 @@ public sealed class BackgroundRemovalWindow : ModalDialog
         _started = true;
 
         var ct = _cts.Token;
-        var started = DateTime.UtcNow;
         _ = Task.Run(() => BackgroundRemovalCommand.Run(_session, _layer, _options, ct), ct)
             .ContinueWith(t =>
             {
@@ -84,11 +75,9 @@ public sealed class BackgroundRemovalWindow : ModalDialog
                     else
                     {
                         Applied = t.Result;
-                        if (!Applied) Error = _options.Selection != null ? "選取範圍內沒有內容" : "圖層沒有內容";
-                        else Note = BackgroundRemover.LastNote;
+                        if (!Applied) Error = "沒有內容";
                     }
                     Confirmed = Applied;
-                    _status.Text = $"完成（{(DateTime.UtcNow - started).TotalSeconds:0.0} 秒）";
                     Close();
                 });
             });

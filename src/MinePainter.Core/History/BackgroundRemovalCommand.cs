@@ -128,11 +128,6 @@ public static class BackgroundRemovalCommand
             var result = RemoveBgClient.Cutout(pixels, crop.Width, crop.Height, options.RemoveBg, ct);
             var model = result.Alpha;
             var refine = result.Downscaled(crop.Width, crop.Height);
-            var charged = RemoveBgClient.LastCreditsCharged;
-            BackgroundRemover.LastNote =
-                $"remove.bg 回傳 {result.ServerWidth}×{result.ServerHeight}" +
-                (refine ? $"（{(charged is 0 ? "帳號沒有點數，只給預覽解析度；" : "")}已用原圖精修放大回 {crop.Width}×{crop.Height}）" : "") +
-                (charged is { } c ? $"，扣 {c:0.##} 點" : "");
             ct.ThrowIfCancellationRequested();
 
             // 精修半徑隨圖片大小放大：模型的一個像素在大圖上是好幾個像素

@@ -86,7 +86,7 @@ public static class RemoveBgClient
     public static unsafe RemoveBgResult Cutout(uint[] src, int width, int height, RemoveBgOptions options, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(options.ApiKey))
-            throw new RemoveBgException("還沒有填 remove.bg 的 API Key。", "auth_failed");
+            throw new RemoveBgException("沒有 API Key", "auth_failed");
 
         byte[] png;
         using (var bmp = new SKBitmap(new SKImageInfo(width, height, SKColorType.Bgra8888, SKAlphaType.Premul)))
@@ -104,9 +104,9 @@ public static class RemoveBgClient
 
         // 一律解成 premul BGRA（PNG 本身是直接色）
         using var codec = SKCodec.Create(new SKMemoryStream(result))
-            ?? throw new RemoveBgException("remove.bg 回傳的影像無法解碼。");
+            ?? throw new RemoveBgException("remove.bg 回傳的影像無法解碼");
         var info = new SKImageInfo(codec.Info.Width, codec.Info.Height, SKColorType.Bgra8888, SKAlphaType.Premul);
-        using var decoded = SKBitmap.Decode(codec, info) ?? throw new RemoveBgException("remove.bg 回傳的影像無法解碼。");
+        using var decoded = SKBitmap.Decode(codec, info) ?? throw new RemoveBgException("remove.bg 回傳的影像無法解碼");
 
         // 只要 alpha：先抽成灰階，再（需要時）縮回來源尺寸
         using var small = new SKBitmap(new SKImageInfo(decoded.Width, decoded.Height, SKColorType.Gray8, SKAlphaType.Opaque));
@@ -150,7 +150,7 @@ public static class RemoveBgClient
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            throw new RemoveBgException("remove.bg 沒有回應（逾時）。請檢查網路後再試。", "timeout");
+            throw new RemoveBgException("remove.bg 逾時", "timeout");
         }
         catch (HttpRequestException e)
         {

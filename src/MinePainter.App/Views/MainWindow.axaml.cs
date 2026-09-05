@@ -2583,9 +2583,8 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// 圖層 → AI 去背：按下去直接送 remove.bg（設定在 設定 → AI 去背），處理完直接寫進圖層
-    /// （先平面化；一步 undo）。有選取範圍就只處理範圍內、範圍外一併清除。
-    /// 還沒填 API Key 就先帶去設定頁填。
+    /// 圖層 → AI 去背：直接用設定頁的參數送 remove.bg，寫進圖層（先平面化；一步 undo）。
+    /// 有選取範圍就只處理範圍內、範圍外清掉。沒填 API Key 先帶去設定頁。
     /// </summary>
     private async void OnRemoveBackgroundClicked(object? sender, RoutedEventArgs e)
     {
@@ -2599,7 +2598,7 @@ public partial class MainWindow : Window
         var settings = Services.AppSettings.Instance;
         if (string.IsNullOrWhiteSpace(settings.RemoveBgApiKey))
         {
-            Toasts.Show("請先填 remove.bg 的 API Key");
+            Toasts.Show("請先填 API Key");
             await OpenSettingsAsync(Settings.SettingsWindow.Page.BackgroundRemoval);
             if (string.IsNullOrWhiteSpace(settings.RemoveBgApiKey)) return;
             session = CommitPending();
@@ -2618,8 +2617,8 @@ public partial class MainWindow : Window
         session.SelectedElement = null; // 平面化後物件不存在，把手框不能還指著它
         var dialog = new BackgroundRemovalWindow(session, layer, options);
         await dialog.ShowDialog(this);
-        if (dialog.Error != null) Toasts.Show("AI 去背失敗：" + dialog.Error);
-        else if (dialog.Applied) Toasts.Show(dialog.Note == null ? "AI 去背完成" : "AI 去背完成：" + dialog.Note);
+        if (dialog.Error != null) Toasts.Show("去背失敗：" + dialog.Error);
+        else if (dialog.Applied) Toasts.Show("去背完成");
         _layersContent.Refresh();
         RefreshUiState();
     }

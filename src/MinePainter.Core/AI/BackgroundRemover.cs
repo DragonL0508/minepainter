@@ -9,12 +9,6 @@ namespace MinePainter.Core.AI;
 /// </summary>
 public static class BackgroundRemover
 {
-    /// <summary>
-    /// 最近一次去背的說明（例如「remove.bg 回傳 640×427，已用原圖精修放大」）；沒有話說時是 null。
-    /// 給 UI 在完成後顯示用。
-    /// </summary>
-    public static string? LastNote { get; internal set; }
-
     /// <summary>遮罩對比 0..100：以 0.5 為中心拉開；0 = 不變、100 ≈ 硬切。</summary>
     public static void ApplyContrast(byte[] mask, int contrast)
     {
