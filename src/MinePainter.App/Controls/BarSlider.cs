@@ -254,6 +254,16 @@ public sealed class BarSlider : Control
                 stops.Add(new Avalonia.Media.GradientStop(Colors.Black, 0));
                 stops.Add(new Avalonia.Media.GradientStop(Colors.White, 1));
                 break;
+            case SliderTrack.Temperature:
+                stops.Add(new Avalonia.Media.GradientStop(Color.FromRgb(0x4A, 0x8C, 0xE0), 0));
+                stops.Add(new Avalonia.Media.GradientStop(Color.FromRgb(0x9A, 0x9A, 0x9A), 0.5));
+                stops.Add(new Avalonia.Media.GradientStop(Color.FromRgb(0xE8, 0xA8, 0x3C), 1));
+                break;
+            case SliderTrack.Tint:
+                stops.Add(new Avalonia.Media.GradientStop(Color.FromRgb(0x5C, 0xB8, 0x5C), 0));
+                stops.Add(new Avalonia.Media.GradientStop(Color.FromRgb(0x9A, 0x9A, 0x9A), 0.5));
+                stops.Add(new Avalonia.Media.GradientStop(Color.FromRgb(0xD0, 0x5C, 0xC0), 1));
+                break;
             default:
                 stops.Add(new Avalonia.Media.GradientStop(Color.FromRgb(0x20, 0x20, 0x20), 0));
                 stops.Add(new Avalonia.Media.GradientStop(Color.FromRgb(0x80, 0x80, 0x80), 0.5));

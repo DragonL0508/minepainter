@@ -1,4 +1,5 @@
 ﻿using System.Runtime.InteropServices;
+using MinePainter.Core.IO;
 using SkiaSharp;
 
 namespace MinePainter.App.Platform;
@@ -93,18 +94,18 @@ internal static class ClipboardImage
         if (!TryOpen()) return null;
 
         byte[]? fileBytes;
+        byte[]? dib;
         try
         {
-            // PNG 優先（有 alpha）；DIB 補上 BITMAPFILEHEADER 就是 BMP 檔
+            // PNG 優先（有 alpha）；沒有才拿 DIB（32 bpp 的 alpha 要自己解，見 DibCodec）
             fileBytes = GetBytes(PngFormat);
-            if (fileBytes == null && (GetBytes(CF_DIBV5) ?? GetBytes(CF_DIB)) is { } dib)
-                fileBytes = DibToBmpFile(dib);
+            dib = fileBytes == null ? GetBytes(CF_DIBV5) ?? GetBytes(CF_DIB) : null;
         }
         finally
         {
             CloseClipboard();
         }
-        if (fileBytes == null) return null;
+        if (fileBytes == null) return dib == null ? null : DibCodec.Decode(dib);
 
         using var decoded = SKBitmap.Decode(fileBytes);
         if (decoded == null) return null;
@@ -184,30 +185,6 @@ internal static class ClipboardImage
             Marshal.Copy(pixels + y * stride, dib, 40 + (h - 1 - y) * stride, stride);
         }
         return dib;
-    }
-
-    /// <summary>CF_DIB(V5) 資料前面補 14 位元組的 BITMAPFILEHEADER，變成 Skia 可解的 BMP 檔。</summary>
-    private static byte[]? DibToBmpFile(byte[] dib)
-    {
-        if (dib.Length < 40) return null;
-        var biSize = BitConverter.ToInt32(dib, 0);
-        var bitCount = BitConverter.ToUInt16(dib, 14);
-        var compression = BitConverter.ToInt32(dib, 16);
-        var clrUsed = BitConverter.ToInt32(dib, 32);
-        if (biSize < 40 || biSize > dib.Length) return null;
-
-        // 像素起點 = 檔頭 + 資訊頭 + (BI_BITFIELDS 的三個遮罩，V4/V5 已含在頭內) + 調色盤
-        var masks = biSize == 40 && compression == 3 ? 12 : 0;
-        var palette = clrUsed > 0 ? clrUsed * 4 : bitCount <= 8 ? (1 << bitCount) * 4 : 0;
-        var pixelOffset = 14 + biSize + masks + palette;
-
-        var bmp = new byte[14 + dib.Length];
-        bmp[0] = (byte)'B';
-        bmp[1] = (byte)'M';
-        BitConverter.GetBytes(bmp.Length).CopyTo(bmp, 2);
-        BitConverter.GetBytes(pixelOffset).CopyTo(bmp, 10);
-        dib.CopyTo(bmp, 14);
-        return bmp;
     }
 
     // ---- Win32 ----

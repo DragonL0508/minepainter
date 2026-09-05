@@ -114,6 +114,7 @@ public class BrushTool : ITool, IBrushCursorTool
         {
             _engine.EndStroke(e.DocPosition, buffer, Settings, session.Selection?.Mask, doc.Bounds);
             dirtyDoc = buffer.DirtyBounds;
+            var linger = false;
             if (target != null && target.Document == doc && !dirtyDoc.IsEmpty)
             {
                 CommitStroke(target, buffer);
@@ -123,9 +124,18 @@ public class BrushTool : ITool, IBrushCursorTool
                     dirtyDoc.Left - target.Offset.X, dirtyDoc.Top - target.Offset.Y,
                     dirtyDoc.Right - target.Offset.X, dirtyDoc.Bottom - target.Offset.Y);
                 entry = TileDeltaEntry.Capture(Name, target, _beforeSnapshot!, affected);
+
+                // 有效果堆疊的層：先在鎖內標髒（渲染端才不會在標髒前誤判快取是新的），
+                // 筆劃留成餘暉疊在舊快取上，等快取追上再收（見 StrokeBuffer.IsLingering）
+                if (target.HasActiveEffects)
+                {
+                    target.Invalidate(dirtyDoc);
+                    buffer.Linger(target.Surface.Revision);
+                    linger = true;
+                }
             }
 
-            buffer.End();
+            if (!linger) buffer.End();
             _beforeSnapshot?.Dispose();
             _beforeSnapshot = null;
         }
@@ -136,7 +146,7 @@ public class BrushTool : ITool, IBrushCursorTool
             // 這一步是我們推的：同一輪的下一筆擦除才不會誤判「中間有人插隊」而重拍基準
             if (_erasing) session.EraseBaseline.AfterStroke(session.History);
         }
-        if (!dirtyDoc.IsEmpty) target?.Invalidate(dirtyDoc);
+        if (!dirtyDoc.IsEmpty && !buffer.IsLingering) target?.Invalidate(dirtyDoc);
     }
 
     /// <summary>把筆劃遮罩以正確語意烙進圖層（在 SyncRoot 內）。</summary>

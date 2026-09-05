@@ -276,7 +276,7 @@ public sealed unsafe class GpuLayerRenderer : IDisposable
         var elementsInSource = raster.EffectsRendered; // CPU 快取已含物件
 
         var stroke = session.StrokeBuffer;
-        var strokeHere = stroke.IsActive && stroke.TargetLayerId == raster.Id && !stroke.DirtyBounds.IsEmpty;
+        var strokeHere = stroke.ShouldOverlay(raster);   // 含烙進去之後的餘暉（見 StrokeBuffer.IsLingering）
         var floating = session.Floating;
         var floatingHere = floating != null && floating.LayerId == raster.Id;
 

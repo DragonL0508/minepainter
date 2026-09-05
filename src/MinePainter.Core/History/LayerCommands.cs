@@ -267,8 +267,17 @@ public static class LayerCommands
                 ? VectorCommands.TextLayerNameFor(text.Text)
                 : $"{source.Name} 複本",
             Offset = source.Offset,
+            Opacity = source.Opacity,
+            BlendMode = source.BlendMode,
         };
-        lock (doc.SyncRoot) layer.AddElement(clone);
+        lock (doc.SyncRoot)
+        {
+            layer.AddElement(clone);
+            // 圖層效果（外框、陰影…）是物件外觀的一部分：複本沒帶就「複製到一半」
+            // （使用者 2026-09-06 回報 Alt 拖曳複製文字沒複製到特效）
+            if (source.HasEffects)
+                layer.SetEffects([.. source.Effects.Select(fx => fx with { Id = Guid.NewGuid() })]);
+        }
 
         InsertLayer(doc, history, parent, parent.IndexOf(source) + 1, layer, "複製物件到新圖層");
         lock (doc.SyncRoot) doc.ActiveLayer = layer;

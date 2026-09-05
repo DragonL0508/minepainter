@@ -16,6 +16,10 @@ public enum SliderTrack
     Gray,
     /// <summary>暗→亮（亮度／明度類）。</summary>
     Brightness,
+    /// <summary>冷（藍）→暖（琥珀），白平衡的色溫。</summary>
+    Temperature,
+    /// <summary>綠→洋紅，白平衡的色調。</summary>
+    Tint,
 }
 
 /// <summary>數值滑桿。Decimals = 顯示小數位（0 = 整數）；IsSeed = 亂數種子（UI 加「重新產生」骰子）。</summary>

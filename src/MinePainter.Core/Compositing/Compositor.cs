@@ -764,9 +764,7 @@ public sealed class Compositor : IDisposable
                     var detached = detachedLayer.Id is { } d && raster.Id == d;
 
                     var stroke = strokeBuffer;
-                    var strokeHere = !detached && stroke is { IsActive: true } &&
-                                     stroke.TargetLayerId == raster.Id &&
-                                     !stroke.DirtyBounds.IsEmpty &&
+                    var strokeHere = !detached && stroke != null && stroke.ShouldOverlay(raster) &&
                                      stroke.DirtyBounds.IntersectsWith(tileRect);
                     // 效果堆疊作用中：物件已經併進效果快取（外框／陰影要包住文字），不再另外畫
                     var elementsInFx = raster.HasActiveEffects && raster.FxCache.Rendered;
