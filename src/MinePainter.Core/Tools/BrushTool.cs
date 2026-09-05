@@ -8,6 +8,9 @@ namespace MinePainter.Core.Tools;
 /// <summary>
 /// 筆刷：dab → StrokeBuffer 預覽，PointerUp 一次 commit 進圖層 + TileDeltaEntry。
 /// EraserTool 繼承並改為 DstOut。
+///
+/// 按住 Alt＝反向（與選取工具的 Alt 減選同一個概念）：筆刷變成擦除、
+/// 橡皮擦變成「把這一輪擦掉的擦回來」（見 <see cref="RestoreStroke"/>）。
 /// </summary>
 public class BrushTool : ITool, IBrushCursorTool
 {
@@ -19,9 +22,11 @@ public class BrushTool : ITool, IBrushCursorTool
     public float CursorRadius => Settings.Radius;
 
     private readonly BrushEngine _engine = new();
+    private readonly RestoreStroke _restore = new();
     private TileSnapshot? _beforeSnapshot;
     private RasterLayer? _targetLayer;
     private bool _strokeActive;
+    private bool _erasing; // 這一劃是擦除嗎（橡皮擦，或筆刷按著 Alt）
 
     public void OnPointerDown(ToolPointerEvent e, EditorSession session)
     {
@@ -32,12 +37,29 @@ public class BrushTool : ITool, IBrushCursorTool
             return;
         }
 
+        // Alt＝反向。橡皮擦的反向是「還原這一輪擦掉的」，不是拿主色畫上去 ——
+        // 那只是筆刷，救不回被擦掉的原始像素。
+        var alt = e.Modifiers.HasFlag(ToolModifiers.Alt);
+        if (IsEraser && alt)
+        {
+            if (!_restore.Begin(session, layer, e.DocPosition,
+                    Settings.Radius, Settings.Hardness, Settings.Opacity))
+            {
+                session.Notify("這一輪還沒擦過東西，沒有可以還原的內容");
+            }
+            return;
+        }
+        // 上面已經接走「橡皮擦 + Alt」，剩下的：橡皮擦＝擦、筆刷 + Alt＝擦、筆刷＝畫
+        _erasing = IsEraser || alt;
+
         var doc = session.Document;
         SKRectI dirty;
         lock (doc.SyncRoot)
         {
             _beforeSnapshot = layer.Surface.Snapshot();
-            session.StrokeBuffer.Begin(layer.Id, session.Foreground, Settings.Opacity, IsEraser);
+            // 擦之前先備好還原基準（同一輪連續擦除共用一份，見 EraseBaseline）
+            if (_erasing) session.EraseBaseline.BeginErase(layer, session.History);
+            session.StrokeBuffer.Begin(layer.Id, session.Foreground, Settings.Opacity, _erasing);
             // 平滑都以螢幕像素定義（縮小檢視時手抖與整數座標樓梯都被放大同樣倍數）
             var docPerScreenPx = 1f / Math.Max(e.ViewScale, 1e-3f);
             // 樓梯窗 = 三個螢幕像素，滯後不到一個螢幕像素
@@ -54,6 +76,11 @@ public class BrushTool : ITool, IBrushCursorTool
 
     public void OnPointerMove(ToolPointerEvent e, EditorSession session)
     {
+        if (_restore.IsActive)
+        {
+            _restore.Continue(session, e.DocPosition);
+            return;
+        }
         if (!_strokeActive) return;
         var doc = session.Document;
 
@@ -68,6 +95,11 @@ public class BrushTool : ITool, IBrushCursorTool
 
     public void OnPointerUp(ToolPointerEvent e, EditorSession session)
     {
+        if (_restore.IsActive)
+        {
+            _restore.End(session, e.DocPosition);
+            return;
+        }
         if (!_strokeActive) return;
         _strokeActive = false;
 
@@ -98,7 +130,12 @@ public class BrushTool : ITool, IBrushCursorTool
             _beforeSnapshot = null;
         }
 
-        if (entry != null) session.History.Push(entry);
+        if (entry != null)
+        {
+            session.History.Push(entry);
+            // 這一步是我們推的：同一輪的下一筆擦除才不會誤判「中間有人插隊」而重拍基準
+            if (_erasing) session.EraseBaseline.AfterStroke(session.History);
+        }
         if (!dirtyDoc.IsEmpty) target?.Invalidate(dirtyDoc);
     }
 

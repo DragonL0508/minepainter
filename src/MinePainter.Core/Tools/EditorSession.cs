@@ -1693,6 +1693,12 @@ public sealed class EditorSession : IDisposable
     public ShapeTool Shape { get; }
     public PenTool Pen { get; }
 
+    /// <summary>
+    /// 反向橡皮擦（Alt）的還原基準：這一輪擦除開始前，那一層的樣子。
+    /// 由橡皮擦／去背筆在落筆時維護（見 <see cref="EraseBaseline"/>）。
+    /// </summary>
+    public EraseBaseline EraseBaseline { get; } = new();
+
     private ITool _activeTool = null!;
 
     public ITool ActiveTool
@@ -1806,6 +1812,7 @@ public sealed class EditorSession : IDisposable
         _layerOverlay?.Retire(Compositor);
         _layerOverlay = null;
         Compositor.Dispose();
+        EraseBaseline.Dispose();
         History.Dispose();
         Document.Dispose();
     }

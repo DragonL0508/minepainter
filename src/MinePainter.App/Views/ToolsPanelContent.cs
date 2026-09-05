@@ -27,10 +27,10 @@ public sealed class ToolsPanelContent : UserControl
             ("pen", MaterialIconKind.VectorBezier, "鋼筆 (P)：點一下加角點、按住拖曳拉出曲線、點回起點封閉；Enter 轉為選取、Backspace 退一點、Esc 清除"),
         ],
         [
-            ("brush", MaterialIconKind.Brush, "筆刷 (B)：柔邊、抗鋸齒"),
-            ("pencil", MaterialIconKind.Pencil, "鉛筆 (N)：硬邊、無抗鋸齒的方形筆尖（像素繪圖）"),
-            ("eraser", MaterialIconKind.Eraser, "橡皮擦 (E)"),
-            ("bgeraser", MaterialIconKind.EraserVariant, "去背筆 (Shift+E)：擦掉與筆刷中心相近的顏色，物件留下"),
+            ("brush", MaterialIconKind.Brush, "筆刷 (B)：柔邊、抗鋸齒；按住 Alt＝暫時變成橡皮擦"),
+            ("pencil", MaterialIconKind.Pencil, "鉛筆 (N)：硬邊、無抗鋸齒的方形筆尖（像素繪圖）；按住 Alt＝暫時變成橡皮擦"),
+            ("eraser", MaterialIconKind.Eraser, "橡皮擦 (E)：按住 Alt＝反向，把這一輪擦掉的內容擦回來"),
+            ("bgeraser", MaterialIconKind.EraserVariant, "去背筆 (Shift+E)：擦掉與筆刷中心相近的顏色，物件留下；按住 Alt＝把這一輪擦掉的擦回來"),
         ],
         [
             ("fill", MaterialIconKind.FormatColorFill, "油漆桶 (F)"),

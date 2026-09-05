@@ -54,6 +54,7 @@ public sealed class BackgroundEraserTool : ITool, IBrushCursorTool
 
     public float CursorRadius => Settings.Radius;
 
+    private readonly RestoreStroke _restore = new();
     private TileSnapshot? _beforeSnapshot;
     private RasterLayer? _targetLayer;
     private bool _strokeActive;
@@ -70,11 +71,20 @@ public sealed class BackgroundEraserTool : ITool, IBrushCursorTool
             return;
         }
 
+        // Alt＝反向：把這一輪擦掉的擦回來（與橡皮擦同一套，見 RestoreStroke）
+        if (e.Modifiers.HasFlag(ToolModifiers.Alt))
+        {
+            if (!_restore.Begin(session, layer, e.DocPosition, Settings.Radius, Settings.Hardness, 1f))
+                session.Notify("這一輪還沒擦過東西，沒有可以還原的內容");
+            return;
+        }
+
         var doc = session.Document;
         SKRectI dirty;
         lock (doc.SyncRoot)
         {
             _beforeSnapshot = layer.Surface.Snapshot();
+            session.EraseBaseline.BeginErase(layer, session.History);
             session.StrokeBuffer.Begin(layer.Id, session.Foreground, 1f, isEraser: true);
             _sampled = Settings.Sampling == BackgroundSampling.Once
                 ? SampleAt(layer, e.DocPosition)
@@ -90,6 +100,11 @@ public sealed class BackgroundEraserTool : ITool, IBrushCursorTool
 
     public void OnPointerMove(ToolPointerEvent e, EditorSession session)
     {
+        if (_restore.IsActive)
+        {
+            _restore.Continue(session, e.DocPosition);
+            return;
+        }
         if (!_strokeActive || _targetLayer == null) return;
         var doc = session.Document;
         SKRectI dirty;
@@ -102,6 +117,11 @@ public sealed class BackgroundEraserTool : ITool, IBrushCursorTool
 
     public void OnPointerUp(ToolPointerEvent e, EditorSession session)
     {
+        if (_restore.IsActive)
+        {
+            _restore.End(session, e.DocPosition);
+            return;
+        }
         if (!_strokeActive) return;
         _strokeActive = false;
 
@@ -129,7 +149,11 @@ public sealed class BackgroundEraserTool : ITool, IBrushCursorTool
             _beforeSnapshot = null;
         }
 
-        if (entry != null) session.History.Push(entry);
+        if (entry != null)
+        {
+            session.History.Push(entry);
+            session.EraseBaseline.AfterStroke(session.History);
+        }
         if (!dirtyDoc.IsEmpty) target?.Invalidate(dirtyDoc);
     }
 
