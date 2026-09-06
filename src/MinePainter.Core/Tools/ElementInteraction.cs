@@ -229,7 +229,15 @@ public sealed class ElementDragHelper
                     // 原始寬度 = 目前框寬 ÷ 目前 ScaleX
                     var originalWidth = text.ScaleX > 0.001f ? _origWidth / text.ScaleX : _origWidth;
                     hScale = originalWidth > 0 ? newWidth / originalWidth : 1f;
-                    vScale = Math.Max(vScale, hScale);
+                    // 邊把手只看被拖的那一軸：上下邊看高度、左右邊看寬度。之前一律取兩軸較大者，
+                    // 上下邊拖時另一軸的「寬度」根本沒動（hScale ≡ 目前 ScaleX），縮到那個值就再也縮不下去
+                    // （使用者 2026-09-07 回報「按住 Shift 往上推，縮到一定程度就不能再縮小」）
+                    vScale = _resizeAxis switch
+                    {
+                        ResizeAxis.Vertical => vScale,
+                        ResizeAxis.Horizontal => hScale,
+                        _ => Math.Max(vScale, hScale),
+                    };
                 }
                 var newSize = Math.Max(1f, text.FontSize * vScale);
 

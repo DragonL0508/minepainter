@@ -303,24 +303,24 @@
 
         <StackPanel x:Name="HardnessGroup" Orientation="Horizontal" Spacing="5" VerticalAlignment="Center">
           <TextBlock Text="硬度：" FontSize="12" VerticalAlignment="Center" />
-          <controls:BarSlider x:Name="HardnessBar" Minimum="0" Maximum="100" Value="80" Width="120" Suffix="%" />
+          <controls:BarSlider x:Name="HardnessBar" DefaultValue="80" Minimum="0" Maximum="100" Value="80" Width="120" Suffix="%" />
         </StackPanel>
 
         <StackPanel x:Name="SmoothingGroup" Orientation="Horizontal" Spacing="5" VerticalAlignment="Center"
                     ToolTip.Tip="手抖穩定：越高線條越滑、筆尖越落後游標">
           <TextBlock Text="平滑：" FontSize="12" VerticalAlignment="Center" />
-          <controls:BarSlider x:Name="SmoothingBar" Minimum="0" Maximum="100" Value="50" Width="120" Suffix="%"
+          <controls:BarSlider x:Name="SmoothingBar" DefaultValue="50" Minimum="0" Maximum="100" Value="50" Width="120" Suffix="%"
                               ToolTip.Tip="手抖穩定：越高線條越滑、筆尖越落後游標&#10;雙擊重設為 50%" />
         </StackPanel>
 
         <StackPanel x:Name="OpacityGroup" Orientation="Horizontal" Spacing="5" VerticalAlignment="Center">
           <TextBlock Text="不透明度：" FontSize="12" VerticalAlignment="Center" />
-          <controls:BarSlider x:Name="OpacityBar" Minimum="1" Maximum="100" Value="100" Width="120" Suffix="%" />
+          <controls:BarSlider x:Name="OpacityBar" DefaultValue="100" Minimum="1" Maximum="100" Value="100" Width="120" Suffix="%" />
         </StackPanel>
 
         <StackPanel x:Name="ToleranceGroup" Orientation="Horizontal" Spacing="5" VerticalAlignment="Center">
           <TextBlock Text="容許度：" FontSize="12" VerticalAlignment="Center" />
-          <controls:BarSlider x:Name="ToleranceBar" Minimum="0" Maximum="100" Value="13" Width="120" Suffix="%" />
+          <controls:BarSlider x:Name="ToleranceBar" DefaultValue="13" Minimum="0" Maximum="100" Value="13" Width="120" Suffix="%" />
         </StackPanel>
 
         <!-- 選取工具的模式（同移動工具的變形群組：互斥的圖示鈕） -->
@@ -399,7 +399,7 @@
         <StackPanel x:Name="BgEraserGroup" Orientation="Horizontal" Spacing="5" VerticalAlignment="Center" IsVisible="False">
           <TextBlock Text="柔邊：" FontSize="12" VerticalAlignment="Center"
                      ToolTip.Tip="色差超過容許度後的漸層帶寬度；髮絲、毛邊靠它拿到半透明" />
-          <controls:BarSlider x:Name="SoftnessBar" Minimum="0" Maximum="100" Value="50" Width="120" Suffix="%"
+          <controls:BarSlider x:Name="SoftnessBar" DefaultValue="50" Minimum="0" Maximum="100" Value="50" Width="120" Suffix="%"
                               ToolTip.Tip="色差超過容許度後的漸層帶寬度；髮絲、毛邊靠它拿到半透明&#10;雙擊重設為 50%" />
           <TextBlock Text="取樣：" FontSize="12" VerticalAlignment="Center" />
           <ComboBox x:Name="BgSamplingCombo" Width="72" FontSize="12"
@@ -463,7 +463,7 @@
         <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="10">
           <TextBlock x:Name="PerfLabel" Text="" FontSize="11" Foreground="{x:Static app:AppTheme.TextMutedBrush}" VerticalAlignment="Center" />
           <TextBlock x:Name="DocSizeLabel" Text="" FontSize="11" Foreground="{x:Static app:AppTheme.TextMutedBrush}" VerticalAlignment="Center" />
-          <controls:BarSlider x:Name="ZoomBar" Minimum="2" Maximum="800" Value="100" Width="160" Label="縮放" Suffix="%" Height="20" />
+          <controls:BarSlider x:Name="ZoomBar" DefaultValue="100" Minimum="2" Maximum="800" Value="100" Width="160" Label="縮放" Suffix="%" Height="20" />
         </StackPanel>
         <TextBlock x:Name="CursorPosLabel" Text="" FontSize="11" Foreground="{x:Static app:AppTheme.TextMutedBrush}" VerticalAlignment="Center" />
       </DockPanel>

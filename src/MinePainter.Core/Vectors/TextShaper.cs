@@ -34,7 +34,8 @@ internal sealed class TextShaper : IDisposable
         // 系統有這支就用系統的（字重才選得到），沒有才用內嵌的保底字型；
         // 內嵌那份全程共用一份，不進 _owned（見 BundledFont.Resolve）
         var primary = BundledFont.Resolve(family, style) ?? SKTypeface.FromFamilyName(family, style);
-        if (primary != null && primary != BundledFont.Typeface) _owned.Add(primary);
+        // 內嵌保底字型與跑著時新裝的字型（ExtraFonts）都是全程共用的一份，不進 _owned
+        if (primary != null && primary != BundledFont.Typeface && !ExtraFonts.Owns(primary)) _owned.Add(primary);
         _primary = primary ?? BundledFont.Typeface ?? SKTypeface.Default;
     }
 

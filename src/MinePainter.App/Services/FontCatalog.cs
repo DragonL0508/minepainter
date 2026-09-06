@@ -16,12 +16,28 @@ public static class FontCatalog
 {
     private static string[]? _families;
 
-    /// <summary>已安裝的字型家族＋內嵌的保底字型（去重、依語系排序）。</summary>
+    /// <summary>字型清單變了（程式跑著時裝了新字型；UI 執行緒上觸發）。</summary>
+    public static event Action? Changed;
+
+    /// <summary>已安裝的字型家族＋程式跑著時新裝的（<see cref="Core.Vectors.ExtraFonts"/>）＋內嵌的保底字型（去重、依語系排序）。</summary>
     public static string[] Families => _families ??= SKFontManager.Default.FontFamilies
+        .Concat(Core.Vectors.ExtraFonts.Families)
         .Append(EmbeddedFonts.FamilyName) // 系統沒安裝也選得到（尤其英文版 Windows 沒中文字型時）
         .Distinct()
         .OrderBy(f => f, StringComparer.CurrentCulture)
         .ToArray();
+
+    /// <summary>新字型裝好了：清單重列、新家族的快取清掉，通知下拉重填。UI 執行緒。</summary>
+    public static void Invalidate()
+    {
+        _families = null;
+        foreach (var family in Core.Vectors.ExtraFonts.Families)
+        {
+            StyleCache.TryRemove(family, out _);
+            FamilyCache.Remove(family);
+        }
+        Changed?.Invoke();
+    }
 
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, FontStyleOption[]> StyleCache = new();
     private static readonly Dictionary<string, FontFamily> FamilyCache = new();
@@ -36,6 +52,10 @@ public static class FontCatalog
     private static FontStyleOption[] EnumerateStyles(string family)
     {
         var options = new List<FontStyleOption>();
+        // 程式跑著時新裝的字型：系統的字型管理器看不到它，字重從我們自己載入的字面列
+        foreach (var (name, weight) in Core.Vectors.ExtraFonts.Styles(family))
+            options.Add(new FontStyleOption(name, weight));
+        if (options.Count > 0) return options.ToArray();
         try
         {
             using var set = SKFontManager.Default.GetFontStyles(family);

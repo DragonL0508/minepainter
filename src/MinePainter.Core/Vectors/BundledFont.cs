@@ -53,6 +53,8 @@ public static class BundledFont
     /// </summary>
     public static SKTypeface? Resolve(string family, SKFontStyle style)
     {
+        // 程式跑著時才裝的字型：系統的字型管理器看不到，只有我們自己從檔案載入的那份（ExtraFonts）認得
+        if (ExtraFonts.Resolve(family, style) is { } extra) return extra;
         var system = SKTypeface.FromFamilyName(family, style);
         if (system != null &&
             string.Equals(system.FamilyName, family, StringComparison.OrdinalIgnoreCase))

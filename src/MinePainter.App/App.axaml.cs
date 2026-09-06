@@ -47,6 +47,10 @@ public partial class App : Application
         CanvasBackdrop.Set(settings.BackdropPath, settings.BackdropOpacity);
         Core.Documents.FastMode.ProxyHeight = settings.FastModeProxyHeight;
 
+        // 全程式的下拉清單都能用滾輪切換；字型資料夾監看讓新裝的字型不用重開就讀得到
+        Controls.ComboBoxWheel.Install();
+        Services.FontWatcher.Start();
+
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
             // 啟動畫面（Program.Main 一開始就秀出來的）還在跑，這裡放心做重活

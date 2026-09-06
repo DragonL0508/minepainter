@@ -21,6 +21,7 @@ public static class FontAvailability
     {
         if (string.IsNullOrWhiteSpace(family)) return true; // 空的＝用預設字型，不算缺
         if (BundledFont.ForFamily(family) != null) return true;
+        if (ExtraFonts.Has(family)) return true; // 程式跑著時才裝的
         try
         {
             using var set = SKFontManager.Default.GetFontStyles(family);

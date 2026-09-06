@@ -3329,6 +3329,18 @@ public partial class MainWindow : Window
         if (FontFamilyCombo.SelectedItem is string picked && Canvas.Session is { } textSession)
             textSession.Text.FontFamily = picked;
         RepopulateFontStyles(FontFamilyCombo.SelectedItem as string ?? "", 400);
+        // 程式跑著時裝了新字型：清單重填、選取維持原字型（使用者 2026-09-07：不用重開就要讀得到新字體）
+        Services.FontCatalog.Changed += () =>
+        {
+            var keep = FontFamilyCombo.SelectedItem as string;
+            _suppressVectorEvents = true;
+            _fontFamilies = Services.FontCatalog.Families;
+            FontFamilyCombo.Items.Clear();
+            foreach (var f in _fontFamilies) FontFamilyCombo.Items.Add(f);
+            var index = keep == null ? -1 : Array.IndexOf(_fontFamilies, keep);
+            FontFamilyCombo.SelectedIndex = index >= 0 ? index : 0;
+            _suppressVectorEvents = false;
+        };
 
         foreach (var k in new[] { "矩形", "橢圓", "直線" }) ShapeKindCombo.Items.Add(k);
         ShapeKindCombo.SelectedIndex = 0;
