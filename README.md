@@ -48,6 +48,7 @@ release.bat 1.8.2           推標籤，GitHub Actions 跑測試、建置、出 
 
 - **Core 不知道 UI 存在。** Core 只依賴 SkiaSharp；任何 Avalonia 型別、對話框、剪貼簿、檔案挑選器都在 App。Core 要通知使用者用 `EditorSession.Notify`（App 接成 toast）。
 - **App 不直接改文件。** 所有改到 `Document`／圖層的操作都是 Core 的指令（`History/*Commands.cs`），App 只呼叫指令、刷新畫面。（同一個操作要能從選單、快捷鍵、測試三個入口叫到，邏輯只能在一處。）
+- **圖層面板是多選的。** 拿選取一律用 `LayersPanel.SelectedNodes`，交給 `LayerCommands` 的多節點版（`GroupNodes`／`MoveNodes`／`ShiftNodes`／`RemoveNodes`，內部先 `NormalizeSelection` 去掉祖先已選的子層）並綑成一步 undo；作用中圖層永遠是選取裡的一個。守門：`MultiSelectLayerCommandTests`、`LayersPanelMultiSelectTests`。
 - **Core 子目錄職責**：`Documents` 文件與縮放規則 · `Layers` 圖層樹、原始高清來源 · `Tiles` 稀疏像素表面、遮罩 · `History` 所有可 undo 的指令 · `Tools` 互動工具與 `EditorSession` · `Effects` 非破壞性效果堆疊 · `Adjustments` 色彩調整 · `Vectors` 文字／形狀物件 · `Selections` 選取與浮動內容 · `Compositing` 合成 · `IO` `.mpp`／`.pdn`／`.psd`／影像編解碼 · `AI` 去背。
 - **App 子目錄職責**：`Views` 視窗與面板 · `Controls` 可重用控制項（含 `Motion`） · `Rendering` 畫布上屏與 GPU 路徑 · `Services` 設定、字型、更新、安裝 · `Platform` Win32 互通。
 
@@ -60,6 +61,7 @@ release.bat 1.8.2           推標籤，GitHub Actions 跑測試、建置、出 
 5. **原始高清來源（快速模式的命脈）。** 圖層可帶 `LayerPixelSource`（原圖＋矩陣），失效判準是 `Revision` 對不上。**任何改圖層像素的操作，能保留它就要保留**：寫像素前 `ValidPixelSource` + `TakePixelSource()`，寫完掛新來源並對齊 `Revision`，undo/redo 用 `PixelSourceSwapEntry`。工具箱：`Masked`（遮罩套到原圖）、`Rebased`（仿射映射串進矩陣）、`Copy`、`OutputRender.RenderLayerAsSource`（含效果在輸出解析度算一份）。刻意作廢的只有筆刷、填色、文字平面化、向下合併。守門：`PixelSourceSurvivalTests`、`FastModeWorkflowTests`。
 6. **整份文件縮放的規則只有一份：`ScaleRules`。** 調整影像大小、快速模式輸出、開檔轉模式都走它（像素從原圖重畫、效果的像素長度參數與遮罩跟著縮、文字重新排版）。兩條路結果要一樣。
 7. **效果快取是圖層座標，與畫布無關。** 平移圖層不重算效果：位置變了用 `InvalidateComposite`，內容變了才 `Invalidate`。效果的輸出會延伸 `SourceMargin`，任何「重算範圍」都要含 margin。守門：`EffectCacheInvalidationTests`。
+   位置相關的效果（`IsPositionIndependent = false`：暈影、聚焦、像素化…）以**畫布**為範圍、永遠整層重算 —— 圓心與半對角線看的是範圍，只算髒區或拿內容框當範圔都會讓圓跑掉（顯示切換後聚焦變深就是這樣來的）。
 8. **「內容範圍」不能只信 em box，要含實際著墨。** 字面超出行高的字型、重音、外框都會超出排版框（`TextElement.Bounds` = 排版框 ∪ 著墨框）。
 9. **效果、調整、物件都是不可變 record。** 改參數用 `with`；參數描述在 `ParamDef`／`SliderParam`，像素長度的參數標 `Geometric = true`（縮放時才會跟著縮）。
    調整預設是 Skia 色彩濾鏡；濾鏡表達不了的（3D LUT）標 `RequiresPixelPath = true` 並實作 `ApplyPixels`，合成器與破壞性套用走像素路徑、GPU 路徑整份退回合成器（SkiaSharp 2.88 的 runtime shader 在 CPU raster 會直接崩，不能用）。參數之外的大塊資料走 `SaveData`（.mpp 的 `AdjustmentData`、效果堆疊的 `data`）。

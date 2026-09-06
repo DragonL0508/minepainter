@@ -1,4 +1,4 @@
-<UserControl xmlns="https://github.com/avaloniaui"
+﻿<UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:app="using:MinePainter.App"
              x:Class="MinePainter.App.Views.LayersPanel">
@@ -13,7 +13,9 @@
     <!-- 填滿面板剩餘高度（面板視窗可拉大小），內部捲動；圖層數量不影響視窗尺寸。
          Overlay 畫拖曳排序的插入線（座標系與 ListBox 相同）。 -->
     <Panel>
-      <ListBox x:Name="LayerList" SelectionChanged="OnSelectionChanged" Background="{x:Static app:AppTheme.InnerBrush}"
+      <!-- 多選：Ctrl 點＝加減選、Shift 點＝連選、空白處拖曳＝框選；作用中圖層永遠是選取裡的一個 -->
+      <ListBox x:Name="LayerList" SelectionChanged="OnSelectionChanged" SelectionMode="Multiple"
+               Background="{x:Static app:AppTheme.InnerBrush}"
                MinHeight="80" ScrollViewer.VerticalScrollBarVisibility="Auto"
                ScrollViewer.HorizontalScrollBarVisibility="Disabled" />
       <Canvas x:Name="DragOverlay" IsHitTestVisible="False">
@@ -21,8 +23,18 @@
         <Border x:Name="DragGhost" IsVisible="False" Opacity="0.85" CornerRadius="4" ClipToBounds="True"
                 BorderBrush="{x:Static app:AppTheme.AccentBrush}" BorderThickness="1"
                 Background="{x:Static app:AppTheme.PanelBrush}">
-          <Image x:Name="DragGhostImage" />
+          <Panel>
+            <Image x:Name="DragGhostImage" />
+            <!-- 一次拖好幾層：抓在手上的只畫按住的那一列，右上角標「×N」 -->
+            <Border x:Name="DragGhostCount" IsVisible="False" HorizontalAlignment="Right" VerticalAlignment="Top"
+                    Margin="0,3,6,0" Padding="6,1" CornerRadius="8" Background="{x:Static app:AppTheme.AccentBrush}">
+              <TextBlock x:Name="DragGhostCountText" FontSize="11" FontWeight="Bold" Foreground="White" />
+            </Border>
+          </Panel>
         </Border>
+        <!-- 空白處拖出來的框選範圍 -->
+        <Border x:Name="Marquee" IsVisible="False" BorderThickness="1" CornerRadius="2"
+                BorderBrush="{x:Static app:AppTheme.AccentBrush}" Background="#302A9DF4" />
         <Border x:Name="DropIndicator" Height="3" Background="{x:Static app:AppTheme.AccentBrush}" CornerRadius="1.5" IsVisible="False" />
       </Canvas>
     </Panel>

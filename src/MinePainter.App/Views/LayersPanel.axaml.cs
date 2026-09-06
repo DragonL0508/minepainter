@@ -183,6 +183,8 @@ public partial class LayersPanel : UserControl
                 }
             }
 
+            // 列是重建的，選取要照節點還原（群組化之後選取的那幾層還在，只是搬進群組裡了）
+            var selectedBefore = new HashSet<LayerNode>(SelectedNodes);
             var offset = LayerList.Scroll?.Offset;
             _rows.Clear();
             LayerList.Items.Clear();
@@ -192,6 +194,9 @@ public partial class LayersPanel : UserControl
                 _rows.Add(row);
                 LayerList.Items.Add(row.Item);
             }
+            LayerList.SelectedItems?.Clear();
+            foreach (var row in _rows)
+                if (selectedBefore.Contains(row.Node)) LayerList.SelectedItems?.Add(row.Item);
             if (offset is { } o)
             {
                 Avalonia.Threading.Dispatcher.UIThread.Post(() =>
@@ -214,11 +219,19 @@ public partial class LayersPanel : UserControl
         {
             foreach (var row in _rows) UpdateRow(row, session);
 
-            // 同步選取到 ActiveLayer
+            // 同步選取到 ActiveLayer：作用中圖層一定在選取裡；它在面板外被換掉（畫布點選、undo…）
+            // 就只剩它一個被選，多選只在它沒動時保留
             var active = session.Document.ActiveLayer;
             var activeRow = _rows.FirstOrDefault(r => ReferenceEquals(r.Node, active));
-            if (!ReferenceEquals(LayerList.SelectedItem, activeRow?.Item))
-                LayerList.SelectedItem = activeRow?.Item;
+            if (activeRow == null)
+            {
+                if (LayerList.SelectedItems is { Count: > 0 } items) items.Clear();
+            }
+            else if (LayerList.SelectedItems is { } items && !items.Contains(activeRow.Item))
+            {
+                items.Clear();
+                items.Add(activeRow.Item);
+            }
 
             if (activeRow != null && !ReferenceEquals(active, _lastActiveNode))
             {
@@ -487,7 +500,50 @@ public partial class LayersPanel : UserControl
         row.Thumb.Source = LayerThumbnail.Render(session.Document, node, ThumbWidth, ThumbHeight);
     }
 
-    private LayerNode? SelectedNode => (LayerList.SelectedItem as ListBoxItem)?.Tag as LayerNode;
+    private LayerNode? SelectedNode => _session?.Document.ActiveLayer;
+
+    /// <summary>目前選取的節點（面板由上到下的順序）。多選的操作都拿這份，Core 再正規化。</summary>
+    internal IReadOnlyList<LayerNode> SelectedNodes
+    {
+        get
+        {
+            if (LayerList.SelectedItems is not { Count: > 0 } items) return [];
+            var picked = new HashSet<ListBoxItem>(items.OfType<ListBoxItem>());
+            var result = new List<LayerNode>(picked.Count);
+            foreach (var row in _rows)
+                if (picked.Contains(row.Item)) result.Add(row.Node);
+            return result;
+        }
+    }
+
+    /// <summary>測試／程式用：把選取設成這幾個節點（最後一個成為作用中圖層）。</summary>
+    internal void SelectNodes(IEnumerable<LayerNode> nodes)
+    {
+        if (LayerList.SelectedItems is not { } items) return;
+        var wanted = new HashSet<LayerNode>(nodes);
+        _suppressUiEvents = true;
+        items.Clear();
+        LayerNode? last = null;
+        foreach (var row in _rows)
+        {
+            if (!wanted.Contains(row.Node)) continue;
+            items.Add(row.Item);
+            last = row.Node;
+        }
+        _suppressUiEvents = false;
+        if (last != null) ActivateNode(last);
+        StateChanged?.Invoke();
+    }
+
+    /// <summary>換作用中圖層（會先落地上一層的變形框／浮動內容，並放掉物件選取）。</summary>
+    private void ActivateNode(LayerNode node)
+    {
+        if (_session == null) return;
+        _session.SetActiveLayer(node); // 上一層的變形框／浮動內容先落地（框才會跟著換層）
+        _lastActiveNode = node;
+        // 物件屬於圖層：換圖層就放掉前一層的物件選取（把手框會自動跟上）
+        _session.SelectedElement = null;
+    }
 
     // ---- 圖層屬性視窗（雙擊開啟；混合模式/不透明度/調整參數都在裡面） ----
 
@@ -518,14 +574,30 @@ public partial class LayersPanel : UserControl
     private void OnSelectionChanged(object? sender, SelectionChangedEventArgs e)
     {
         if (_suppressUiEvents || _session == null) return;
-        var node = SelectedNode;
-        if (node != null)
+        var selected = SelectedNodes;
+        var active = _session.Document.ActiveLayer;
+
+        if (selected.Count == 0)
         {
-            _session.SetActiveLayer(node); // 上一層的變形框／浮動內容先落地（框才會跟著換層）
-            _lastActiveNode = node;
-            // 物件屬於圖層：換圖層就放掉前一層的物件選取（把手框會自動跟上）
-            _session.SelectedElement = null;
+            // Ctrl 點掉最後一個：作用中圖層還是得選著（工具永遠有目標）
+            var activeRow = _rows.FirstOrDefault(r => ReferenceEquals(r.Node, active));
+            if (activeRow != null)
+            {
+                _suppressUiEvents = true;
+                LayerList.SelectedItems?.Add(activeRow.Item);
+                _suppressUiEvents = false;
+            }
+            StateChanged?.Invoke();
+            return;
         }
+
+        // 作用中圖層＝剛點的那一列（按下時記的）；沒有就是新加進來的；都沒有（點掉了作用中那層）就取最上面的
+        LayerNode? primary = null;
+        if (_pressNode != null && selected.Contains(_pressNode)) primary = _pressNode;
+        else if (e.AddedItems.Count > 0 && (e.AddedItems[^1] as ListBoxItem)?.Tag is LayerNode added && selected.Contains(added)) primary = added;
+        else if (active == null || !selected.Contains(active)) primary = selected[0];
+
+        if (primary != null && !ReferenceEquals(primary, active)) ActivateNode(primary);
         StateChanged?.Invoke();
     }
 
@@ -541,6 +613,21 @@ public partial class LayersPanel : UserControl
     private Row? _pressRow;
     private ListBoxItem? _highlightItem;
 
+    /// <summary>
+    /// 按下時如果按的是多選裡的一列，先記下整份選取 —— ListBox 會在按下的瞬間把選取收成只剩這一列，
+    /// 等真的拖起來再把它們選回來一起搬；沒拖（只是點）就照 ListBox 的意思只剩這一列。
+    /// </summary>
+    private List<LayerNode>? _pressSelection;
+
+    /// <summary>正在拖的那幾個節點（面板由上到下的順序）；沒拖時為空。</summary>
+    private readonly List<Row> _dragRows = new();
+
+    // 空白處框選
+    private bool _marqueePressed;
+    private bool _marqueeActive;
+    private Point _marqueeStart;
+    private HashSet<LayerNode> _marqueeBase = new();
+
     private static readonly IBrush GroupDropBrush =
         new SolidColorBrush(Color.FromArgb(0x40, 0x2A, 0x9D, 0xF4));
 
@@ -555,23 +642,59 @@ public partial class LayersPanel : UserControl
         if (source?.FindAncestorOfType<Button>(true) != null) return;
 
         var item = source?.FindAncestorOfType<ListBoxItem>(true);
-        if (item?.Tag is not LayerNode node) return;
+        if (item?.Tag is not LayerNode node)
+        {
+            // 按在列以外的空白處：拖出框來選。Ctrl 按著＝加到現有選取
+            if (source == null || !ReferenceEquals(source.FindAncestorOfType<ListBox>(true), LayerList)) return;
+            _marqueePressed = true;
+            _marqueeStart = e.GetPosition(LayerList);
+            _marqueeBase = e.KeyModifiers.HasFlag(KeyModifiers.Control)
+                ? new HashSet<LayerNode>(SelectedNodes)
+                : new HashSet<LayerNode>();
+            return;
+        }
 
         _pressNode = node;
         _pressRow = _rows.FirstOrDefault(r => ReferenceEquals(r.Item, item));
         _pressPoint = e.GetPosition(LayerList);
+        var plain = (e.KeyModifiers & (KeyModifiers.Control | KeyModifiers.Shift)) == 0;
+        var selected = SelectedNodes;
+        _pressSelection = plain && selected.Count > 1 && selected.Contains(node) ? selected.ToList() : null;
     }
 
     private void OnListPointerMoved(object? sender, PointerEventArgs e)
     {
-        if (_pressNode == null || _session == null) return;
+        if (_session == null) return;
         var p = e.GetPosition(LayerList);
+
+        if (_marqueePressed)
+        {
+            if (!e.GetCurrentPoint(LayerList).Properties.IsLeftButtonPressed)
+            {
+                EndMarquee();
+                return;
+            }
+            var mdx = p.X - _marqueeStart.X;
+            var mdy = p.Y - _marqueeStart.Y;
+            if (!_marqueeActive && mdx * mdx + mdy * mdy < 4 * 4) return;
+            if (!_marqueeActive)
+            {
+                _marqueeActive = true;
+                e.Pointer.Capture(LayerList);
+            }
+            AutoScroll(p);
+            UpdateMarquee(p);
+            return;
+        }
+
+        if (_pressNode == null) return;
 
         if (!_dragActive)
         {
             if (!e.GetCurrentPoint(LayerList).Properties.IsLeftButtonPressed)
             {
                 _pressNode = null;
+                _pressSelection = null;
                 return;
             }
             var dx = p.X - _pressPoint.X;
@@ -580,7 +703,7 @@ public partial class LayersPanel : UserControl
 
             _dragActive = true;
             e.Pointer.Capture(LayerList);
-            if (_pressRow != null) _pressRow.Item.Opacity = 0.35;
+            BeginDragRows();
             BeginGhost();
         }
 
@@ -591,17 +714,47 @@ public partial class LayersPanel : UserControl
 
     private void OnListPointerReleased(object? sender, PointerReleasedEventArgs e)
     {
+        if (_marqueePressed)
+        {
+            var wasActive = _marqueeActive;
+            EndMarquee();
+            if (wasActive) e.Handled = true;
+            return;
+        }
         if (_dragActive)
         {
-            var node = _pressNode;
+            var nodes = _dragRows.Select(r => r.Node).ToList();
             var kind = _dropKind;
             var row = _dropRow;
             CancelDrag();
-            CommitDrop(node, kind, row);
+            CommitDrop(nodes, kind, row);
             e.Handled = true;
         }
         _pressNode = null;
         _pressRow = null;
+        _pressSelection = null;
+    }
+
+    /// <summary>拖起來的瞬間決定要搬哪幾列：按的是多選裡的一列就整批走，否則只搬按住的那一列。</summary>
+    private void BeginDragRows()
+    {
+        _dragRows.Clear();
+        if (_pressSelection != null)
+        {
+            // ListBox 在按下時把多選收成一列了，拖起來要把它們選回去
+            _suppressUiEvents = true;
+            LayerList.SelectedItems?.Clear();
+            foreach (var row in _rows)
+                if (_pressSelection.Contains(row.Node)) LayerList.SelectedItems?.Add(row.Item);
+            _suppressUiEvents = false;
+        }
+        var selected = SelectedNodes;
+        var dragging = _pressNode != null && selected.Contains(_pressNode) && selected.Count > 1
+            ? selected
+            : _pressNode != null ? [_pressNode] : [];
+        foreach (var row in _rows)
+            if (dragging.Contains(row.Node)) _dragRows.Add(row);
+        foreach (var row in _dragRows) row.Item.Opacity = 0.35;
     }
 
     private void CancelDrag()
@@ -612,11 +765,62 @@ public partial class LayersPanel : UserControl
         DropIndicator.IsVisible = false;
         _highlightItem?.ClearValue(BackgroundProperty);
         _highlightItem = null;
+        foreach (var row in _dragRows) row.Item.Opacity = 1;
         if (_pressRow != null) _pressRow.Item.Opacity = 1;
+        _dragRows.Clear();
         DragGhost.IsVisible = false;
         DragGhostImage.Source = null;
+        DragGhostCount.IsVisible = false;
         _ghost?.Dispose();
         _ghost = null;
+        EndMarquee();
+    }
+
+    // ---- 空白處框選 ----
+
+    private void UpdateMarquee(Point p)
+    {
+        var left = Math.Min(_marqueeStart.X, p.X);
+        var top = Math.Min(_marqueeStart.Y, p.Y);
+        var rect = new Rect(left, top, Math.Abs(p.X - _marqueeStart.X), Math.Abs(p.Y - _marqueeStart.Y));
+        Canvas.SetLeft(Marquee, rect.X);
+        Canvas.SetTop(Marquee, rect.Y);
+        Marquee.Width = rect.Width;
+        Marquee.Height = rect.Height;
+        Marquee.IsVisible = true;
+
+        // 框碰到的列都選起來（虛擬化掉的列不在畫面上，本來就碰不到）
+        var wanted = new HashSet<LayerNode>(_marqueeBase);
+        foreach (var row in _rows)
+        {
+            if (row.Item.TranslatePoint(default, LayerList) is not { } pt) continue;
+            var bounds = new Rect(pt, row.Item.Bounds.Size);
+            if (bounds.Intersects(rect)) wanted.Add(row.Node);
+        }
+        if (LayerList.SelectedItems is not { } items) return;
+        var current = new HashSet<LayerNode>(SelectedNodes);
+        if (current.SetEquals(wanted)) return;
+        _suppressUiEvents = true;
+        items.Clear();
+        foreach (var row in _rows)
+            if (wanted.Contains(row.Node)) items.Add(row.Item);
+        _suppressUiEvents = false;
+    }
+
+    private void EndMarquee()
+    {
+        if (!_marqueePressed) return;
+        var wasActive = _marqueeActive;
+        _marqueePressed = false;
+        _marqueeActive = false;
+        Marquee.IsVisible = false;
+        if (!wasActive || _session == null) return;
+        // 框完：作用中圖層＝框裡最上面那一層（沒框到東西就維持原樣，ListBox 的同步會把作用中那層選回來）
+        var selected = SelectedNodes;
+        var active = _session.Document.ActiveLayer;
+        if (selected.Count > 0 && (active == null || !selected.Contains(active))) ActivateNode(selected[0]);
+        if (selected.Count == 0) Refresh();
+        StateChanged?.Invoke();
     }
 
     // ---- 拖曳中跟著指標走的那一列（列本身的快照）----
@@ -655,6 +859,8 @@ public partial class LayersPanel : UserControl
         DragGhostImage.Source = _ghost;
         DragGhost.Width = size.Width;
         DragGhost.Height = size.Height;
+        DragGhostCount.IsVisible = _dragRows.Count > 1;
+        DragGhostCountText.Text = $"×{_dragRows.Count}";
         // 抓在指標按下的那一點：拖起來的位置不會跳
         _ghostGrabY = item.TranslatePoint(default, LayerList) is { } pt
             ? Math.Clamp(_pressPoint.Y - pt.Y, 0, size.Height)
@@ -730,7 +936,7 @@ public partial class LayersPanel : UserControl
             _dropRow = row;
         }
 
-        if (_dropRow != null && !IsValidDrop(_pressNode!, _dropKind, _dropRow))
+        if (_dropRow != null && !IsValidDrop(_dragRows, _dropKind, _dropRow))
         {
             _dropKind = DropKind.None;
             _dropRow = null;
@@ -739,14 +945,19 @@ public partial class LayersPanel : UserControl
         ShowIndicator();
     }
 
-    private static bool IsValidDrop(LayerNode node, DropKind kind, Row target)
+    private static bool IsValidDrop(List<Row> dragging, DropKind kind, Row target)
     {
         var newParent = kind == DropKind.Into ? target.Node as GroupLayer : target.Node.Parent;
-        for (var g = newParent; g != null; g = g.Parent)
+        if (newParent == null) return false;
+        foreach (var row in dragging)
         {
-            if (ReferenceEquals(g, node)) return false; // 不能放進自己或子孫
+            if (ReferenceEquals(row, target)) return false; // 放在自己身上沒有意義
+            for (var g = newParent; g != null; g = g.Parent)
+            {
+                if (ReferenceEquals(g, row.Node)) return false; // 不能放進自己或子孫
+            }
         }
-        return newParent != null;
+        return true;
     }
 
     private void ShowIndicator()
@@ -773,9 +984,37 @@ public partial class LayersPanel : UserControl
         DropIndicator.IsVisible = true;
     }
 
-    private void CommitDrop(LayerNode? node, DropKind kind, Row? target)
+    private void CommitDrop(List<LayerNode> nodes, DropKind kind, Row? target)
     {
-        if (_session == null || node?.Parent == null || target == null || kind == DropKind.None) return;
+        if (_session == null || nodes.Count == 0 || target == null || kind == DropKind.None) return;
+        if (nodes.Count > 1)
+        {
+            GroupLayer parentForAll;
+            int indexForAll;
+            switch (kind)
+            {
+                case DropKind.Into:
+                    parentForAll = (GroupLayer)target.Node;
+                    indexForAll = parentForAll.Children.Count;
+                    _collapsed.Remove(parentForAll);
+                    break;
+                case DropKind.Above:
+                    parentForAll = target.Node.Parent!;
+                    indexForAll = parentForAll.IndexOf(target.Node) + 1;
+                    break;
+                default:
+                    parentForAll = target.Node.Parent!;
+                    indexForAll = parentForAll.IndexOf(target.Node);
+                    break;
+            }
+            if (!LayerCommands.MoveNodes(_session.Document, _session.History, nodes, parentForAll, indexForAll, "拖曳圖層")) return;
+            Refresh();
+            StateChanged?.Invoke();
+            return;
+        }
+
+        var node = nodes[0];
+        if (node.Parent == null) return;
 
         GroupLayer newParent;
         int newIndex;
@@ -866,31 +1105,38 @@ public partial class LayersPanel : UserControl
         StateChanged?.Invoke();
     }
 
-    private void OnGroupLayer(object? sender, RoutedEventArgs e)
+    /// <summary>群組化：選了幾層就一起進同一個群組（一步 undo），群組成為作用中圖層。</summary>
+    internal void OnGroupLayer(object? sender, RoutedEventArgs e)
     {
         if (_session == null) return;
-        var node = SelectedNode;
-        if (node == null || node.Parent == null) return;
+        var selected = SelectedNodes.Where(n => n.Parent != null).ToList();
+        if (selected.Count == 0) return;
 
-        LayerCommands.WrapInGroup(_session.Document, _session.History, node);
+        var doc = _session.Document;
+        var group = LayerCommands.GroupNodes(doc, _session.History, selected);
+        if (group == null) return;
+        lock (doc.SyncRoot) doc.ActiveLayer = group;
         Refresh();
         StateChanged?.Invoke();
     }
 
-    private void OnDeleteLayer(object? sender, RoutedEventArgs e)
+    /// <summary>刪除：選了幾層就一起刪（一步 undo），之後選作用中那層原本位置的鄰居。</summary>
+    internal void OnDeleteLayer(object? sender, RoutedEventArgs e)
     {
         if (_session == null) return;
-        var node = SelectedNode;
-        if (node?.Parent == null) return;
-
         var doc = _session.Document;
-        var parent = node.Parent;
-        var index = parent.IndexOf(node);
-        LayerCommands.RemoveLayer(doc, _session.History, node);
+        var selected = LayerCommands.NormalizeSelection(doc, SelectedNodes);
+        if (selected.Count == 0) return;
 
-        // 選鄰近節點
+        var anchor = doc.ActiveLayer is { Parent: not null } active && selected.Contains(active) ? active : selected[^1];
+        var parent = anchor.Parent!;
+        var index = parent.IndexOf(anchor);
+        if (LayerCommands.RemoveNodes(doc, _session.History, selected) == 0) return;
+
+        // 選鄰近節點（父群組也可能一起被刪了，就往上找還在樹上的）
         lock (doc.SyncRoot)
         {
+            while (parent.Document == null && parent.Parent != null) parent = parent.Parent;
             doc.ActiveLayer = parent.Children.Count > 0
                 ? parent.Children[Math.Min(index, parent.Children.Count - 1)]
                 : (parent == doc.Root ? null : parent);
@@ -903,20 +1149,11 @@ public partial class LayersPanel : UserControl
 
     private void OnMoveDown(object? sender, RoutedEventArgs e) => MoveSelected(-1);
 
-    /// <summary>direction：+1 = 視覺上移（children index +1），-1 = 下移。</summary>
+    /// <summary>direction：+1 = 視覺上移（children index +1），-1 = 下移。多選時整批一起挪。</summary>
     private void MoveSelected(int direction)
     {
         if (_session == null) return;
-        var node = SelectedNode;
-        var parent = node?.Parent;
-        if (node == null || parent == null) return;
-
-        var index = parent.IndexOf(node);
-        var newIndex = index + direction;
-        if (newIndex < 0 || newIndex >= parent.Children.Count) return;
-
-        LayerCommands.MoveNode(_session.Document, _session.History, node, parent, newIndex,
-            direction > 0 ? "圖層上移" : "圖層下移");
+        if (!LayerCommands.ShiftNodes(_session.Document, _session.History, SelectedNodes, direction)) return;
         Refresh();
         StateChanged?.Invoke();
     }

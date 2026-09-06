@@ -33,7 +33,11 @@ public static class LayerCommands
             }));
     }
 
-    public static void RemoveLayer(Document doc, HistoryManager history, LayerNode layer)
+    public static void RemoveLayer(Document doc, HistoryManager history, LayerNode layer) =>
+        history.Push(RemoveEntry(doc, layer, "刪除圖層"));
+
+    /// <summary>執行「移除節點」並回傳對應的 undo 步驟（多選刪除把多個綑成一步用）。</summary>
+    private static IHistoryEntry RemoveEntry(Document doc, LayerNode layer, string label)
     {
         var parent = layer.Parent
             ?? throw new InvalidOperationException("節點沒有父群組，無法移除。");
@@ -46,7 +50,7 @@ public static class LayerCommands
             parent.RemoveAt(index);
         }
 
-        history.Push(new ActionHistoryEntry("刪除圖層", doc.Bounds,
+        return new ActionHistoryEntry(label, doc.Bounds,
             undo: _ => parent.Insert(Math.Min(index, parent.Children.Count), layer),
             redo: d =>
             {
@@ -56,12 +60,16 @@ public static class LayerCommands
             onDispose: () =>
             {
                 if (layer.Document == null) DisposeSubtree(layer);
-            }));
+            });
     }
 
     /// <summary>在樹中搬移節點（同層排序或跨群組）。</summary>
     public static void MoveNode(Document doc, HistoryManager history,
-        LayerNode node, GroupLayer newParent, int newIndex, string label = "移動圖層")
+        LayerNode node, GroupLayer newParent, int newIndex, string label = "移動圖層") =>
+        history.Push(MoveEntry(doc, node, newParent, newIndex, label));
+
+    /// <summary>執行「搬移節點」並回傳對應的 undo 步驟；索引在執行當下取，綑成一步時反向 undo 才對得上。</summary>
+    private static IHistoryEntry MoveEntry(Document doc, LayerNode node, GroupLayer newParent, int newIndex, string label)
     {
         var oldParent = node.Parent
             ?? throw new InvalidOperationException("節點沒有父群組。");
@@ -71,10 +79,11 @@ public static class LayerCommands
         {
             oldIndex = oldParent.IndexOf(node);
             oldParent.RemoveAt(oldIndex);
-            newParent.Insert(Math.Min(newIndex, newParent.Children.Count), node);
+            newIndex = Math.Min(newIndex, newParent.Children.Count);
+            newParent.Insert(newIndex, node);
         }
 
-        history.Push(new ActionHistoryEntry(label, doc.Bounds,
+        return new ActionHistoryEntry(label, doc.Bounds,
             undo: _ =>
             {
                 newParent.Remove(node);
@@ -84,7 +93,165 @@ public static class LayerCommands
             {
                 oldParent.Remove(node);
                 newParent.Insert(Math.Min(newIndex, newParent.Children.Count), node);
-            }));
+            });
+    }
+
+    // ---- 多選（圖層面板一次選了好幾層） ----
+
+    /// <summary>
+    /// 把多選整理成可以操作的清單：去掉沒有父節點的（根）、去掉「祖先也在選取裡」的
+    /// （搬群組就等於搬了它的子層，再搬一次子層會把它從群組裡抽出來），並照樹的順序排好
+    /// （由下到上、深度優先＝面板由下往上看的順序）。多選的每個操作都先經過這裡。
+    /// </summary>
+    public static List<LayerNode> NormalizeSelection(Document doc, IEnumerable<LayerNode> selection)
+    {
+        var picked = new HashSet<LayerNode>(selection.Where(n => n.Parent != null && n.Document == doc));
+        var ordered = new List<LayerNode>();
+        lock (doc.SyncRoot)
+        {
+            void Walk(GroupLayer group, bool ancestorPicked)
+            {
+                foreach (var child in group.Children)
+                {
+                    var isPicked = picked.Contains(child) && !ancestorPicked;
+                    if (isPicked) ordered.Add(child);
+                    if (child is GroupLayer g) Walk(g, ancestorPicked || isPicked);
+                }
+            }
+            Walk(doc.Root, false);
+        }
+        return ordered;
+    }
+
+    /// <summary>
+    /// 把多個節點包進同一個新群組（一步 undo）。群組落在「最上面那個選取節點」的位置
+    /// （Photoshop 也是這樣），選取節點照原本的上下順序進群組；只選一個時等同
+    /// <see cref="WrapInGroup"/>。沒有可包的節點回 null。
+    /// </summary>
+    public static GroupLayer? GroupNodes(Document doc, HistoryManager history, IEnumerable<LayerNode> selection)
+    {
+        var nodes = NormalizeSelection(doc, selection);
+        if (nodes.Count == 0) return null;
+        if (nodes.Count == 1) return WrapInGroup(doc, history, nodes[0]);
+
+        var top = nodes[^1];
+        var parent = top.Parent!;
+        var group = new GroupLayer { Name = "群組" };
+        int index;
+        lock (doc.SyncRoot)
+        {
+            index = parent.IndexOf(top) + 1;
+            parent.Insert(index, group);
+        }
+
+        var entries = new List<IHistoryEntry>
+        {
+            new ActionHistoryEntry("群組化", doc.Bounds,
+                undo: d =>
+                {
+                    if (ReferenceEquals(d.ActiveLayer, group)) d.ActiveLayer = top;
+                    parent.Remove(group);
+                },
+                redo: _ => parent.Insert(Math.Min(index, parent.Children.Count), group),
+                onDispose: () =>
+                {
+                    if (group.Document == null && group.Children.Count == 0) group.Dispose();
+                }),
+        };
+        foreach (var node in nodes) // 由下到上依序疊進群組，相對順序不變
+            entries.Add(MoveEntry(doc, node, group, group.Children.Count, "群組化"));
+
+        history.Push(new CompositeHistoryEntry("群組化", entries.ToArray()));
+        return group;
+    }
+
+    /// <summary>
+    /// 把多個節點一起搬到 <paramref name="newParent"/> 的 <paramref name="newIndex"/>
+    /// （語意與 <see cref="MoveNode"/> 相同：放在目前該位置那個節點的下面；超出範圍＝最上面），
+    /// 相對順序不變，一步 undo。目標在任一選取節點裡面、或沒有東西要動時回 false。
+    /// </summary>
+    public static bool MoveNodes(Document doc, HistoryManager history, IEnumerable<LayerNode> selection,
+        GroupLayer newParent, int newIndex, string label = "移動圖層")
+    {
+        var nodes = NormalizeSelection(doc, selection);
+        if (nodes.Count == 0) return false;
+        var picked = new HashSet<LayerNode>(nodes);
+        for (var g = (GroupLayer?)newParent; g != null; g = g.Parent)
+            if (picked.Contains(g)) return false; // 不能放進自己或子孫
+
+        var entries = new List<IHistoryEntry>();
+        lock (doc.SyncRoot)
+        {
+            // 參考點＝目標位置上第一個不在選取裡的節點；整批會依序排在它下面（沒有＝排到最上面）
+            LayerNode? anchor = null;
+            for (var i = Math.Max(0, newIndex); i < newParent.Children.Count; i++)
+            {
+                if (picked.Contains(newParent.Children[i])) continue;
+                anchor = newParent.Children[i];
+                break;
+            }
+
+            for (var i = nodes.Count - 1; i >= 0; i--) // 由上到下：每個都貼在前一個的下面
+            {
+                var node = nodes[i];
+                var anchorIndex = anchor == null ? newParent.Children.Count : newParent.IndexOf(anchor);
+                var current = ReferenceEquals(node.Parent, newParent) ? newParent.IndexOf(node) : -1;
+                if (current >= 0 && current == anchorIndex - 1)
+                {
+                    anchor = node; // 已經在位子上
+                    continue;
+                }
+                // 先拔再插：自己原本就在 anchor 下方時，拔掉後 anchor 會往下補一格
+                var target = anchorIndex - (current >= 0 && current < anchorIndex ? 1 : 0);
+                entries.Add(MoveEntry(doc, node, newParent, target, label));
+                anchor = node;
+            }
+        }
+
+        if (entries.Count == 0) return false;
+        history.Push(entries.Count == 1 ? entries[0] : new CompositeHistoryEntry(label, entries.ToArray()));
+        return true;
+    }
+
+    /// <summary>
+    /// 多個節點各自在自己的群組裡上移／下移一格（direction：+1 上移、-1 下移），一步 undo。
+    /// 已到頂／底、或那一格是另一個選取節點的就留在原位（整批像一塊一樣往那邊擠）。
+    /// </summary>
+    public static bool ShiftNodes(Document doc, HistoryManager history, IEnumerable<LayerNode> selection, int direction)
+    {
+        var nodes = NormalizeSelection(doc, selection);
+        if (nodes.Count == 0) return false;
+        var picked = new HashSet<LayerNode>(nodes);
+        var label = direction > 0 ? "圖層上移" : "圖層下移";
+        var entries = new List<IHistoryEntry>();
+        lock (doc.SyncRoot)
+        {
+            // 上移先處理最上面的（讓出位子），下移先處理最下面的
+            var order = direction > 0 ? nodes.AsEnumerable().Reverse() : nodes;
+            foreach (var node in order)
+            {
+                var parent = node.Parent!;
+                var index = parent.IndexOf(node);
+                var target = index + direction;
+                if (target < 0 || target >= parent.Children.Count) continue;
+                if (picked.Contains(parent.Children[target])) continue;
+                entries.Add(MoveEntry(doc, node, parent, target, label));
+            }
+        }
+        if (entries.Count == 0) return false;
+        history.Push(entries.Count == 1 ? entries[0] : new CompositeHistoryEntry(label, entries.ToArray()));
+        return true;
+    }
+
+    /// <summary>刪掉多個節點（一步 undo）。回傳實際刪掉的數量。</summary>
+    public static int RemoveNodes(Document doc, HistoryManager history, IEnumerable<LayerNode> selection)
+    {
+        var nodes = NormalizeSelection(doc, selection);
+        if (nodes.Count == 0) return 0;
+        var entries = new List<IHistoryEntry>();
+        for (var i = nodes.Count - 1; i >= 0; i--) entries.Add(RemoveEntry(doc, nodes[i], "刪除圖層"));
+        history.Push(entries.Count == 1 ? entries[0] : new CompositeHistoryEntry("刪除圖層", entries.ToArray()));
+        return entries.Count;
     }
 
     /// <summary>把節點包進新群組（原位置替換）。</summary>
