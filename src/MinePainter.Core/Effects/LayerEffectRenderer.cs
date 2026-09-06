@@ -481,8 +481,12 @@ public static class LayerEffectRenderer
             var worthClipping = visibleArea * 2 < contentArea;
 
             var region = worthClipping ? clipped : content;
+            // 位置相關的效果（暈影、聚焦、像素化…）以「範圍」為座標系：圓心＝範圍中心、半對角線＝範圍的。
+            // 使用者調的中心與半徑是對著畫布看的（選點器的圈畫在畫布縮圖上、破壞性套用也是以畫布為範圍），
+            // 所以範圍就是畫布本身，不能拿內容框去聯集 —— 內容框是 tile 對齊的保守值，
+            // 128×128 的圖會變成 256×256 的範圍，圓心就從畫布中央跑到右下角去了。
+            if (canvasDependent) region = canvasInLayer;
             cache.LastClipped = !content.IsEmpty && region != content;
-            if (canvasDependent) region = region.IsEmpty ? canvasInLayer : SKRectI.Union(region, canvasInLayer);
 
             if (region.IsEmpty)
             {
@@ -495,7 +499,10 @@ public static class LayerEffectRenderer
                 return null;
             }
 
-            var full = cache.DirtyAll || wholeLayer;
+            // 位置相關的效果只算髒區不行：髒區會被當成整個範圍，圓心與半對角線跟著變（IEffect.IsPositionIndependent
+            // 的契約本來就是「必須整層重算」，但這裡以前沒照做）。使用者 2026-09-06 回報：群組套「聚焦 - 亮度」，
+            // 關掉群組顯示再打開就變深 —— 顯示切換只標髒畫布範圍，局部重算的圓跟第一次整份算的不一樣。
+            var full = cache.DirtyAll || wholeLayer || canvasDependent;
             SKRectI write;
             SKRectI compute;
             if (full)

@@ -1,4 +1,4 @@
-using MinePainter.Core.Effects;
+﻿using MinePainter.Core.Effects;
 using MinePainter.Core.History;
 using MinePainter.Core.IO;
 using MinePainter.Core.Layers;
@@ -241,6 +241,33 @@ public class EffectCacheInvalidationTests
         }
         Assert.True(anyBlue, "縮圖要看到效果後的顏色");
         Assert.False(anyRed, "原件不該再畫一次蓋掉效果");
+        session.Dispose();
+    }
+
+    /// <summary>
+    /// 位置相關效果（暈影、聚焦…）標髒一小塊也得整層重算：圓心與半對角線看的是計算範圍，
+    /// 只算髒區的話那一塊會以髒區為中心重算，跟周圍接不起來（2026-09-06 群組版回報的同一根因）。
+    /// </summary>
+    [Fact]
+    public void PositionDependentEffect_PartialDirty_RecomputesWholeLayer()
+    {
+        var (session, layer) = NewTransparentSession(128);
+        var doc = session.Document;
+        FillSquare(layer, new SKRectI(0, 0, 128, 128), new SKColor(200, 200, 200));
+        LayerEffectCommands.Add(doc, session.History, layer,
+            LayerEffect.Create(new FocusEffect { Mode = FocusEffect.ModeBrightness, Brightness = -80, Radius = 10, Feather = 30 }));
+        LayerEffectRenderer.RenderLayerNow(doc, layer);
+        var corner = CachePixel(layer, 8, 8);
+        var mid = CachePixel(layer, 64, 64);
+        Assert.True((corner & 0xFF) < 80, "角落應該被壓暗");
+        Assert.True((mid & 0xFF) > 190, "焦點中央應該原樣");
+
+        // 只標髒角落一小塊（內容沒變）：只算這 16×16 的話，(8,8) 會變成「焦點中央」而亮回來
+        layer.Invalidate(new SKRectI(0, 0, 16, 16));
+        LayerEffectRenderer.RenderLayerNow(doc, layer);
+
+        Assert.Equal(corner, CachePixel(layer, 8, 8));
+        Assert.Equal(mid, CachePixel(layer, 64, 64));
         session.Dispose();
     }
 }

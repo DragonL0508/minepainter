@@ -173,4 +173,31 @@ public class GroupEffectTests
         Assert.True(new GroupLayer().CanHaveEffects);
         Assert.True(new RasterLayer().CanHaveEffects);
     }
+
+    /// <summary>
+    /// 使用者 2026-09-06 回報：群組套「聚焦 - 亮度」後，關掉群組顯示再打開，效果變深了。
+    /// 位置相關的效果（圓心、半對角線看的是計算範圍）宣告要整層重算，可是顯示切換只把畫布範圍標髒，
+    /// 局部重算的範圍（畫布）跟第一次整份算的範圍（內容 tile 對齊 ∪ 畫布）不一樣，圓就換了位置與大小。
+    /// </summary>
+    [Fact]
+    public void PositionDependentGroupEffect_SameAfterVisibilityToggle()
+    {
+        var (session, group, _, _) = NewGroupDoc();
+        var doc = session.Document;
+        LayerEffectCommands.Add(doc, session.History, group,
+            LayerEffect.Create(new FocusEffect { Mode = FocusEffect.ModeBrightness, Brightness = -80, Radius = 10, Feather = 30 }));
+        LayerEffectRenderer.RenderLayerNow(doc, group);
+        var before = new[] { CachePixel(group, 5, 5), CachePixel(group, 64, 64), CachePixel(group, 120, 120), CachePixel(group, 100, 30) };
+
+        LayerCommands.SetVisible(doc, session.History, group, false);
+        LayerCommands.SetVisible(doc, session.History, group, true);
+        LayerEffectRenderer.RenderLayerNow(doc, group);
+        var after = new[] { CachePixel(group, 5, 5), CachePixel(group, 64, 64), CachePixel(group, 120, 120), CachePixel(group, 100, 30) };
+
+        for (var i = 0; i < before.Length; i++)
+            Assert.True(Math.Abs(before[i].Red - after[i].Red) <= 1 && Math.Abs(before[i].Green - after[i].Green) <= 1,
+                $"第 {i} 點顯示切換前 {before[i]} 後 {after[i]}：位置相關效果的局部重算改變了幾何");
+
+        session.Dispose();
+    }
 }
