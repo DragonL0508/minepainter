@@ -1,7 +1,6 @@
 <p align="center"><img src="docs/icon.png" width="96" alt="" /></p>
 <h1 align="center">MinePainter</h1>
 <p align="center">你用什麼軟體做縮圖？我：黃金荷包蛋。</p>
-<p align="center">文字、效果、變形都是物件，昨天做好的今天照樣能改。</p>
 <p align="center"><a href="https://dragonl0508.github.io/minepainter/"><b>下載</b></a> · <a href="https://github.com/DragonL0508/minepainter/releases">所有版本</a></p>
 
 <br />
