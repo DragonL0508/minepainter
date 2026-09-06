@@ -24,7 +24,7 @@ public static class ShortcutMap
         new("file.save", "檔案", "儲存", new KeyGesture(Key.S, KeyModifiers.Control)),
         new("file.saveAs", "檔案", "另存新檔", null),
         new("file.export", "檔案", "匯出影像", null),
-        new("file.exportPsd", "檔案", "匯出為 Photoshop 檔", null),
+        new("file.exportProject", "檔案", "匯出為 PSD／PDN", null),
         new("file.copyImage", "檔案", "複製這張圖片", null),
         new("file.closeTab", "檔案", "關閉分頁", new KeyGesture(Key.W, KeyModifiers.Control)),
 

@@ -1677,10 +1677,10 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// 匯出成 Photoshop 文件：圖層、群組、可編輯文字、圖層樣式、調整圖層盡量保留（見 PsdFormat.Save）；
-    /// 對不上的效果整層烙成像素，寫完把有損的地方講出來。
+    /// 匯出成別的編輯器的專案檔。.psd：圖層、群組、可編輯文字、圖層樣式、調整圖層盡量保留（見 PsdFormat.Save）；
+    /// .pdn：合併成單一圖層（paint.net 沒有這些東西，見 PdnFormat.Save）。寫完把有損的地方講出來。
     /// </summary>
-    private async void OnExportPsdClicked(object? sender, RoutedEventArgs e)
+    private async void OnExportProjectClicked(object? sender, RoutedEventArgs e)
     {
         var session = Canvas.Session;
         if (session == null) return;
@@ -1690,27 +1690,37 @@ public partial class MainWindow : Window
 
         var file = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
         {
-            Title = "匯出為 Photoshop 檔",
+            Title = "匯出為 PSD／PDN",
             DefaultExtension = "psd",
             SuggestedFileName = SuggestedName("匯出"),
-            FileTypeChoices = [new FilePickerFileType("Photoshop 文件") { Patterns = ["*.psd"] }],
+            FileTypeChoices =
+            [
+                new FilePickerFileType("Photoshop 文件") { Patterns = ["*.psd"] },
+                new FilePickerFileType("paint.net 專案") { Patterns = ["*.pdn"] },
+            ],
         });
         var path = file?.TryGetLocalPath();
         if (path == null) return;
 
+        var isPdn = string.Equals(Path.GetExtension(path), ".pdn", StringComparison.OrdinalIgnoreCase);
+        var label = isPdn ? "paint.net 專案" : "Photoshop 檔";
         try
         {
             var doc = session.Document;
             IReadOnlyList<string> warnings = [];
-            await ProgressDialog.RunAsync(this, "匯出 Photoshop 檔", p => PsdFormat.Save(doc, path, p, out warnings));
-            Toasts.Show(warnings.Count == 0 ? "已匯出 Photoshop 檔" : "已匯出 Photoshop 檔，部分內容已轉成像素");
+            await ProgressDialog.RunAsync(this, $"匯出{label}", p =>
+            {
+                if (isPdn) PdnFormat.Save(doc, path, p, out warnings);
+                else PsdFormat.Save(doc, path, p, out warnings);
+            });
+            Toasts.Show(warnings.Count == 0 ? $"已匯出{label}" : $"已匯出{label}，部分內容已轉成像素");
             foreach (var warning in warnings.Take(2)) Toasts.Show(warning);
             if (warnings.Count > 2) Toasts.Show($"另有 {warnings.Count - 2} 處匯出時有調整");
         }
         catch (Exception ex)
         {
             Toasts.Show($"匯出失敗：{ex.Message}");
-            LogError("匯出 Photoshop 檔", ex);
+            LogError($"匯出{label}", ex);
         }
     }
 
@@ -2874,7 +2884,7 @@ public partial class MainWindow : Window
             ["file.save"] = () => _ = SaveAsync(saveAs: false),
             ["file.saveAs"] = () => _ = SaveAsync(saveAs: true),
             ["file.export"] = () => OnExportClicked(null, new RoutedEventArgs()),
-            ["file.exportPsd"] = () => OnExportPsdClicked(null, new RoutedEventArgs()),
+            ["file.exportProject"] = () => OnExportProjectClicked(null, new RoutedEventArgs()),
             ["file.copyImage"] = () => OnCopyFlattenedClicked(null, new RoutedEventArgs()),
             ["file.closeTab"] = () => OnCloseTabClicked(null, new RoutedEventArgs()),
 

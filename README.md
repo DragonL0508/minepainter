@@ -20,7 +20,7 @@ Windows 10 / 11 64 位元。
 | --- | --- |
 | **開啟** | `.mpp` `.pdn` `.psd` `.png` `.jpg` `.bmp` `.gif` `.webp` |
 | **儲存** | `.mpp` `.png` `.jpg` `.bmp` `.gif` `.webp` |
-| **匯出** | `.psd`（圖層、群組、可編輯文字、圖層樣式、調整圖層盡量保留；對不上的效果轉成像素） |
+| **匯出** | `.psd`（圖層、群組、可編輯文字、圖層樣式、調整圖層盡量保留；對不上的效果轉成像素） `.pdn`（合併成單一圖層） |
 
 ## 開發
 
@@ -67,7 +67,7 @@ release.bat 1.8.2           推標籤，GitHub Actions 跑測試、建置、出 
 8. **「內容範圍」不能只信 em box，要含實際著墨。** 字面超出行高的字型、重音、外框都會超出排版框（`TextElement.Bounds` = 排版框 ∪ 著墨框）。
 9. **效果、調整、物件都是不可變 record。** 改參數用 `with`；參數描述在 `ParamDef`／`SliderParam`，像素長度的參數標 `Geometric = true`（縮放時才會跟著縮）。
    調整預設是 Skia 色彩濾鏡；濾鏡表達不了的（3D LUT）標 `RequiresPixelPath = true` 並實作 `ApplyPixels`，合成器與破壞性套用走像素路徑、GPU 路徑整份退回合成器（SkiaSharp 2.88 的 runtime shader 在 CPU raster 會直接崩，不能用）。參數之外的大塊資料走 `SaveData`（.mpp 的 `AdjustmentData`、效果堆疊的 `data`）。
-10. **`.psd` 匯出以「Photoshop 裡還能改」為準。** `PsdFormat.Save` 是 `Load` 的反向：文字寫 `TySh`、效果寫 `lfx2`、調整寫參數區塊，鍵與單位照讀取端；對不上的效果整層烙成像素並回報 warnings，不准悄悄少一條效果。守門：`PsdSaveTests`（寫出再讀回）。
+10. **`.psd` 匯出以「Photoshop 裡還能改」為準。** `PsdFormat.Save` 是 `Load` 的反向：文字寫 `TySh`、效果寫 `lfx2`、調整寫參數區塊，鍵與單位照讀取端；對不上的效果整層烙成像素並回報 warnings，不准悄悄少一條效果。守門：`PsdSaveTests`（寫出再讀回）。`.pdn` 匯出只寫單一圖層（paint.net 沒有群組／文字／效果，逐層搬只會得到烙死的像素），物件圖照 paint.net 5.1 真檔逐欄位寫，改欄位前先用真檔傾印對照；守門：`PdnSaveTests`。
 11. **`.mpp` 向後相容。** 加欄位要 bump `MppFormat.FormatVersion`、舊檔照讀、新檔在舊版開得起來或明確拒絕。每次改格式都要有 `MppFormatTests`。
 12. **Skia 物件的生命週期要明確。** `SKImage`／`SKBitmap`／`SKPath` 誰擁有誰釋放寫在註解裡；多份物件共用同一張 `SKImage` 時（`LayerPixelSource.Rebased`），只有一個擁有者，其餘 `Detach()`。合成執行緒可能在物件釋放後才畫到它，尺寸類屬性建構時就快取。
 

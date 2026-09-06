@@ -19,7 +19,7 @@ namespace MinePainter.Core.IO;
 /// 1 位元組格式版本（0 = 每塊 gzip、1 = 原始）+ 4 位元組區塊大小，接著每塊
 /// 4 位元組區塊編號 + 4 位元組資料長度 + 資料，全部大端序、區塊順序不保證。
 /// </summary>
-public static class PdnFormat
+public static partial class PdnFormat
 {
     private const int MaxDimension = 65535;
     private const long MaxSurfaceBytes = int.MaxValue;
