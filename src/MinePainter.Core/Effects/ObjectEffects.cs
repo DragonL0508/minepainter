@@ -1,4 +1,5 @@
 ﻿using SkiaSharp;
+using MinePainter.Core.Layers;
 using static MinePainter.Core.Effects.EffectMath;
 
 namespace MinePainter.Core.Effects;
@@ -893,22 +894,18 @@ public sealed record ObjectGradientEffect : IEffect
 }
 
 /// <summary>
-/// 羽化物件（paint.net 的 Feather Object 外掛）：把物件的硬邊換成柔邊，用來收掉去背後的鋸齒。
+/// 羽化物件（paint.net 的 Feather Object 外掛）：從物件最外圍的像素往內慢慢啃掉 —— 邊緣那一格幾乎透明，
+/// 往內 <c>寬度</c> px 才回到原本的濃度；離邊緣比寬度遠的內部像素一格都不動，顏色一律不動。
 ///
-/// **只修邊緣**：軟邊以「原本的邊緣線」為中心，往內往外各鋪一半（<c>寬度</c>／2），
-/// 邊緣外那一圈補上、邊緣內那一圈淡出，剛好抵銷 —— 物件不會被削瘦，離邊緣夠遠的內部像素
-/// 一格都不動（使用者 2026-09-05 明示：羽化不該讓內部變半透明）。
-/// 舊版是從邊緣往內單向淡出整整一個半徑，等於把物件啃掉一圈。
-///
-/// 往外長出來的那半圈需要顏色：用 premultiplied 模糊把邊緣色外推（premultiplied 的平均
-/// ＝以 alpha 加權的顏色平均，不會把空白的黑混進來），參考 alpha 再用「內容遮罩的模糊」正規化，
-/// 半透明的物件羽化出來的邊也就不會比物件本身還濃。
+/// 只往內、不往外：之前的版本以邊緣線為中心往內往外各鋪一半、外圈還用模糊把邊緣色外推，
+/// 結果是「物件外圍變不透明、變糊」（使用者 2026-09-07 明示：羽化應該是去啃物件最外圍的像素）。
+/// 「內部不能變半透明」（2026-09-05）靠寬度上限守住：軟帶只有寬度那麼寬。
 /// </summary>
 public sealed record ObjectFeatherEffect : IEffect
 {
-    /// <summary>軟邊的總寬度（px）：以原邊緣為中心，往內往外各一半。</summary>
+    /// <summary>軟帶寬度（px）：從邊緣往內這麼多像素回到原本的濃度。</summary>
     public int Radius { get; init; } = 4;
-    /// <summary>強度 0..100：0 = 完全不動，100 = 整條軟邊都照羽化的結果走。</summary>
+    /// <summary>強度 0..100：0 = 完全不動，100 = 整條軟帶都照羽化的結果走。</summary>
     public int Strength { get; init; } = 100;
     /// <summary>畫布邊界也視為物件邊（貼齊畫布邊的物件是否也羽化）。</summary>
     public bool FeatherCanvasEdge { get; init; }
@@ -917,8 +914,9 @@ public sealed record ObjectFeatherEffect : IEffect
     public string Name => "羽化";
     public string Category => "物件";
 
-    /// <summary>軟邊只往外長半個寬度，來源／輸出各留這麼多餘裕就夠。</summary>
-    public int SourceMargin => Math.Clamp(Radius, 1, 100) / 2 + 3;
+    /// <summary>距離場要看到軟帶外一點才算得準；輸出不會長出去。</summary>
+    public int SourceMargin => Math.Clamp(Radius, 1, 100) + 2;
+    public int OutputMargin => 0;
 
     private static readonly ParamDef[] Params =
     [
@@ -933,33 +931,17 @@ public sealed record ObjectFeatherEffect : IEffect
 
     public void Render(EffectContext ctx)
     {
-        var half = Math.Clamp(Radius, 1, 100) / 2f;   // 軟邊往內／往外各鋪這麼多
+        var radius = (float)Math.Clamp(Radius, 1, 100);
         var pad = SourceMargin;
         var w = ctx.Width + pad * 2;
         var h = ctx.Height + pad * 2;
         var strength = Math.Clamp(Strength, 0, 100) / 100f;
 
         var padded = DistanceTransform.PaddedSource(ctx, pad, FeatherCanvasEdge);
-
-        // 邊緣往外那半圈需要顏色，內部的覆蓋率也需要一個「這裡的物件本來多濃」的基準：
-        // ext = premultiplied 模糊（＝以 alpha 加權的鄰近色，不會把空白的黑混進來）、
-        // cover = 內容遮罩的模糊；ext.A ÷ cover.A 就是「鄰近有內容像素的平均 alpha」。
-        var blurRadius = MathF.Max(1f, half);
-        var ext = GaussianBlur(padded, w, h, blurRadius, ctx.Cancellation);
-        var cover = new uint[padded.Length];
-        for (var i = 0; i < padded.Length; i++) cover[i] = A(padded[i]) > 0 ? 0xFF000000u : 0u;
-        cover = GaussianBlur(cover, w, h, blurRadius, ctx.Cancellation);
-
-        var refAlpha = new byte[padded.Length];
+        // 覆蓋率看「有沒有內容」而不是 alpha 多少：半透明的物件整片 alpha 128，拿 alpha 當覆蓋率
+        // 距離場會以為整片都是邊緣，把內部也啃掉
         var coverage = new byte[padded.Length];
-        for (var i = 0; i < padded.Length; i++)
-        {
-            var cv = A(cover[i]);
-            var reference = cv == 0 ? 255 : Math.Clamp(A(ext[i]) * 255 / cv, 1, 255);
-            refAlpha[i] = (byte)reference;
-            coverage[i] = (byte)Math.Min(255, A(padded[i]) * 255 / reference);
-        }
-
+        for (var i = 0; i < padded.Length; i++) coverage[i] = A(padded[i]) > 0 ? (byte)255 : (byte)0;
         var sd = DistanceTransform.SignedFromCoverage(coverage, w, h);
 
         ctx.ForRows(y =>
@@ -969,25 +951,16 @@ public sealed record ObjectFeatherEffect : IEffect
                 var di = (y + pad) * w + (x + pad);
                 var oi = y * ctx.Width + x;
                 var src = padded[di];
-                var d = sd[di];
-                if (d >= half) { ctx.Dst[oi] = src; continue; }   // 內部：一格都不動
-                if (d <= -half) { ctx.Dst[oi] = 0; continue; }    // 軟邊外：本來就空
+                if (A(src) == 0) { ctx.Dst[oi] = 0; continue; }
+                var d = sd[di];                                    // 往內為正（px）
+                if (d >= radius) { ctx.Dst[oi] = src; continue; }  // 離邊緣夠遠：一格都不動
 
-                var t = (d + half) / (2 * half);
-                var s = t * t * (3f - 2f * t);                    // smoothstep：過渡沒有折角
-                // 目標＝「這裡的物件濃度 × 覆蓋率」。用 refAlpha 而不是像素自己的 alpha，
-                // 抗鋸齒邊的半格 alpha 才不會被再乘一次（寬度趨近 0 時羽化就是恆等變換）。
-                var target = refAlpha[di] * s;
-                var a0 = A(src);
-                var alpha = Clamp255(a0 + (target - a0) * strength);
-                if (alpha == 0) { ctx.Dst[oi] = 0; continue; }
-
-                // 有內容就用自己的顏色、空白就用外推出來的邊緣色，換上新的 alpha
-                var tinted = a0 > 0 ? src : ext[di];
-                if (A(tinted) == 0) { ctx.Dst[oi] = 0; continue; }
-                if (a0 > 0 && alpha == a0) { ctx.Dst[oi] = src; continue; }
-                Unpremul(tinted, out var b, out var g, out var r, out _);
-                ctx.Dst[oi] = Premul(b, g, r, alpha);
+                var t = Math.Clamp(d / radius, 0f, 1f);
+                var s = t * t * (3f - 2f * t);                     // smoothstep：過渡沒有折角
+                var keep = 1f - strength * (1f - s);
+                if (keep >= 0.999f) { ctx.Dst[oi] = src; continue; }
+                var m = (byte)Math.Clamp(MathF.Round(keep * 255f), 0f, 255f);
+                ctx.Dst[oi] = m == 0 ? 0 : LayerPixelSource.ScalePremul(src, m);
             }
         });
     }

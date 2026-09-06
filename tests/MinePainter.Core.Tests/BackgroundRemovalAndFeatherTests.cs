@@ -28,7 +28,7 @@ public class BackgroundRemovalAndFeatherTests
     // ---- 羽化物件 ----
 
     [Fact]
-    public void Feather_SoftensEdge_LeavesInteriorUntouched()
+    public void Feather_ErodesFromTheEdgeInward_LeavesInteriorUntouched()
     {
         const int w = 64, h = 64;
         // 內容在 x = 12..51，左邊界線落在 x = 11 與 12 之間
@@ -37,24 +37,22 @@ public class BackgroundRemovalAndFeatherTests
         var ctx = EffectContext.FromPixels(src, w, h, fx.SourceMargin);
         fx.Render(ctx);
 
-        // 內部完全不動（舊版會從邊緣往內淡出一整個半徑，把物件啃掉一圈）
+        // 離邊緣比寬度遠的內部一格都不動
         Assert.Equal(255, A(ctx.Dst[32 * w + 32]));
-        Assert.Equal(255, A(ctx.Dst[32 * w + 20]));
-        Assert.Equal(255, A(ctx.Dst[32 * w + 17]));
+        Assert.Equal(255, A(ctx.Dst[32 * w + 21]));
 
-        // 邊緣兩側對稱地過渡，且是單調的
-        Assert.InRange(A(ctx.Dst[32 * w + 12]), 120, 200);
-        Assert.InRange(A(ctx.Dst[32 * w + 11]), 55, 135);
-        Assert.True(A(ctx.Dst[32 * w + 10]) < A(ctx.Dst[32 * w + 11]));
-        Assert.True(A(ctx.Dst[32 * w + 11]) < A(ctx.Dst[32 * w + 12]));
-        Assert.True(A(ctx.Dst[32 * w + 12]) < A(ctx.Dst[32 * w + 13]));
+        // 最外圍那一格幾乎被啃光，往內單調回到不透明
+        Assert.True(A(ctx.Dst[32 * w + 12]) < 40, $"edge {A(ctx.Dst[32 * w + 12])}");
+        for (var x = 12; x < 20; x++)
+            Assert.True(A(ctx.Dst[32 * w + x]) < A(ctx.Dst[32 * w + x + 1]), $"x={x} 不單調");
 
-        // 軟邊之外仍是空的
+        // 只往內啃、不往外長：邊緣外面仍是空的
+        Assert.Equal(0u, ctx.Dst[32 * w + 11]);
         Assert.Equal(0u, ctx.Dst[32 * w + 5]);
     }
 
     [Fact]
-    public void Feather_KeepsObjectSize_EdgeStaysPut()
+    public void Feather_NeverGrowsOutward_ColorsUntouched()
     {
         const int w = 64, h = 64;
         var src = Canvas(w, h, (x, y) => x is >= 12 and < 52 && y is >= 12 and < 52 ? Premul(0, 0, 255, 255) : 0);
@@ -62,18 +60,18 @@ public class BackgroundRemovalAndFeatherTests
         var ctx = EffectContext.FromPixels(src, w, h, fx.SourceMargin);
         fx.Render(ctx);
 
-        // 往外補的和往內淡掉的互相抵銷：整條掃描線的 alpha 總量幾乎不變（＝物件沒被削瘦）
         var before = 0;
         var after = 0;
         for (var x = 0; x < w; x++)
         {
             before += A(src[32 * w + x]);
             after += A(ctx.Dst[32 * w + x]);
+            if (A(src[32 * w + x]) == 0) Assert.Equal(0u, ctx.Dst[32 * w + x]);
         }
-        Assert.InRange(after, before - 255, before + 255);
+        Assert.True(after < before, "羽化沒有啃掉任何像素");
 
-        // 顏色照抄邊緣色，補出來的邊不會發黑
-        var edge = ctx.Dst[32 * w + 10];
+        // 半透明的邊緣像素顏色仍是原本的紅
+        var edge = ctx.Dst[32 * w + 14];
         Unpremul(edge, out var b, out var g, out var r, out var a);
         Assert.True(a > 0);
         Assert.InRange(r, 240, 255);
@@ -91,8 +89,8 @@ public class BackgroundRemovalAndFeatherTests
         fx.Render(ctx);
 
         Assert.Equal(128, A(ctx.Dst[24 * w + 24]));           // 內部原樣
-        Assert.InRange(A(ctx.Dst[24 * w + 11]), 20, 80);      // 外圈不會比物件本身還濃
-        Assert.True(A(ctx.Dst[24 * w + 11]) < 128);
+        Assert.True(A(ctx.Dst[24 * w + 13]) < 128);           // 邊緣被啃淡
+        Assert.Equal(0u, ctx.Dst[24 * w + 11]);               // 外面不長
     }
 
     [Fact]
@@ -103,12 +101,12 @@ public class BackgroundRemovalAndFeatherTests
         var full = new ObjectFeatherEffect { Radius = 6, Strength = 100 };
         var ctx = EffectContext.FromPixels(src, w, h, full.SourceMargin);
         full.Render(ctx);
-        var strong = A(ctx.Dst[16 * w + 8]);
+        var strong = A(ctx.Dst[16 * w + 9]);
 
         var half = new ObjectFeatherEffect { Radius = 6, Strength = 50 };
         ctx = EffectContext.FromPixels(src, w, h, half.SourceMargin);
         half.Render(ctx);
-        var mild = A(ctx.Dst[16 * w + 8]);
+        var mild = A(ctx.Dst[16 * w + 9]);
 
         Assert.True(mild > strong);          // 強度越低，邊緣越接近原本的不透明
         Assert.True(mild < 255);
@@ -132,8 +130,7 @@ public class BackgroundRemovalAndFeatherTests
         var fade = new ObjectFeatherEffect { Radius = 6, FeatherCanvasEdge = true };
         ctx = EffectContext.FromPixels(src, w, h, fade.SourceMargin);
         fade.Render(ctx);
-        // 軟邊以畫布邊為中心，看得到的只有內側那一半（角落再少一點）
-        Assert.InRange(A(ctx.Dst[0]), 60, 200);
+        Assert.True(A(ctx.Dst[0]) < 60, $"corner {A(ctx.Dst[0])}");   // 貼畫布邊的那一格被啃掉
         Assert.Equal(255, A(ctx.Dst[8 * w + 8]));   // 離邊夠遠的地方完全不動
     }
 
