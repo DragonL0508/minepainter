@@ -61,7 +61,7 @@ release.bat 1.8.2           推標籤，GitHub Actions 跑測試、建置、出 
 5. **原始高清來源（快速模式的命脈）。** 圖層可帶 `LayerPixelSource`（原圖＋矩陣），失效判準是 `Revision` 對不上。**任何改圖層像素的操作，能保留它就要保留**：寫像素前 `ValidPixelSource` + `TakePixelSource()`，寫完掛新來源並對齊 `Revision`，undo/redo 用 `PixelSourceSwapEntry`。工具箱：`Masked`（遮罩套到原圖）、`Rebased`（仿射映射串進矩陣）、`Copy`、`OutputRender.RenderLayerAsSource`（含效果在輸出解析度算一份）。刻意作廢的只有筆刷、填色、文字平面化、向下合併。守門：`PixelSourceSurvivalTests`、`FastModeWorkflowTests`。
 6. **整份文件縮放的規則只有一份：`ScaleRules`。** 調整影像大小、快速模式輸出、開檔轉模式都走它（像素從原圖重畫、效果的像素長度參數與遮罩跟著縮、文字重新排版）。兩條路結果要一樣。
 7. **效果快取是圖層座標，與畫布無關。** 平移圖層不重算效果：位置變了用 `InvalidateComposite`，內容變了才 `Invalidate`。效果的輸出會延伸 `SourceMargin`，任何「重算範圍」都要含 margin。守門：`EffectCacheInvalidationTests`。
-   位置相關的效果（`IsPositionIndependent = false`：暈影、聚焦、像素化…）以**畫布**為範圍、永遠整層重算 —— 圓心與半對角線看的是範圍，只算髒區或拿內容框當範圔都會讓圓跑掉（顯示切換後聚焦變深就是這樣來的）。
+   位置相關的效果（`IsPositionIndependent = false`：暈影、聚焦、像素化…）以**畫布**為範圍、永遠整層重算 —— 圓心與半對角線看的是範圍，只算髒區或拿內容框當範圍都會讓圓跑掉（顯示切換後聚焦變深就是這樣來的）。
 8. **「內容範圍」不能只信 em box，要含實際著墨。** 字面超出行高的字型、重音、外框都會超出排版框（`TextElement.Bounds` = 排版框 ∪ 著墨框）。
 9. **效果、調整、物件都是不可變 record。** 改參數用 `with`；參數描述在 `ParamDef`／`SliderParam`，像素長度的參數標 `Geometric = true`（縮放時才會跟著縮）。
    調整預設是 Skia 色彩濾鏡；濾鏡表達不了的（3D LUT）標 `RequiresPixelPath = true` 並實作 `ApplyPixels`，合成器與破壞性套用走像素路徑、GPU 路徑整份退回合成器（SkiaSharp 2.88 的 runtime shader 在 CPU raster 會直接崩，不能用）。參數之外的大塊資料走 `SaveData`（.mpp 的 `AdjustmentData`、效果堆疊的 `data`）。
