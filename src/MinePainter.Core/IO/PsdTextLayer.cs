@@ -27,9 +27,11 @@ internal static class PsdTextLayer
     /// 各自擺在原本字面的位置（呼叫端收進一個群組）—— 這是我們對「混合樣式」的作法，
     /// 與「分離文字」指令產出的結構一致。
     /// </summary>
-    public static IReadOnlyList<TextElement>? TryBuild(byte[] block, List<string> notes, out string? failure)
+    /// <param name="dpi">文件解析度：字級與排版框是點（1/72 英寸），像素 = 點 × dpi / 72。</param>
+    public static IReadOnlyList<TextElement>? TryBuild(byte[] block, List<string> notes, out string? failure, float dpi = 72f)
     {
         failure = null;
+        var px = (dpi > 0 ? dpi : 72f) / 72.0;   // 點 → 像素
         var reader = new PsdByteReader(block);
         if (reader.UInt16() != 1)
         {
@@ -88,6 +90,9 @@ internal static class PsdTextLayer
             failure = "變換矩陣退化";
             return null;
         }
+        // 字級與排版框的點數乘上解析度就是像素：把換算併進縮放，下面全部照像素算
+        scaleX *= px;
+        scaleY *= px;
         var rotation = (float)(Math.Atan2(xy, xx) * 180 / Math.PI);
 
         var paragraph = PsdEngineData.Dict(engine, "EngineDict", "ParagraphRun", "RunArray", 0, "ParagraphSheet", "Properties")

@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using MinePainter.Core.Vectors;
+using SkiaSharp;
 
 namespace MinePainter.Core.IO;
 
@@ -20,11 +21,17 @@ namespace MinePainter.Core.IO;
 /// </summary>
 internal static class PsdTextWriter
 {
-    public static byte[] Build(TextElement t)
+    /// <param name="dpi">
+    /// 文件解析度。Photoshop 的字級與排版框是「點」（1/72 英寸），像素大小 = 點 × 解析度 / 72；
+    /// 我們的字級是像素，寫出去要除回去 —— 96 ppi 的文件照像素寫，Photoshop 會把字畫大 1/3，
+    /// 跟點陣快照對不上（使用者 2026-09-07 回報「文字像素沒對齊」）。矩陣的平移是像素，不換算。
+    /// </param>
+    public static byte[] Build(TextElement t, float dpi = 72f)
     {
         var text = t.Text.Replace("\r\n", "\n").Replace('\r', '\n');
         var lines = text.Split('\n');
         var psText = text.Replace('\n', '\r') + "\r";   // PS 段落結尾帶一個 \r
+        var pt = 72.0 / (dpi > 0 ? dpi : 72f);   // 像素 → 點
 
         var ascent = PsdTextLayer.Ascent(t);
         var width = t.UnscaledWidth * t.ScaleX;
@@ -51,15 +58,15 @@ internal static class PsdTextWriter
         var bottom = lines.Length * (double)t.LineHeight - ascent;
 
         var bounds = new PsdDescriptorBuilder("bounds")
-            .Add("Left", PsdDesc.Pnt(left))
-            .Add("Top ", PsdDesc.Pnt(top))
-            .Add("Rght", PsdDesc.Pnt(right))
-            .Add("Btom", PsdDesc.Pnt(bottom));
+            .Add("Left", PsdDesc.Pnt(left * pt))
+            .Add("Top ", PsdDesc.Pnt(top * pt))
+            .Add("Rght", PsdDesc.Pnt(right * pt))
+            .Add("Btom", PsdDesc.Pnt(bottom * pt));
         var boundingBox = new PsdDescriptorBuilder("boundingBox")
-            .Add("Left", PsdDesc.Pnt(left))
-            .Add("Top ", PsdDesc.Pnt(top))
-            .Add("Rght", PsdDesc.Pnt(right))
-            .Add("Btom", PsdDesc.Pnt(bottom));
+            .Add("Left", PsdDesc.Pnt(left * pt))
+            .Add("Top ", PsdDesc.Pnt(top * pt))
+            .Add("Rght", PsdDesc.Pnt(right * pt))
+            .Add("Btom", PsdDesc.Pnt(bottom * pt));
 
         var textDescriptor = new PsdDescriptorBuilder("TxLr")
             .Add("Txt ", psText)
@@ -69,7 +76,7 @@ internal static class PsdTextWriter
             .Add("bounds", bounds)
             .Add("boundingBox", boundingBox)
             .Add("TextIndex", 0)
-            .Add("EngineData", EngineData(t, psText));
+            .Add("EngineData", EngineData(t, psText, pt));
 
         var warp = new PsdDescriptorBuilder("warp")
             .Add("warpStyle", PsdDesc.Enum("warpStyle", "warpNone"))
@@ -87,13 +94,18 @@ internal static class PsdTextWriter
         w.U16(1);
         w.U32(16);
         warp.WriteTo(w);
-        foreach (var v in new[] { left, top, right, bottom }) w.F64(v);
+        foreach (var v in new[] { left * pt, top * pt, right * pt, bottom * pt }) w.F64(v);
         return w.ToArray();
     }
 
-    /// <summary>家族名去空格 + 「-」+ 字重（Noto／Adobe 字型的命名法；讀取端 <see cref="PsdFontName"/> 認得）。</summary>
+    /// <summary>
+    /// 字型的 PostScript 名稱：先問字型檔本身（OpenType 的 name 表、nameID 6 —— Photoshop 就是用這個名字對字型，
+    /// 對不上會換成替代字型、字面與位置全跑掉：使用者 2026-09-07 回報「文字像素沒對齊」）；
+    /// 這台機器沒這支字型時才退回「家族名去空格 + 「-」+ 字重」的猜法（讀取端 <see cref="PsdFontName"/> 認得）。
+    /// </summary>
     public static string PostScriptName(TextElement t)
     {
+        if (FromFontFile(t) is { } real) return real;
         var family = new string(t.FontFamily.Where(c => !char.IsWhiteSpace(c) && c != '-').ToArray());
         if (family.Length == 0) family = "MicrosoftJhengHei";
         var weight = t.FontWeight switch
@@ -111,18 +123,70 @@ internal static class PsdTextWriter
         return $"{family}-{weight}";
     }
 
+    /// <summary>
+    /// 從字型檔的 name 表讀 PostScript 名稱（nameID 6）：Windows 平台（3）是 UTF-16BE、Mac 平台（1）是 ASCII。
+    /// 字型解析跟排版時同一套（BundledFont.Resolve → 系統家族），拿到的才是實際畫出來的那支。讀不到回 null。
+    /// </summary>
+    private static string? FromFontFile(TextElement t)
+    {
+        var style = new SKFontStyle(
+            t.Bold ? Math.Max((int)SKFontStyleWeight.Bold, t.FontWeight) : t.FontWeight,
+            (int)SKFontStyleWidth.Normal,
+            t.Italic ? SKFontStyleSlant.Italic : SKFontStyleSlant.Upright);
+        var bundled = BundledFont.Resolve(t.FontFamily, style);
+        var typeface = bundled ?? SKTypeface.FromFamilyName(t.FontFamily, style);
+        if (typeface == null) return null;
+        try
+        {
+            // 系統找不到這個家族時 Skia 會給預設字型：名字對不上就不要拿它的 PostScript 名稱
+            if (!string.Equals(typeface.FamilyName, t.FontFamily, StringComparison.OrdinalIgnoreCase) && bundled == null) return null;
+            var table = typeface.GetTableData(0x6E616D65);   // 'name'
+            return table is { Length: > 6 } ? ParsePostScriptName(table) : null;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+        finally
+        {
+            if (bundled == null && typeface != BundledFont.Typeface && typeface != SKTypeface.Default) typeface.Dispose();
+        }
+    }
+
+    private static string? ParsePostScriptName(byte[] table)
+    {
+        int U16(int offset) => (table[offset] << 8) | table[offset + 1];
+        var count = U16(2);
+        var storage = U16(4);
+        string? mac = null;
+        for (var i = 0; i < count; i++)
+        {
+            var record = 6 + i * 12;
+            if (record + 12 > table.Length) break;
+            var platform = U16(record);
+            var nameId = U16(record + 6);
+            var length = U16(record + 8);
+            var offset = storage + U16(record + 10);
+            if (nameId != 6 || offset + length > table.Length || length == 0) continue;
+            if (platform == 3) return Encoding.BigEndianUnicode.GetString(table, offset, length).Trim('\0');
+            if (platform == 1) mac ??= Encoding.ASCII.GetString(table, offset, length).Trim('\0');
+        }
+        return mac;
+    }
+
     // ---- EngineData ----
 
-    private static byte[] EngineData(TextElement t, string psText)
+    private static byte[] EngineData(TextElement t, string psText, double pt)
     {
         var justification = t.Alignment switch { TextAlign.Center => 2, TextAlign.Right => 1, _ => 0 };
-        var tracking = t.FontSize > 0 ? t.LetterSpacing / t.FontSize * 1000.0 : 0.0;
+        // 字距是千分之一 em（相對字級，跟單位無關）；Photoshop 的範圍是 −1000..10000
+        var tracking = t.FontSize > 0 ? Math.Clamp(t.LetterSpacing / t.FontSize * 1000.0, -1000, 10000) : 0.0;
         var fill = new object[] { t.Color.Alpha / 255.0, t.Color.Red / 255.0, t.Color.Green / 255.0, t.Color.Blue / 255.0 };
         var length = psText.Length;
 
         var paragraph = ParagraphProperties(justification, t.LineHeightScale);
         var style = StyleSheetData(
-            fontSize: t.FontSize, fauxBold: t.Bold, fauxItalic: t.Italic, underline: t.Underline, strikethrough: t.Strikethrough,
+            fontSize: t.FontSize * pt, fauxBold: t.Bold, fauxItalic: t.Italic, underline: t.Underline, strikethrough: t.Strikethrough,
             horizontalScale: t.ScaleX, tracking: tracking, fill: fill);
         var normalStyle = StyleSheetData(12.0, false, false, false, false, 1.0, 0.0, [1.0, 0.0, 0.0, 0.0]);
 

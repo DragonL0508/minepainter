@@ -883,7 +883,7 @@ public static partial class PsdFormat
             if (style is { Unsupported.Count: > 0 })
                 notes.Add($"「{layer.Name}」的圖層樣式裡，{string.Join("、", style.Unsupported.Distinct())}沒有對應，已略過。");
 
-            if (record.TextData != null && BuildText(record, layer.Name, notes) is { Count: > 0 } texts)
+            if (record.TextData != null && BuildText(record, layer.Name, notes, header.Dpi) is { Count: > 0 } texts)
             {
                 // 文字圖層不變式：有物件就沒有像素。點陣快照只留給剪裁／群組 alpha 當底用
                 if (texts.Count == 1)
@@ -1041,13 +1041,13 @@ public static partial class PsdFormat
     }
 
     /// <summary>解出可編輯文字（多段樣式會是多個）；解不出來提示原因並回 null（呼叫端退回點陣）。</summary>
-    private static IReadOnlyList<TextElement>? BuildText(LayerRecord record, string name, List<string> notes)
+    private static IReadOnlyList<TextElement>? BuildText(LayerRecord record, string name, List<string> notes, float dpi)
     {
         IReadOnlyList<TextElement>? text;
         string? failure;
         try
         {
-            text = PsdTextLayer.TryBuild(record.TextData!, notes, out failure);
+            text = PsdTextLayer.TryBuild(record.TextData!, notes, out failure, dpi);
         }
         catch (Exception ex) when (ex is InvalidDataException or IndexOutOfRangeException or ArgumentOutOfRangeException or OverflowException or FormatException)
         {

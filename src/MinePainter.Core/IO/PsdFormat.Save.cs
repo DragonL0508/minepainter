@@ -209,7 +209,7 @@ public static partial class PsdFormat
                     var (rect, bgra) = RenderPlainText(text);
                     if (bgra != null) record.SetPixels(rect, bgra);
                     else record.SetEmpty();
-                    record.Blocks.Add(("TySh", PsdTextWriter.Build(text)));
+                    record.Blocks.Add(("TySh", PsdTextWriter.Build(text, doc.Dpi)));
                 }
                 else
                 {
@@ -241,34 +241,10 @@ public static partial class PsdFormat
         /// <summary>整層（含效果、物件）算成像素寫成一般圖層。</summary>
         private void Bake(LayerNode node, string reason, List<OutLayer> output)
         {
-            if (node.HasActiveEffects) LayerEffectRenderer.RenderLayerNow(doc, node, Compositor.StaticGroupSourceLocked);
-
             var record = Properties(node);
-            lock (doc.SyncRoot)
-            {
-                SKRectI rect;
-                uint[]? premul = null;
-                if (node.HasActiveEffects && node.FxCache.Rendered)
-                {
-                    var region = node.FxCache.Surface.ExactContentBounds();
-                    rect = Offset(region, node.EffectOffset);
-                    if (region.Width > 0 && region.Height > 0) premul = LayerEffectRenderer.ReadPixels(node.FxCache.Surface, region);
-                }
-                else if (node is RasterLayer raster)
-                {
-                    var region = LayerEffectRenderer.ContentRegion(raster);
-                    rect = Offset(region, raster.Offset);
-                    if (region.Width > 0 && region.Height > 0) premul = LayerEffectRenderer.ReadPixelsWithElements(raster, region);
-                }
-                else
-                {
-                    rect = node.ContentBounds;
-                    if (rect.Width > 0 && rect.Height > 0) premul = Compositor.StaticGroupSourceLocked((GroupLayer)node, rect);
-                }
-
-                if (premul != null) record.SetPixels(rect, Unpremultiply(premul, rect.Width, rect.Height));
-                else record.SetEmpty();
-            }
+            var (rect, premul) = LayerFlattener.Render(doc, node);
+            if (premul != null) record.SetPixels(rect, Unpremultiply(premul, rect.Width, rect.Height));
+            else record.SetEmpty();
             output.Add(record);
             notes.Add($"圖層「{record.Name}」{reason}，已轉成像素。");
         }
