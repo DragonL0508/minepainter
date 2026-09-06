@@ -1676,6 +1676,44 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// 匯出成 Photoshop 文件：圖層、群組、可編輯文字、圖層樣式、調整圖層盡量保留（見 PsdFormat.Save）；
+    /// 對不上的效果整層烙成像素，寫完把有損的地方講出來。
+    /// </summary>
+    private async void OnExportPsdClicked(object? sender, RoutedEventArgs e)
+    {
+        var session = Canvas.Session;
+        if (session == null) return;
+
+        CommitCanvasTextEdit();
+        session.CommitPendingEdits();
+
+        var file = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+        {
+            Title = "匯出為 Photoshop 檔",
+            DefaultExtension = "psd",
+            SuggestedFileName = SuggestedName("匯出"),
+            FileTypeChoices = [new FilePickerFileType("Photoshop 文件") { Patterns = ["*.psd"] }],
+        });
+        var path = file?.TryGetLocalPath();
+        if (path == null) return;
+
+        try
+        {
+            var doc = session.Document;
+            IReadOnlyList<string> warnings = [];
+            await ProgressDialog.RunAsync(this, "匯出 Photoshop 檔", p => PsdFormat.Save(doc, path, p, out warnings));
+            Toasts.Show(warnings.Count == 0 ? "已匯出 Photoshop 檔" : "已匯出 Photoshop 檔，部分內容已轉成像素");
+            foreach (var warning in warnings.Take(2)) Toasts.Show(warning);
+            if (warnings.Count > 2) Toasts.Show($"另有 {warnings.Count - 2} 處匯出時有調整");
+        }
+        catch (Exception ex)
+        {
+            Toasts.Show($"匯出失敗：{ex.Message}");
+            LogError("匯出 Photoshop 檔", ex);
+        }
+    }
+
     private async void OnExportClicked(object? sender, RoutedEventArgs e)
     {
         var session = Canvas.Session;
@@ -2836,6 +2874,7 @@ public partial class MainWindow : Window
             ["file.save"] = () => _ = SaveAsync(saveAs: false),
             ["file.saveAs"] = () => _ = SaveAsync(saveAs: true),
             ["file.export"] = () => OnExportClicked(null, new RoutedEventArgs()),
+            ["file.exportPsd"] = () => OnExportPsdClicked(null, new RoutedEventArgs()),
             ["file.copyImage"] = () => OnCopyFlattenedClicked(null, new RoutedEventArgs()),
             ["file.closeTab"] = () => OnCloseTabClicked(null, new RoutedEventArgs()),
 

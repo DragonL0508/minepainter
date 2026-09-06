@@ -55,6 +55,9 @@
             <MenuItem Header="匯出影像(_E)…" Click="OnExportClicked" Tag="file.export">
               <MenuItem.Icon><mi:MaterialIcon Kind="ExportVariant" Width="16" Height="16" /></MenuItem.Icon>
             </MenuItem>
+            <MenuItem Header="匯出為 Photoshop 檔(_P)…" Click="OnExportPsdClicked" Tag="file.exportPsd">
+              <MenuItem.Icon><mi:MaterialIcon Kind="LayersOutline" Width="16" Height="16" /></MenuItem.Icon>
+            </MenuItem>
             <MenuItem Header="複製這張圖片(_C)" Click="OnCopyFlattenedClicked" Tag="file.copyImage">
               <MenuItem.Icon><mi:MaterialIcon Kind="ImageMultipleOutline" Width="16" Height="16" /></MenuItem.Icon>
             </MenuItem>

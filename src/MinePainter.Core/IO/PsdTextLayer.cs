@@ -289,7 +289,7 @@ internal static class PsdTextLayer
     }
 
     /// <summary>與 <see cref="TextElement"/> 排版時同一套字型解析，ascent 才會一致。</summary>
-    private static float Ascent(TextElement element)
+    internal static float Ascent(TextElement element)
     {
         var style = new SKFontStyle(
             element.Bold ? Math.Max((int)SKFontStyleWeight.Bold, element.FontWeight) : element.FontWeight,

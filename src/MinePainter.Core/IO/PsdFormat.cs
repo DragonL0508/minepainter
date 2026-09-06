@@ -35,7 +35,7 @@ namespace MinePainter.Core.IO;
 /// 刻意不做的：調整圖層與填色圖層（沒有像素，略過並提示）、智慧型物件的可編輯性（只拿它的點陣結果）、
 /// 32 位元／通道的 HDR 檔。
 /// </summary>
-public static class PsdFormat
+public static partial class PsdFormat
 {
     /// <summary>PSB 的尺寸上限（PSD 本身只到 30000）。</summary>
     private const int MaxDimension = 300_000;
