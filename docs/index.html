@@ -113,7 +113,9 @@
 
   /* 往下還有一頁的提示；捲動後自己退場 */
   .cue {
-    position: absolute; left: 50%; bottom: 28px; transform: translateX(-50%);
+    /* 用 left/right + margin 置中，不用 translateX(-50%)：它掛著 rise 動畫，
+       動畫結束會把 transform 覆寫成 translateY(0)，置中就掉了（使用者 2026-09-06 回報「更多沒置中」） */
+    position: absolute; left: 0; right: 0; bottom: 28px; width: max-content; margin: 0 auto;
     display: flex; flex-direction: column; align-items: center; gap: 6px;
     font-size: 12px; letter-spacing: 1.5px; color: var(--faint);
     text-decoration: none;
