@@ -159,6 +159,32 @@
   .list b { font-size: 18px; font-weight: 700; }
   .list span { font-size: 17px; color: var(--muted); }
 
+  /* ---- 第三頁：app 內截圖，橫的一排 ---- */
+  .shots { max-width: 1240px; margin: 0 auto; padding: 0 24px 160px; }
+  .shots-head { max-width: 1100px; margin: 0 auto 40px; padding: 0 0 0 0; }
+  .shots h2 { margin: 24px 0 0; font-size: 30px; line-height: 1.3; font-weight: 700; }
+  .shots-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
+  .shot {
+    display: block; position: relative; margin: 0;
+    border: 1px solid var(--line); border-radius: 10px; overflow: hidden;
+    background: var(--card);
+    cursor: zoom-in;
+    transition: transform .45s var(--ease), border-color .3s ease, box-shadow .45s var(--ease);
+  }
+  .shot img { display: block; width: 100%; height: auto; aspect-ratio: 1920 / 1058; object-fit: cover; }
+  .shot figcaption {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    padding: 28px 14px 12px;
+    font-size: 13px; color: var(--text);
+    background: linear-gradient(to top, rgba(19,19,22,.92), rgba(19,19,22,0));
+  }
+  .shot:hover { transform: translateY(-4px); border-color: #3a3a44; box-shadow: 0 18px 40px rgba(0,0,0,.45); }
+  /* 點開放大 */
+  .lightbox { border: 0; padding: 0; background: transparent; max-width: min(96vw, 1600px); max-height: 96vh; }
+  .lightbox::backdrop { background: rgba(0,0,0,.82); backdrop-filter: blur(6px); }
+  .lightbox img { display: block; max-width: min(96vw, 1600px); max-height: 92vh; width: auto; height: auto; border-radius: 8px; border: 1px solid var(--line); cursor: zoom-out; }
+  .lightbox p { margin: 10px 0 0; text-align: center; font-size: 14px; color: var(--muted); }
+
   /* 依序淡入上浮 */
   .rise { animation: rise .9s var(--ease) both; }
   .d1 { animation-delay: .15s; } .d2 { animation-delay: .3s; }
@@ -175,6 +201,9 @@
   @media (max-width: 860px) {
   }
   @media (max-width: 860px) {
+    .shots-row { grid-template-columns: 1fr; gap: 14px; }
+    .shots { padding-bottom: 110px; }
+    .shots h2 { font-size: 26px; }
     .why { grid-template-columns: 1fr; gap: 48px; padding: 96px 24px 120px; }
     .why h2 { font-size: 30px; white-space: normal; }
   }
@@ -195,6 +224,7 @@
     .hero::before { animation: none; opacity: 1; }
     .btn, .btn svg { transition: none; }
     .reveal { opacity: 1; transform: none; transition: none; }
+    .shot, .shot:hover { transition: none; transform: none; }
     .tally { transition: none; }
     .corner a { transition: none; }
     .corner a:hover { transform: none; }
@@ -248,7 +278,33 @@
       <li class="reveal"><i>06</i><b>安裝</b><span>解壓就能跑，開源免費</span></li>
     </ul>
   </section>
+
+  <section class="shots" id="shots">
+    <div class="shots-head reveal">
+      <div class="eyebrow">LOOK</div>
+      <h2>長這樣。</h2>
+    </div>
+    <div class="shots-row">
+      <figure class="shot reveal" data-full="shot-focus.webp">
+        <img src="shot-focus-s.webp" alt="MinePainter 的聚焦效果對話框，在縮圖上拖圈調整焦點範圍" width="800" height="441" loading="lazy" decoding="async" />
+        <figcaption>非破壞性效果：聚焦，在小圖上直接拖圈</figcaption>
+      </figure>
+      <figure class="shot reveal" data-full="shot-text.webp">
+        <img src="shot-text-s.webp" alt="MinePainter 編輯 YouTube 縮圖，文字物件帶漸層與外框效果" width="800" height="441" loading="lazy" decoding="async" />
+        <figcaption>文字永遠能改，效果掛在圖層上跟著走</figcaption>
+      </figure>
+      <figure class="shot reveal" data-full="shot-select.webp">
+        <img src="shot-select-s.webp" alt="MinePainter 用物件選取與筆刷編輯多圖層縮圖" width="800" height="441" loading="lazy" decoding="async" />
+        <figcaption>物件選取、筆刷與 .pdn 相容，paint.net 的手感</figcaption>
+      </figure>
+    </div>
+  </section>
 </main>
+
+<dialog class="lightbox" id="lightbox">
+  <img id="lightbox-img" src="" alt="" />
+  <p id="lightbox-cap"></p>
+</dialog>
 
 <script>
 // 下載連結直接指向「最新的 Release」附件：發一版 Release 這頁就跟著更新，不必改網頁。
@@ -322,6 +378,23 @@ function countUp(row, out, total) {
       el.style.transitionDelay = `${Math.min(i, 6) * 60}ms`;
       io.observe(el);
     });
+  }
+
+  // 截圖點開放大（原生 dialog；點圖或背景、Esc 都關）
+  const box = document.getElementById('lightbox');
+  if (box && typeof box.showModal === 'function') {
+    const img = document.getElementById('lightbox-img');
+    const cap = document.getElementById('lightbox-cap');
+    document.querySelectorAll('.shot').forEach(fig => {
+      fig.addEventListener('click', () => {
+        img.src = fig.dataset.full;
+        img.alt = fig.querySelector('img').alt;
+        cap.textContent = fig.querySelector('figcaption').textContent;
+        box.showModal();
+      });
+    });
+    box.addEventListener('click', () => box.close());
+    box.addEventListener('close', () => { img.src = ''; });
   }
 
   // 捲一下就把「憑什麼」的提示收起來
