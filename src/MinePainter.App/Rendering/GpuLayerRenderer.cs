@@ -141,6 +141,7 @@ public sealed unsafe class GpuLayerRenderer : IDisposable
         _frame++;
         _lodLevel = LodLevelFor(viewScale);
         _gpuContext = gpuContext;
+        _docBounds = new SKRectI(0, 0, session.Document.Width, session.Document.Height);
         DrawGroup(canvas, session, session.Document.Root, visibleDoc);
         SweepLods();
         return true;
@@ -441,9 +442,38 @@ public sealed unsafe class GpuLayerRenderer : IDisposable
             var image = ImageFor(cache, idx, tile);
             if (image == null) continue;
             var rect = idx.ToPixelRect();
-            canvas.DrawImage(image, rect.Left + offset.X, rect.Top + offset.Y, paint);
+            DrawImageWithinDoc(canvas, image, SKRect.Create(rect.Left + offset.X, rect.Top + offset.Y, Tile.Size, Tile.Size), paint);
             LastTiles++;
         }
+    }
+
+    private SKRectI _docBounds;
+
+    /// <summary>
+    /// 把貼圖畫到 <paramref name="dst"/>（文件座標），但取樣範圍只限畫布內的那一段。
+    ///
+    /// 文件尺寸不是 256 的倍數時，最右／最下那格貼圖有一截是「畫布外」的透明區。縮小檢視用雙線性
+    /// 取樣，畫布最後一排像素會混到旁邊的透明 —— 底下的白色棋盤格透出來，就是使用者 2026-09-06
+    /// 說的「畫布縮小時底邊、右邊有一條很細的白線」。左上邊剛好是貼圖邊緣，Skia 對邊緣是夾住取樣
+    /// 所以沒事；這裡把來源框限制在畫布內（Skia 的 strict src rect 同樣夾住框的邊緣），右下就跟左上一樣了。
+    /// 整格都在畫布內的照舊整張貼（不必付 strict 的成本）。
+    /// </summary>
+    private void DrawImageWithinDoc(SKCanvas canvas, SKImage image, SKRect dst, SKPaint? paint)
+    {
+        var doc = new SKRect(_docBounds.Left, _docBounds.Top, _docBounds.Right, _docBounds.Bottom);
+        if (doc.Contains(dst))
+        {
+            canvas.DrawImage(image, dst, paint);
+            return;
+        }
+        var inter = SKRect.Intersect(dst, doc);
+        if (inter.Width <= 0 || inter.Height <= 0) return;
+        var sx = image.Width / dst.Width;
+        var sy = image.Height / dst.Height;
+        var src = new SKRect(
+            (inter.Left - dst.Left) * sx, (inter.Top - dst.Top) * sy,
+            (inter.Right - dst.Left) * sx, (inter.Bottom - dst.Top) * sy);
+        canvas.DrawImage(image, src, inter, paint);
     }
 
     /// <summary>
@@ -510,7 +540,7 @@ public sealed unsafe class GpuLayerRenderer : IDisposable
         };
         foreach (var (image, x, y) in _lodBatch)
         {
-            canvas.DrawImage(image, SKRect.Create(x, y, blockPx, blockPx), paint);
+            DrawImageWithinDoc(canvas, image, SKRect.Create(x, y, blockPx, blockPx), paint);
             LastLodTiles++;
         }
         return true;

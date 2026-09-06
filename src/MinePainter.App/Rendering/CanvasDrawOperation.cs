@@ -188,7 +188,13 @@ public sealed class CanvasDrawOperation : ICustomDrawOperation
                 {
                     if (img != null)
                     {
-                        canvas.DrawImage(img, cx * Tile.Size, cy * Tile.Size, tilePaint);
+                        // 最右／最下那格只取畫布內的那一段（見 GpuLayerRenderer.DrawImageWithinDoc：
+                        // 不然縮小檢視時邊緣會混到格子裡「畫布外」的透明，透出一條白線）
+                        var dst = SKRect.Create(cx * Tile.Size, cy * Tile.Size, Tile.Size, Tile.Size);
+                        var inter = SKRect.Intersect(dst, SKRect.Create(0, 0, _docWidth, _docHeight));
+                        if (inter == dst) canvas.DrawImage(img, dst.Left, dst.Top, tilePaint);
+                        else if (inter.Width > 0 && inter.Height > 0)
+                            canvas.DrawImage(img, SKRect.Create(0, 0, inter.Width, inter.Height), inter, tilePaint);
                         drawn++;
                     }
                 }
