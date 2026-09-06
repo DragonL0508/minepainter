@@ -1,6 +1,7 @@
 <p align="center"><img src="docs/icon.png" width="96" alt="" /></p>
 <h1 align="center">MinePainter</h1>
 <p align="center">你用什麼軟體做縮圖？我：黃金荷包蛋。</p>
+<p align="center">文字、效果、變形都是物件，昨天做好的今天照樣能改。</p>
 <p align="center"><a href="https://dragonl0508.github.io/minepainter/"><b>下載</b></a> · <a href="https://github.com/DragonL0508/minepainter/releases">所有版本</a></p>
 
 <br />
@@ -62,6 +63,7 @@ release.bat 1.8.2           推標籤，GitHub Actions 跑測試、建置、出 
 6. **整份文件縮放的規則只有一份：`ScaleRules`。** 調整影像大小、快速模式輸出、開檔轉模式都走它（像素從原圖重畫、效果的像素長度參數與遮罩跟著縮、文字重新排版）。兩條路結果要一樣。
 7. **效果快取是圖層座標，與畫布無關。** 平移圖層不重算效果：位置變了用 `InvalidateComposite`，內容變了才 `Invalidate`。效果的輸出會延伸 `SourceMargin`，任何「重算範圍」都要含 margin。守門：`EffectCacheInvalidationTests`。
    位置相關的效果（`IsPositionIndependent = false`：暈影、聚焦、像素化…）以**畫布**為範圍、永遠整層重算 —— 圓心與半對角線看的是範圍，只算髒區或拿內容框當範圍都會讓圓跑掉（顯示切換後聚焦變深就是這樣來的）。
+   **效果算爆了不能悄悄略過。** renderer 會跳過那一條讓其餘照算，但一定透過 `LayerEffectRenderer.EffectFailed` 回報（App 記 `error.log` ＋ toast），同一條只報一次、算成功後才重置。守門：`EffectFailureReportTests`。
 8. **「內容範圍」不能只信 em box，要含實際著墨。** 字面超出行高的字型、重音、外框都會超出排版框（`TextElement.Bounds` = 排版框 ∪ 著墨框）。
 9. **效果、調整、物件都是不可變 record。** 改參數用 `with`；參數描述在 `ParamDef`／`SliderParam`，像素長度的參數標 `Geometric = true`（縮放時才會跟著縮）。
    調整預設是 Skia 色彩濾鏡；濾鏡表達不了的（3D LUT）標 `RequiresPixelPath = true` 並實作 `ApplyPixels`，合成器與破壞性套用走像素路徑、GPU 路徑整份退回合成器（SkiaSharp 2.88 的 runtime shader 在 CPU raster 會直接崩，不能用）。參數之外的大塊資料走 `SaveData`（.mpp 的 `AdjustmentData`、效果堆疊的 `data`）。
@@ -86,7 +88,7 @@ release.bat 1.8.2           推標籤，GitHub Actions 跑測試、建置、出 
 - **建置零警告**（`TreatWarningsAsErrors` 在 `Directory.Build.props`）。過時 API 要換掉，不是壓掉。
 - **註解寫繁中，講「為什麼」不講「做什麼」**：每個公開型別／方法有 `<summary>`；踩過的雷寫在出事的那一行旁邊（含日期與使用者回報的原話更好）。程式碼本身講得清楚的不重複。
 - 不留 `TODO`／`FIXME`：要做就做，不做就開 issue。
-- 一個檔案一個主要型別；`MainWindow.axaml.cs` 已經太大，新功能的邏輯放 Core 指令或獨立的 View／Service，不要再往裡面堆。
+- 一個檔案一個主要型別；`MainWindow.axaml.cs` 已經太大，新功能的邏輯放 Core 指令或獨立的 View／Service，不要再往裡面堆。已經在裡面、自成一塊的區段拆成 partial 檔（`MainWindow.Panels.cs` 浮動面板、`MainWindow.CanvasTextEdit.cs` 畫布內文字編輯），照這個樣子繼續拆。
 - 路徑含中文（`桌面`）：跑 `.bat` 用 PowerShell 並設 `$env:CI="true"` 跳過 `pause`；PowerShell 腳本存成含 BOM 的 UTF-8。
 
 ### 測試規範

@@ -90,6 +90,30 @@ public static class LayerEffectRenderer
     public static event Action<LayerNode>? LayerRendered;
 
     /// <summary>
+    /// 某一條效果算到一半炸掉（worker 執行緒上觸發）。那條效果會被略過、其餘照算，
+    /// 畫面因此少了一層效果卻沒有任何提示 —— 使用者只看到「我的光暈怎麼不見了」。
+    /// App 接這個事件記 log ＋ toast。同一條效果連續失敗只報一次（髒區重算會一直打到它），
+    /// 算成功一次之後再失敗才會再報。
+    /// </summary>
+    public static event Action<LayerNode, LayerEffect, Exception>? EffectFailed;
+
+    private static readonly HashSet<Guid> FailedEffectIds = new();
+
+    private static void ReportFailure(LayerNode layer, LayerEffect entry, Exception ex)
+    {
+        lock (FailedEffectIds)
+        {
+            if (!FailedEffectIds.Add(entry.Id)) return;
+        }
+        EffectFailed?.Invoke(layer, entry, ex);
+    }
+
+    private static void ClearFailure(LayerEffect entry)
+    {
+        lock (FailedEffectIds) FailedEffectIds.Remove(entry.Id);
+    }
+
+    /// <summary>
     /// 立刻把效果快取裡這一塊（doc 座標）清成透明，不等背景重算。
     ///
     /// 用在「物件被藏起來」的那一刻：拖曳中原件改由覆疊代表，可是快取裡還留著**上一份**
@@ -606,10 +630,13 @@ public static class LayerEffectRenderer
             {
                 throw;
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                continue; // 單一效果壞掉不該拖垮整層：跳過它
+                // 單一效果壞掉不該拖垮整層：跳過它，但一定要講 —— 悄悄略過會讓畫面跟文件對不上
+                ReportFailure(job.Layer, entry, ex);
+                continue;
             }
+            ClearFailure(entry);
 
             var output = ctx.Dst;
             var mask = job.Masks[i];
