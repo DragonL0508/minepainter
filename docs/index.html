@@ -27,6 +27,8 @@
     --ease: cubic-bezier(.2, .7, .2, 1);
   }
   * { box-sizing: border-box; }
+  /* 「更多」點下去是滑過去，不是跳過去 */
+  html { scroll-behavior: smooth; }
   body {
     margin: 0;
     background: var(--bg);
@@ -132,11 +134,16 @@
   .why {
     max-width: 1100px;
     margin: 0 auto;
-    padding: 160px 24px 180px;
+    /* 佔滿一屏、內容垂直置中：從「更多」滑下來剛好是一整頁 WHY，
+       底下那排截圖完整留在下一屏，不會被切一半露出上半截 */
+    min-height: 100vh;
+    min-height: 100dvh;
+    padding: 120px 24px 140px;
     display: grid;
     grid-template-columns: minmax(460px, 2fr) minmax(0, 3fr);
     gap: 72px;
     align-items: start;
+    align-content: center;
   }
   .eyebrow {
     font: 400 13px/1 "Nightgazer", "Segoe UI", system-ui, sans-serif;
@@ -165,7 +172,7 @@
   .list span { font-size: 17px; color: var(--muted); }
 
   /* ---- 第三頁：app 內截圖，滿版橫排一列，沒有標題也沒有說明，圖自己講 ---- */
-  .shots { max-width: 1680px; margin: -40px auto 0; padding: 0 24px 150px; }
+  .shots { max-width: 1680px; margin: 0 auto; padding: 0 24px 150px; }
   .shots-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 22px; }
   .shot {
     display: block; position: relative; margin: 0;
@@ -225,7 +232,7 @@
   }
   @media (max-width: 860px) {
     .shots-row { grid-template-columns: 1fr; gap: 16px; }
-    .shots { padding-bottom: 110px; margin-top: -20px; }
+    .shots { padding-bottom: 110px; }
     .why { grid-template-columns: 1fr; gap: 48px; padding: 96px 24px 120px; }
     .why h2 { font-size: 30px; white-space: normal; }
   }
@@ -242,6 +249,7 @@
     .list li { grid-template-columns: 44px 72px minmax(0, 1fr); padding: 20px 0; }
   }
   @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
     .rise, .icon-wrap, .halo, .cue svg { animation: none; }
     .hero::before { animation: none; opacity: 1; }
     .btn, .btn svg { transition: none; }
