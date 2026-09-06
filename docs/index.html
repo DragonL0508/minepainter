@@ -163,19 +163,7 @@
     align-items: baseline;
     padding: 18px 12px 18px 0;
     border-top: 1px solid var(--line);
-    position: relative;
-    cursor: default;
-    transition: color .4s ease;
   }
-  /* 滑到哪一條，右邊的舞台就換到對應那張圖；被選中的那條前面亮一道 */
-  .list li::before {
-    content: ""; position: absolute; left: -16px; top: 22px; bottom: 22px; width: 2px;
-    background: var(--accent); border-radius: 1px;
-    transform: scaleY(0); transition: transform .45s var(--ease);
-  }
-  .list li.on::before { transform: scaleY(1); }
-  .list li.on span { color: var(--text); }
-  .list span { transition: color .4s ease; }
   .list li:last-child { border-bottom: 1px solid var(--line); }
   .list i {
     font: 400 14px/1 "Nightgazer", "Segoe UI", system-ui, sans-serif;
@@ -219,6 +207,18 @@
   .card[data-pos="2"] { z-index: 1; opacity: .6; filter: brightness(.55) saturate(.7);
     transform: rotateY(-9deg) rotateX(2.5deg) translate3d(13%, 16%, -240px) scale(.9); pointer-events: none; }
   .stage:hover .card[data-pos="0"] { transform: rotateY(-4deg) rotateX(1deg) translate3d(0, -4px, 20px); box-shadow: 0 40px 90px rgba(0,0,0,.6); }
+  /* 右邊一顆小箭頭：點了換下一張 */
+  .next {
+    position: absolute; right: -14%; top: 50%; transform: translateY(-50%);
+    width: 44px; height: 44px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    border: 1px solid var(--line); background: rgba(23,23,27,.85); color: var(--muted);
+    cursor: pointer; z-index: 4;
+    transition: color .3s ease, border-color .3s ease, background .3s ease, transform .35s var(--ease);
+  }
+  .next:hover { color: var(--text); border-color: #3a3a44; background: var(--card); transform: translateY(-50%) translateX(3px); }
+  .next:active { transform: translateY(-50%) scale(.94); }
+  .next svg { display: block; }
   /* 舞台自己也是捲到才浮現，位移大一點 */
   .stage.reveal { transform: translateY(40px); transition-duration: 1s; }
   .stage.reveal.in { transform: none; }
@@ -258,6 +258,7 @@
   @media (max-width: 1100px) {
     .why { grid-template-columns: 1fr; gap: 56px; padding: 96px 24px 120px; min-height: 0; }
     .stage { max-width: 720px; margin: 0 auto 10%; }
+    .next { right: -8px; }
   }
   @media (max-width: 860px) {
     .why { grid-template-columns: 1fr; gap: 48px; padding: 96px 24px 120px; }
@@ -281,7 +282,7 @@
     .hero::before { animation: none; opacity: 1; }
     .btn, .btn svg { transition: none; }
     .reveal { opacity: 1; transform: none; transition: none; }
-    .card, .list li::before { transition: none; }
+    .card, .next { transition: none; }
     .lightbox[open], .lightbox[open]::backdrop, .lightbox.closing, .lightbox.closing::backdrop { animation: none; }
     .tally { transition: none; }
     .corner a { transition: none; }
@@ -330,14 +331,13 @@
         <h2>就像是熟悉的 paint.net。<br />但多了這些...</h2>
         <p class="why-note">為了縮圖製作者而煎的一顆荷包蛋。</p>
       </div>
-      <!-- data-shot：滑過去時舞台換到哪張圖（0 聚焦效果、1 文字物件、2 物件選取／筆刷） -->
       <ul class="list" id="list">
-        <li class="reveal" data-shot="2"><i>01</i><b>快速</b><span>優化使用流程，省去多餘時間</span></li>
-        <li class="reveal" data-shot="1"><i>02</i><b>效能</b><span>開得更快，隨時隨地想做就做</span></li>
-        <li class="reveal" data-shot="1"><i>03</i><b>介面</b><span>現代設計，動畫絲滑流暢</span></li>
-        <li class="reveal" data-shot="0"><i>04</i><b>可塑</b><span>特效再也不烙死在圖層，隨時能改先前的設計</span></li>
-        <li class="reveal" data-shot="0"><i>05</i><b>功能</b><span>更多功能，創作不再受限</span></li>
-        <li class="reveal" data-shot="2"><i>06</i><b>安裝</b><span>解壓就能跑，開源免費</span></li>
+        <li class="reveal"><i>01</i><b>快速</b><span>優化使用流程，省去多餘時間</span></li>
+        <li class="reveal"><i>02</i><b>效能</b><span>開得更快，隨時隨地想做就做</span></li>
+        <li class="reveal"><i>03</i><b>介面</b><span>現代設計，動畫絲滑流暢</span></li>
+        <li class="reveal"><i>04</i><b>可塑</b><span>特效再也不烙死在圖層，隨時能改先前的設計</span></li>
+        <li class="reveal"><i>05</i><b>功能</b><span>更多功能，創作不再受限</span></li>
+        <li class="reveal"><i>06</i><b>安裝</b><span>解壓就能跑，開源免費</span></li>
       </ul>
     </div>
     <div class="stage reveal" id="stage" data-delay="120" aria-label="App 內截圖">
@@ -350,6 +350,9 @@
       <figure class="card" data-pos="2" data-full="shot-select.webp">
         <img src="shot-select-s.webp" alt="MinePainter 的物件選取與筆刷" width="1200" height="661" loading="lazy" decoding="async" />
       </figure>
+      <button class="next" id="next" type="button" aria-label="下一張">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
+      </button>
     </div>
   </section>
 
@@ -461,31 +464,16 @@ function countUp(row, out, total) {
     box.addEventListener('close', () => { img.src = ''; });
   }
 
-  // 舞台：三張卡片輪流到最前面。滑過左邊的條目就換到對應那張，沒人動時每幾秒自己換。
+  // 舞台：點右邊的箭頭，下一張滑到最前面
   (() => {
     const cards = [...document.querySelectorAll('#stage .card')];
-    const items = [...document.querySelectorAll('#list li')];
-    if (cards.length !== 3) return;
-    let front = 0, timer = 0, hovering = false;
-    const show = i => {
-      front = (i + 3) % 3;
+    const next = document.getElementById('next');
+    if (cards.length !== 3 || !next) return;
+    let front = 0;
+    next.addEventListener('click', () => {
+      front = (front + 1) % 3;
       cards.forEach((c, k) => { c.dataset.pos = String((k - front + 3) % 3); });
-      items.forEach(li => li.classList.toggle('on', li.dataset.shot === String(front)));
-    };
-    const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
-    const arm = () => { clearInterval(timer); if (!still) timer = setInterval(() => { if (!hovering) show(front + 1); }, 4200); };
-    items.forEach(li => {
-      li.addEventListener('pointerenter', () => { hovering = true; show(+li.dataset.shot); });
-      li.addEventListener('pointerleave', () => { hovering = false; arm(); });
     });
-    const stage = document.getElementById('stage');
-    stage.addEventListener('pointerenter', () => { hovering = true; });
-    stage.addEventListener('pointerleave', () => { hovering = false; arm(); });
-    show(0);
-    // 捲到才開始輪播，不在畫面上就停
-    if ('IntersectionObserver' in window) {
-      new IntersectionObserver(es => { if (es[0].isIntersecting) arm(); else clearInterval(timer); }).observe(stage);
-    } else arm();
   })();
 
   // 捲一下就把「憑什麼」的提示收起來
