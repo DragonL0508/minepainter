@@ -46,7 +46,19 @@
     justify-content: center;
     text-align: center;
     padding: 24px;
+    overflow: hidden;
   }
+  /* 背景是 app 的實際截圖（已模糊、壓暗、上下淡進底色），下載按鈕與文字疊在上面還要看得清楚 */
+  .hero::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: url(hero-bg.webp) center / cover no-repeat var(--bg);
+    opacity: 0;
+    animation: bg-in 1.6s var(--ease) .2s forwards;
+    pointer-events: none;
+  }
+  @keyframes bg-in { to { opacity: 1; } }
   .hero-inner { position: relative; width: 100%; max-width: 520px; }
   .halo {
     position: absolute;
@@ -180,6 +192,7 @@
   }
   @media (prefers-reduced-motion: reduce) {
     .rise, .icon-wrap, .halo, .cue svg { animation: none; }
+    .hero::before { animation: none; opacity: 1; }
     .btn, .btn svg { transition: none; }
     .reveal { opacity: 1; transform: none; transition: none; }
     .tally { transition: none; }
