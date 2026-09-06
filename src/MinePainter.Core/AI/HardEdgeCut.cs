@@ -24,8 +24,11 @@ public static class HardEdgeCut
     /// <summary>
     /// 套用。<paramref name="pixels"/> 是原圖（premul BGRA，未乘遮罩）；回傳硬切後的遮罩與
     /// 已經乘上遮罩、邊緣去汙染的像素（可以直接寫回圖層）。
+    /// <paramref name="decontaminate"/> 關掉時邊緣顏色不動（像素已經是 remove.bg 去汙染過的，
+    /// 再用內部平均色蓋一圈反而變成一道異色邊）。
     /// </summary>
-    public static (byte[] Mask, uint[] Pixels) Apply(byte[] mask, uint[] pixels, int w, int h, bool antialias = true)
+    public static (byte[] Mask, uint[] Pixels) Apply(byte[] mask, uint[] pixels, int w, int h, bool antialias = true,
+        bool decontaminate = true)
     {
         var n = w * h;
         var minArea = Math.Max(64, n / 5000);   // 0.02% 以下的碎片當雜訊
@@ -50,7 +53,13 @@ public static class HardEdgeCut
                 : d >= 0 ? (byte)255 : (byte)0;
         }
 
-        // 4. 邊緣一圈換成內部乾淨的顏色
+        // 4. 邊緣一圈換成內部乾淨的顏色（顏色已可信時只乘遮罩）
+        if (!decontaminate)
+        {
+            var masked = new uint[n];
+            for (var i = 0; i < n; i++) masked[i] = LayerPixelSource.ScalePremul(pixels[i], result[i]);
+            return (result, masked);
+        }
         var output = Decontaminate(pixels, result, distance, w, h);
         return (result, output);
     }

@@ -11,8 +11,8 @@ public sealed record BackgroundRemovalOptions
 {
     /// <summary>
     /// remove.bg 線上服務（同 paint.net 的 Remove Background 插件）；null＝本機演算（<see cref="GrabCut"/>）。
-    /// 兩者都只拿到前景遮罩，顏色仍是原圖（原解析度）；遮罩是低解析度放大來的時候，
-    /// 用原圖做引導濾波貼回真實邊緣。
+    /// 伺服器回全解析度時連它去汙染過的顏色一起用；只回預覽解析度（或本機演算）時只有遮罩、顏色仍是原圖，
+    /// 遮罩是低解析度放大來的就用原圖做引導濾波貼回真實邊緣。
     /// </summary>
     public RemoveBgOptions? RemoveBg { get; init; }
     /// <summary>引導濾波精修半徑（全解析度 px；一律精修，見 <see cref="GuidedFilter"/>）。</summary>
@@ -43,6 +43,8 @@ public sealed record BackgroundRemovalOptions
 /// 圖層 → AI 去背：把圖層先平面化（效果堆疊烙印、文字物件柵格化）成純像素，
 /// 送 remove.bg 算前景遮罩、乘到 alpha 上。整個是一步 undo。
 ///
+/// remove.bg 回全解析度時，邊緣像素用它的顏色（它已經把混進來的背景色去掉；只拿遮罩乘原圖，
+/// 邊上會留一圈背景色的毛邊 —— 使用者 2026-09-07 回報「丟上 remove.bg 就沒有」）。
 /// 帳號沒點數時 remove.bg 只回預覽解析度，遮罩是低解析度放大回來的：
 /// 顏色像素一直都是原圖，糊掉的是 alpha 邊緣。「精修邊緣」用原圖當引導做引導濾波，
 /// 讓遮罩重新貼回高清像素的邊緣（等同「先留一份高清原圖、去背後再依不透明範圍回原圖取像素」，
@@ -153,6 +155,7 @@ public static class BackgroundRemovalCommand
 
             // ---- 3. 推論 + 後處理（鎖外）----
             byte[] mask;
+            uint[]? serverPixels;
             LayerPixelSource? sourceAfter;
             var hiResRegion = sourceBefore != null && sourceBefore.SourcePixelsPerLayerPixel >= HiResThreshold
                 ? sourceBefore.SourceRegionFor(crop)
@@ -167,14 +170,20 @@ public static class BackgroundRemovalCommand
                     for (var i = 0; i < sourcePixels.Length; i++)
                         if (sourceCoverage[i] != 255) sourcePixels[i] = Scale(sourcePixels[i], sourceCoverage[i]);
 
-                var sourceMask = ComputeMask(sourcePixels, hiResRegion.Width, hiResRegion.Height, sourceCoverage, options,
+                var (sourceMask, serverSource) = ComputeMask(sourcePixels, hiResRegion.Width, hiResRegion.Height, sourceCoverage, options,
                     shift: (int)MathF.Round(options.Shift * ratio), ct);
+                var sourceBase = serverSource != null ? WithServerColors(sourcePixels, serverSource) : sourcePixels;
                 if (options.HardEdge)
                 {
                     // 硬邊：在來源解析度切、去汙染，像素直接換進原圖
-                    var (hardMask, hardPixels) = HardEdgeCut.Apply(sourceMask, sourcePixels, hiResRegion.Width, hiResRegion.Height);
+                    var (hardMask, hardPixels) = HardEdgeCut.Apply(sourceMask, sourceBase, hiResRegion.Width, hiResRegion.Height,
+                        decontaminate: serverSource == null);
                     sourceMask = hardMask;
                     sourceAfter = sourceBefore.WithRegionPixels(hiResRegion, hardPixels, ct);
+                }
+                else if (serverSource != null)
+                {
+                    sourceAfter = sourceBefore.WithRegionPixels(hiResRegion, Multiply(sourceBase, sourceMask), ct);
                 }
                 else
                 {
@@ -182,20 +191,28 @@ public static class BackgroundRemovalCommand
                 }
                 // 代理畫布用的是同一份遮罩縮回來的（取樣平均），兩邊看到的是同一個輪廓
                 mask = sourceBefore.ResampleMaskToLayer(sourceMask, hiResRegion, crop);
+                // 代理畫布的顏色維持原圖（伺服器的顏色已經進了高清來源，輸出時用的是那份）
+                serverPixels = null;
             }
             else
             {
-                mask = ComputeMask(pixels, crop.Width, crop.Height, coverage, options, options.Shift, ct);
+                (mask, serverPixels) = ComputeMask(pixels, crop.Width, crop.Height, coverage, options, options.Shift, ct);
                 // 原始高清來源也套同一份遮罩（依來源矩陣反查、雙線性取樣），成為新的來源
                 sourceAfter = sourceBefore?.Masked(crop, mask, ct: ct);
             }
-            // 圖層（代理）像素：硬邊模式連顏色一起換；否則只乘遮罩
+            // 圖層（代理）像素：伺服器有回顏色就用它的（邊緣已去汙染）；硬邊模式連輪廓一起重切；否則只乘遮罩
             uint[]? layerPixels = null;
+            var basePixels = serverPixels != null ? WithServerColors(pixels, serverPixels) : pixels;
             if (options.HardEdge)
             {
-                var (hardMask, hardPixels) = HardEdgeCut.Apply(mask, pixels, crop.Width, crop.Height);
+                var (hardMask, hardPixels) = HardEdgeCut.Apply(mask, basePixels, crop.Width, crop.Height,
+                    decontaminate: serverPixels == null);
                 mask = hardMask;
                 layerPixels = hardPixels;
+            }
+            else if (serverPixels != null)
+            {
+                layerPixels = Multiply(basePixels, mask);
             }
             ct.ThrowIfCancellationRequested();
 
@@ -286,8 +303,10 @@ public static class BackgroundRemovalCommand
     /// <summary>
     /// 一塊像素 → 前景遮罩：模型（remove.bg 或本機 GrabCut）給機率圖，低解析度放大來的用原圖引導濾波貼回邊緣，
     /// 再做內部填實、對比、收縮／擴張、乘上選取覆蓋度。太大的圖先縮到 <see cref="MaxModelPixels"/> 以內送模型。
+    /// 回傳的 ServerPixels 是 remove.bg 回的整張結果（與 pixels 同尺寸、顏色已去汙染），只有伺服器回全解析度、
+    /// 而且沒有先縮小送出時才有。
     /// </summary>
-    private static byte[] ComputeMask(uint[] pixels, int width, int height, byte[]? coverage,
+    private static (byte[] Mask, uint[]? ServerPixels) ComputeMask(uint[] pixels, int width, int height, byte[]? coverage,
         BackgroundRemovalOptions options, int shift, CancellationToken ct)
     {
         var area = (long)width * height;
@@ -296,11 +315,13 @@ public static class BackgroundRemovalCommand
 
         byte[] model;
         bool refine;
+        uint[]? serverPixels = null;
         if (options.RemoveBg is { } remote)
         {
             var result = RemoveBgClient.Cutout(modelPixels, modelW, modelH, remote, ct);
             model = result.Alpha;
             refine = result.Downscaled(modelW, modelH);
+            if (ReferenceEquals(modelPixels, pixels)) serverPixels = result.Pixels;
         }
         else
         {
@@ -328,7 +349,42 @@ public static class BackgroundRemovalCommand
         if (coverage != null)
             for (var i = 0; i < mask.Length; i++)
                 if (coverage[i] != 255) mask[i] = (byte)(mask[i] * coverage[i] / 255);
-        return mask;
+        return (mask, serverPixels);
+    }
+
+    /// <summary>
+    /// 原圖的 alpha + 伺服器的顏色：伺服器有留下的像素（alpha &gt; 0）換成它去汙染過的顏色，
+    /// 其餘（它判成背景、但我們的遮罩可能因擴張還留著的）維持原圖。alpha 一律是原圖的，之後照常乘遮罩。
+    /// </summary>
+    internal static uint[] WithServerColors(uint[] original, uint[] server)
+    {
+        var output = new uint[original.Length];
+        for (var i = 0; i < output.Length; i++)
+        {
+            var o = original[i];
+            var s = server[i];
+            var sa = s >> 24;
+            var oa = o >> 24;
+            if (sa == 0 || oa == 0)
+            {
+                output[i] = o;
+                continue;
+            }
+            // 伺服器像素去預乘取顏色，再以原圖的 alpha 重新預乘
+            var r = Math.Min(255u, ((s >> 16) & 0xFF) * 255 / sa);
+            var g = Math.Min(255u, ((s >> 8) & 0xFF) * 255 / sa);
+            var b = Math.Min(255u, (s & 0xFF) * 255 / sa);
+            output[i] = (oa << 24) | ((r * oa / 255) << 16) | ((g * oa / 255) << 8) | (b * oa / 255);
+        }
+        return output;
+    }
+
+    /// <summary>premul 像素逐一乘上遮罩，回傳新陣列。</summary>
+    private static uint[] Multiply(uint[] pixels, byte[] mask)
+    {
+        var output = new uint[pixels.Length];
+        for (var i = 0; i < output.Length; i++) output[i] = Scale(pixels[i], mask[i]);
+        return output;
     }
 
     private static unsafe (uint[] Pixels, int Width, int Height) Downscale(uint[] pixels, int width, int height, float factor)

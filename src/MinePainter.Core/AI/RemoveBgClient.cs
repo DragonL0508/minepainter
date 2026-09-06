@@ -22,8 +22,10 @@ public sealed record RemoveBgOptions(IReadOnlyList<string> ApiKeys, RemoveBgSize
 /// <summary>
 /// remove.bg 的回應：<see cref="Alpha"/> 是縮回來源尺寸的前景遮罩（0..255），
 /// <see cref="ServerWidth"/>／<see cref="ServerHeight"/> 是伺服器實際回的解析度（沒點數時只給預覽尺寸）。
+/// <see cref="Pixels"/> 是伺服器回的整張結果（premul BGRA，來源尺寸）—— 伺服器已把邊緣像素的背景色
+/// 去掉（去汙染），只有它跟來源同尺寸時才有；縮過的回 null（放大回來的顏色是糊的，不能用）。
 /// </summary>
-public sealed record RemoveBgResult(byte[] Alpha, int ServerWidth, int ServerHeight)
+public sealed record RemoveBgResult(byte[] Alpha, int ServerWidth, int ServerHeight, uint[]? Pixels = null)
 {
     /// <summary>伺服器回的圖比來源小（預覽解析度、或超過 25 MP）。</summary>
     public bool Downscaled(int width, int height) => ServerWidth < width || ServerHeight < height;
@@ -39,8 +41,10 @@ public sealed class RemoveBgException(string message, string? code = null) : Exc
 /// <summary>
 /// remove.bg 線上去背，做法與 paint.net 的 Remove Background 插件（WhelanB/PDN-RemoveBG）相同：
 /// 影像編成 PNG 以 multipart POST 到 https://api.remove.bg/v1.0/removebg（X-Api-Key、size=auto），
-/// 回來的 PNG 是去背結果。這裡只取它的 alpha 當前景遮罩，顏色一律用本機的原圖：
-/// 帳號沒點數時伺服器只回預覽解析度（約 0.25 MP），整張貼回會糊；拿遮罩回原圖摳才保得住原解析度。
+/// 回來的 PNG 是去背結果：alpha 當前景遮罩；伺服器回全解析度時連它的顏色也一起用 ——
+/// 它已經把邊緣像素混到的背景色去掉了，拿原圖的顏色只乘遮罩，邊上會留一圈背景色的毛邊
+/// （使用者 2026-09-07 回報：「丟上 remove.bg 就沒有毛邊」）。
+/// 帳號沒點數時伺服器只回預覽解析度（約 0.25 MP），整張貼回會糊；那時只拿遮罩回原圖摳才保得住原解析度。
 /// </summary>
 public static class RemoveBgClient
 {
@@ -132,7 +136,17 @@ public static class RemoveBgClient
         var basePtr = (byte*)output.GetPixels();
         for (var y = 0; y < height; y++)
             new ReadOnlySpan<byte>(basePtr + y * output.RowBytes, width).CopyTo(alpha.AsSpan(y * width, width));
-        return new RemoveBgResult(alpha, decoded.Width, decoded.Height);
+
+        // 同尺寸：整張結果留下來（顏色已去汙染），呼叫端拿它的顏色、我們的遮罩
+        uint[]? pixels = null;
+        if (big == null)
+        {
+            pixels = new uint[width * height];
+            var dp = (byte*)decoded.GetPixels();
+            for (var y = 0; y < height; y++)
+                new ReadOnlySpan<uint>(dp + y * decoded.RowBytes, width).CopyTo(pixels.AsSpan(y * width, width));
+        }
+        return new RemoveBgResult(alpha, decoded.Width, decoded.Height, pixels);
     }
 
     /// <summary>
