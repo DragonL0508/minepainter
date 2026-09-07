@@ -12,12 +12,15 @@ internal sealed class OpenDocument : IDisposable
     private readonly Action _historyChangedHandler;
     private readonly Action _sizeChangedHandler;
 
-    // dirty 不是獨立旗標，而是兩個版本號的差：History 每變一次 _changeVersion +1，
-    // 存檔完成時把「這次存檔涵蓋到的版本」寫進 _savedVersion。
-    // 背景存檔期間又畫了東西，_changeVersion 已經超前，存完自然仍是 dirty，
-    // 不用再靠「先清旗標再補回來」那種容易被蓋掉的寫法。
+    // dirty 不是獨立旗標，而是「目前的 History.StateId ≠ 存檔時的 StateId」。
+    // StateId 是文件狀態的身分（undo 回到存檔那步會拿回同一個編號），所以存檔後編輯再 Ctrl+Z
+    // 會真的變回乾淨（paint.net／Pinta 都這樣）；單純數 History.Changed 次數做不到，
+    // undo 也會讓計數增加，永遠回不去。背景存檔期間又畫了東西，StateId 已經不同，存完自然仍 dirty。
+    private long _savedStateId;
+
+    // 縮圖要的是「有沒有動過」，不是「等不等於存檔點」：undo 也算動過，這裡才用計數
     private int _changeVersion;
-    private int _savedVersion;
+    private bool _lastNotifiedDirty; // 上次通知 UI 時的 dirty；只在翻轉時再通知
 
     public EditorSession Session { get; }
 
@@ -29,13 +32,13 @@ internal sealed class OpenDocument : IDisposable
 
     public string Name => FilePath != null ? Path.GetFileName(FilePath) : ImportedName ?? "未命名";
 
-    /// <summary>History 累計的變更版本；縮圖用它判斷「有沒有變」。</summary>
+    /// <summary>History 累計的變更次數（含 undo/redo）；縮圖用它判斷「有沒有變」。</summary>
     public int ChangeVersion => Volatile.Read(ref _changeVersion);
 
-    public bool IsDirty => ChangeVersion != Volatile.Read(ref _savedVersion);
+    public bool IsDirty => Session.History.StateId != Volatile.Read(ref _savedStateId);
 
     /// <summary>
-    /// 檔案路徑或 dirty 狀態變了。編輯只在「乾淨→dirty」那一刻發一次，
+    /// 檔案路徑或 dirty 狀態變了。編輯只在 dirty 翻轉那一刻發（乾淨→dirty，或 undo 回存檔點），
     /// 不會每一筆都發（一筆筆刷可能發很多次 History.Changed）。不保證在 UI 執行緒。
     /// </summary>
     public event Action? StateChanged;
@@ -48,6 +51,7 @@ internal sealed class OpenDocument : IDisposable
         Session = new EditorSession(document);
         FilePath = filePath;
         ImportedName = importedName;
+        _savedStateId = Session.History.StateId; // 剛開啟＝與檔案一致
 
         _historyChangedHandler = OnHistoryChanged;
         _sizeChangedHandler = () => DocumentSizeChanged?.Invoke();
@@ -57,19 +61,24 @@ internal sealed class OpenDocument : IDisposable
 
     private void OnHistoryChanged()
     {
-        var wasDirty = IsDirty;
         Interlocked.Increment(ref _changeVersion); // History.Changed 可能來自非 UI 執行緒
-        if (!wasDirty) StateChanged?.Invoke();
+        var dirty = IsDirty;
+        if (dirty != _lastNotifiedDirty)
+        {
+            _lastNotifiedDirty = dirty;
+            StateChanged?.Invoke();
+        }
     }
 
-    /// <summary>存檔開始時先拿版本：存檔期間的編輯不會被這次存檔涵蓋。</summary>
-    public int CaptureSaveVersion() => ChangeVersion;
+    /// <summary>存檔開始時先拿狀態身分：存檔期間的編輯不會被這次存檔涵蓋。</summary>
+    public long CaptureSaveVersion() => Session.History.StateId;
 
-    /// <summary>存檔成功：記住路徑，並把 <paramref name="savedVersion"/> 當成已落地的版本。</summary>
-    public void CompleteSave(string path, int savedVersion)
+    /// <summary>存檔成功：記住路徑，並把 <paramref name="savedStateId"/> 當成已落地的狀態。</summary>
+    public void CompleteSave(string path, long savedStateId)
     {
         FilePath = path;
-        Volatile.Write(ref _savedVersion, savedVersion);
+        Volatile.Write(ref _savedStateId, savedStateId);
+        _lastNotifiedDirty = IsDirty;
         StateChanged?.Invoke();
     }
 

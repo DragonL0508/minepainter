@@ -64,6 +64,41 @@ public class OpenDocumentTests
     }
 
     [Fact]
+    public void 存檔後編輯再Undo回存檔點_變回乾淨()
+    {
+        using var doc = NewDocument();
+        Edit(doc);
+        doc.CompleteSave(@"C:\x\a.mpp", doc.CaptureSaveVersion());
+
+        var notified = 0;
+        doc.StateChanged += () => notified++;
+        Edit(doc);
+        Assert.True(doc.IsDirty);
+        Assert.Equal(1, notified);
+
+        doc.Session.Undo();
+        Assert.False(doc.IsDirty, "內容已經回到存檔時的樣子，卻還顯示未儲存（關視窗會多問一次）");
+        Assert.Equal(2, notified); // 標題的 * 要拿掉，UI 得收到通知
+
+        doc.Session.Redo();
+        Assert.True(doc.IsDirty);
+    }
+
+    [Fact]
+    public void 存檔後Undo再分支_深度相同仍dirty()
+    {
+        using var doc = NewDocument();
+        Edit(doc);
+        Edit(doc);
+        doc.CompleteSave(@"C:\x\a.mpp", doc.CaptureSaveVersion()); // 存在第二步
+
+        doc.Session.Undo();
+        Assert.True(doc.IsDirty);
+        Edit(doc); // 從第一步分支出新的第二步：深度與存檔點一樣，內容不一樣
+        Assert.True(doc.IsDirty, "分支後深度與存檔點相同就被當成乾淨 —— 改了卻不問就關");
+    }
+
+    [Fact]
     public void Dispose之後不再發事件()
     {
         var doc = NewDocument();

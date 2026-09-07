@@ -21,6 +21,13 @@ public sealed class HistoryManager : IDisposable
     private readonly List<IHistoryEntry> _redo = new();
     private readonly object _gate = new();
 
+    // 每個 entry 進來時領一個編號，代表「執行完它之後的文件狀態」；與 _undo／_redo 平行。
+    // 堆疊空時的狀態是 _baseId（一開始 0；最舊那步被淘汰後變成它的編號，狀態本身沒變，只是回不去了）。
+    private readonly List<long> _undoIds = new();
+    private readonly List<long> _redoIds = new();
+    private long _baseId;
+    private long _nextId = 1;
+
     /// <summary>這份文件自己的上限（實際生效值還會再取「全域預算 ÷ 文件數」的較小者）。</summary>
     public long MemoryLimit { get; set; } = 1L << 30; // 1 GB
 
@@ -112,6 +119,17 @@ public sealed class HistoryManager : IDisposable
     /// <summary>堆疊內容變化（UI 更新用）。</summary>
     public event Action? Changed;
 
+    /// <summary>
+    /// 目前文件狀態的身分：undo 回到某一步就拿回那一步的編號，redo 亦然；
+    /// 從中間分支出去的新步驟拿新編號，所以「深度相同」不會被誤認成「狀態相同」。
+    /// 存檔時記下它，之後 <c>StateId == 存檔時的值</c> 就代表文件與檔案一致（未儲存標記靠這個判斷）。
+    /// 深度不夠用：A→B→C 退到 B 再做 D，D 與 C 深度一樣但完全是不同的文件。
+    /// </summary>
+    public long StateId
+    {
+        get { lock (_gate) return _undoIds.Count > 0 ? _undoIds[^1] : _baseId; }
+    }
+
     public HistoryManager(Document document)
     {
         _document = document;
@@ -175,8 +193,10 @@ public sealed class HistoryManager : IDisposable
         {
             foreach (var e in _redo) e.Dispose();
             _redo.Clear();
+            _redoIds.Clear();
 
             _undo.Add(entry);
+            _undoIds.Add(_nextId++);
             EvictLocked();
         }
         RaiseChanged();
@@ -203,6 +223,10 @@ public sealed class HistoryManager : IDisposable
             var steps = _undo.GetRange(_undo.Count - count, count);
             _undo.RemoveRange(_undo.Count - count, count);
             _undo.Add(new CompositeHistoryEntry(label ?? steps[^1].Label, steps.ToArray()));
+            // 併完的狀態就是最後那步做完的狀態：沿用它的編號，存檔點不會因為收尾就變 dirty
+            var lastId = _undoIds[^1];
+            _undoIds.RemoveRange(_undoIds.Count - count, count);
+            _undoIds.Add(lastId);
         }
         RaiseChanged();
     }
@@ -214,6 +238,8 @@ public sealed class HistoryManager : IDisposable
             if (_undo.Count == 0) return false;
             var entry = _undo[^1];
             _undo.RemoveAt(_undo.Count - 1);
+            var id = _undoIds[^1];
+            _undoIds.RemoveAt(_undoIds.Count - 1);
 
             lock (_document.SyncRoot)
             {
@@ -221,6 +247,7 @@ public sealed class HistoryManager : IDisposable
             }
 
             _redo.Add(entry);
+            _redoIds.Add(id);
         }
         RaiseChanged();
         return true;
@@ -234,6 +261,8 @@ public sealed class HistoryManager : IDisposable
             if (_redo.Count == 0) return false;
             var entry = _redo[^1];
             _redo.RemoveAt(_redo.Count - 1);
+            var id = _redoIds[^1];
+            _redoIds.RemoveAt(_redoIds.Count - 1);
 
             lock (_document.SyncRoot)
             {
@@ -241,6 +270,7 @@ public sealed class HistoryManager : IDisposable
             }
 
             _undo.Add(entry);
+            _undoIds.Add(id);
         }
         RaiseChanged();
         return true;
@@ -261,6 +291,8 @@ public sealed class HistoryManager : IDisposable
         {
             var oldest = _undo[0];
             _undo.RemoveAt(0);
+            _baseId = _undoIds[0]; // 堆疊底部現在就是「做完最舊那步」的狀態
+            _undoIds.RemoveAt(0);
             total -= oldest.MemoryCost;
             oldest.Dispose();
         }
@@ -275,6 +307,8 @@ public sealed class HistoryManager : IDisposable
             foreach (var e in _redo) e.Dispose();
             _undo.Clear();
             _redo.Clear();
+            _undoIds.Clear();
+            _redoIds.Clear();
         }
     }
 }
