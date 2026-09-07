@@ -1,7 +1,8 @@
 <p align="center"><img src="docs/icon.png" width="96" alt="" /></p>
 <h1 align="center">MinePainter</h1>
 <p align="center">你用什麼軟體做縮圖？我：黃金荷包蛋。</p>
-<p align="center"><a href="https://dragonl0508.github.io/minepainter/"><b>下載</b></a> · <a href="https://github.com/DragonL0508/minepainter/releases">所有版本</a></p>
+<p align="center"><a href="https://dragonl0508.github.io/minepainter/"><b>下載</b></a> · <a href="https://github.com/DragonL0508/minepainter/releases">所有版本</a> · <a href="LICENSE">MIT 授權</a></p>
+<p align="center"><a href="https://github.com/DragonL0508/minepainter/actions/workflows/ci.yml"><img src="https://github.com/DragonL0508/minepainter/actions/workflows/ci.yml/badge.svg" alt="CI" /></a></p>
 
 <br />
 
@@ -89,7 +90,7 @@ release.bat 1.8.2           推標籤，GitHub Actions 跑測試、建置、出 
 - **建置零警告**（`TreatWarningsAsErrors` 在 `Directory.Build.props`）。過時 API 要換掉，不是壓掉。
 - **註解寫繁中，講「為什麼」不講「做什麼」**：每個公開型別／方法有 `<summary>`；踩過的雷寫在出事的那一行旁邊（含日期與使用者回報的原話更好）。程式碼本身講得清楚的不重複。
 - 不留 `TODO`／`FIXME`：要做就做，不做就開 issue。
-- 一個檔案一個主要型別；`MainWindow.axaml.cs` 已經太大，新功能的邏輯放 Core 指令或獨立的 View／Service，不要再往裡面堆。已經在裡面、自成一塊的區段拆成 partial 檔（`MainWindow.Panels.cs` 浮動面板、`MainWindow.CanvasTextEdit.cs` 畫布內文字編輯），照這個樣子繼續拆。
+- 一個檔案一個主要型別；新功能的邏輯放 Core 指令或獨立的 View／Service，不要往 `MainWindow` 裡堆。`MainWindow` 已按職責拆成 partial 檔：`MainWindow.axaml.cs` 只留欄位、建構子、工具切換與 `RefreshUiState`；選單各一檔（`FileMenu`／`EditMenu`／`ImageMenu`／`EffectsMenu`／`LayersMenu`／`ViewMenu`）、`Tabs` 文件分頁、`DragDrop` 拖放、`ToolOptions`／`TextOptions` 工具列選項、`Shortcuts`、`Settings`、`Update`、`Panels` 浮動面板、`CanvasTextEdit` 畫布內文字編輯、`Debug` 除錯種子與計時。新的選單項目或工具列群組放進對應的 partial；沒有對應的就開新 partial，單檔不要超過 700 行。
 - 路徑含中文（`桌面`）：跑 `.bat` 用 PowerShell 並設 `$env:CI="true"` 跳過 `pause`；PowerShell 腳本存成含 BOM 的 UTF-8。
 
 ### 測試規範
@@ -99,7 +100,7 @@ release.bat 1.8.2           推標籤，GitHub Actions 跑測試、建置、出 
 - **App 測試走 Avalonia.Headless**（`[AvaloniaFact]`，`TestApp` 只載 FluentTheme），合成的滑鼠鍵盤只進 headless 視窗。**絕對不對使用者的桌面注入輸入、不搶焦點**；要看真的畫面只用被動截圖。
 - 需要外部資源的測試（模型、API Key）用環境變數開關（`MINEPAINTER_TEST_MODELS`），沒設就跳過或走本機替代，CI 上一定要能跑。
 - 偶發失敗不是「再跑一次」：效果快取、合成器都是多執行緒，偶發＝競態，找到根因（`RenderLayerNow` 等 worker 的那類修法）。
-- **commit 前 `dotnet test MinePainter.sln` 全綠、建置零警告。** CI 也跑同一組。
+- **commit 前 `dotnet test MinePainter.sln` 全綠、建置零警告。** CI 跑同一組：每次 push 到 `main` 與每個 PR 都跑（`.github/workflows/ci.yml`），發版前 `release.yml` 再跑一次。
 
 ### 除錯鉤子
 
@@ -113,3 +114,7 @@ release.bat 1.8.2           推標籤，GitHub Actions 跑測試、建置、出 
 - 發版：`release.bat x.y.z`（會擋未 commit 的變更）→ Actions 跑測試、`publish.bat sc`／`fd`、建 Release。Release 說明先「### 這一版」列變更（使用者角度），最後保留「### 下載哪一個？」兩行；沒有 `gh` 的機器用 REST API PATCH `body`。
 - 使用者平常跑的是 `dist\` 的發佈版：改完 Core／App 要重新 `publish.bat` 或發版才看得到。
 - `dist/`、`bin/`、`obj/`、`.claude/`、AOT 產出的原生 DLL 不進版控（見 `.gitignore`）。
+
+## 授權
+
+[MIT](LICENSE)。內嵌的 Noto Sans TC 字型是 SIL OFL 1.1；YouTube 縮圖預覽的週邊縮圖屬各頻道所有，只作版面佔位，不在 MIT 範圍內。

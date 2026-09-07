@@ -1,0 +1,52 @@
+# 每次 push 到 main、每個 PR 都跑一次：建置零警告（TreatWarningsAsErrors）＋ 全部測試（Core ＋ App headless）。
+# release.yml 發版前也跑同一組；這裡是讓它在每個 commit 就擋下來，而不是等到要發版才發現。
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
+      - "LICENSE"
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
+      - "LICENSE"
+
+# 同一條分支連續 push 時只留最新的那一輪
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: windows-latest # App 測試走 Avalonia.Headless，Thumbnails 是 Win32 COM；與 release.yml 同一種機器
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: 還原套件
+        run: dotnet restore MinePainter.sln
+
+      - name: 建置（零警告）
+        run: dotnet build MinePainter.sln -c Release --no-restore --nologo
+
+      - name: 測試（Core ＋ App headless）
+        run: dotnet test MinePainter.sln -c Release --no-build --nologo --logger "trx;LogFileName=results.trx" --results-directory TestResults
+
+      - name: 保留測試報告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: TestResults/*.trx
+          if-no-files-found: ignore
