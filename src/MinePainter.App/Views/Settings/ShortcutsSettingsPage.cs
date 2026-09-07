@@ -160,6 +160,13 @@ public sealed class ShortcutsSettingsPage : SettingsPage
 
     private void RefreshAll()
     {
+        // 靜態事件是在改表的那條執行緒上同步發出的；不是 UI 執行緒就排回去，
+        // 不然 Avalonia 會丟 "Call from invalid thread"（2026-09-07 CI 上 ShortcutMapTests 與這頁平行跑時炸掉）
+        if (!Avalonia.Threading.Dispatcher.UIThread.CheckAccess())
+        {
+            Avalonia.Threading.Dispatcher.UIThread.Post(RefreshAll);
+            return;
+        }
         RefreshAllButtons();
         RefreshAllWheelButtons();
         ApplyFilter(); // 按鍵字串變了，過濾結果跟著更新

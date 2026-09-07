@@ -113,6 +113,12 @@ public partial class MainWindow
     /// <summary>把選單的快捷鍵顯示文字同步到目前的綁定（InputGesture 只是顯示，不註冊按鍵）。</summary>
     private void SyncMenuGestures()
     {
+        // ShortcutMap.Changed 在改表的那條執行緒上同步發出（見 ShortcutsSettingsPage.RefreshAll）
+        if (!Dispatcher.UIThread.CheckAccess())
+        {
+            Dispatcher.UIThread.Post(SyncMenuGestures);
+            return;
+        }
         Walk(MainMenu);
 
         static void Walk(ItemsControl items)

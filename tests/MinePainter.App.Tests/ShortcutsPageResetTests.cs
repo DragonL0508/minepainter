@@ -54,4 +54,28 @@ public class ShortcutsPageResetTests : IDisposable
 
         window.Close();
     }
+
+    /// <summary>
+    /// ShortcutMap 是靜態的，Changed 在改表的那條執行緒上同步發出。頁面開著時從別的執行緒改表
+    /// （CI 上平行跑的一般 [Fact] 測試就是這樣）不能炸 "Call from invalid thread"，而且畫面還是要刷新。
+    /// 2026-09-07 CI 第一次跑就抓到這個，本機因為測試順序不同從沒出現過。
+    /// </summary>
+    [AvaloniaFact]
+    public void 從別的執行緒改快捷鍵_頁面不炸且會刷新()
+    {
+        var page = new ShortcutsSettingsPage();
+        var window = new Window { Width = 800, Height = 600, Content = page };
+        window.Show();
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+        Assert.DoesNotContain("F9", ButtonTexts(page));
+
+        // 在背景執行緒改表：handler 會在那條執行緒被叫到，它得自己排回 UI 執行緒
+        var worker = Task.Run(() => ShortcutMap.SetGesture("tool.brush", 0, new KeyGesture(Key.F9)));
+        Assert.True(worker.Wait(TimeSpan.FromSeconds(5)), "背景執行緒改快捷鍵卡住或丟例外，代表 handler 直接在非 UI 執行緒動了控制項");
+
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+        Assert.Contains("F9", ButtonTexts(page)); // 排回 UI 執行緒後有真的刷新，不是悄悄略過
+
+        window.Close();
+    }
 }

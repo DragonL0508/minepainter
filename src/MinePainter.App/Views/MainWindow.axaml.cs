@@ -49,6 +49,17 @@ public partial class MainWindow : Window
     {
     }
 
+    /// <summary>
+    /// 解掉對靜態事件的訂閱。程式裡主視窗只有一個、活到程式結束，這條是為測試：
+    /// headless 測試會開好幾個 MainWindow，關掉的那些若還掛在 ShortcutMap.Changed 上，
+    /// 別的測試一改快捷鍵就會去動已經關掉的視窗。
+    /// </summary>
+    protected override void OnClosed(EventArgs e)
+    {
+        Services.ShortcutMap.Changed -= SyncMenuGestures;
+        base.OnClosed(e);
+    }
+
     public MainWindow(string? initialFile)
     {
         InitializeComponent();
