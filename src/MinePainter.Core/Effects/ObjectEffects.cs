@@ -159,8 +159,8 @@ internal static class DistanceTransform
         return toEmpty;
     }
 
-    /// <summary>可分離的方框模糊（半徑 r，邊界取最近值），O(w·h)。</summary>
-    private static float[] BoxBlur(float[] src, int w, int h, int r)
+    /// <summary>可分離的方框模糊（半徑 r，邊界取最近值），O(w·h)。羽化也拿它疊出三角核。</summary>
+    internal static float[] BoxBlur(float[] src, int w, int h, int r)
     {
         var tmp = new float[w * h];
         var dst = new float[w * h];
@@ -894,12 +894,18 @@ public sealed record ObjectGradientEffect : IEffect
 }
 
 /// <summary>
-/// 羽化物件（paint.net 的 Feather Object 外掛）：從物件最外圍的像素往內慢慢啃掉 —— 邊緣那一格幾乎透明，
-/// 往內 <c>寬度</c> px 才回到原本的濃度；離邊緣比寬度遠的內部像素一格都不動，顏色一律不動。
+/// 羽化物件，照 paint.net BoltBait Feather Object v3.0 的原始碼：整層 alpha 做半徑 <c>寬度</c> 的高斯模糊，
+/// 物件內的像素保留原色、alpha 換成模糊後的 alpha。直邊的最外圍那一格剩約一半、往內 <c>寬度</c> px 回滿，
+/// 過渡是模糊核的累積曲線（中段平緩、兩端收斂）；離邊緣比寬度遠的內部一格都不動，顏色一律不動。
 ///
-/// 只往內、不往外：之前的版本以邊緣線為中心往內往外各鋪一半、外圈還用模糊把邊緣色外推，
-/// 結果是「物件外圍變不透明、變糊」（使用者 2026-09-07 明示：羽化應該是去啃物件最外圍的像素）。
-/// 「內部不能變半透明」（2026-09-05）靠寬度上限守住：軟帶只有寬度那麼寬。
+/// 之前兩版都不對（使用者 2026-09-07 兩次回報）：以邊緣線為中心往外鋪＋外圈模糊會讓物件「外圍變不透明、變糊」；
+/// 距離場＋smoothstep 又把最外圍啃到幾乎透明，看起來是物件被削掉一圈而不是羽化。BoltBait 的版本
+/// 邊緣停在一半、曲線是模糊核，這才是使用者習慣的手感。
+///
+/// 與 BoltBait 刻意不同的兩點：(1) 物件外不長出模糊尾巴（他的版本外圈直接用模糊結果，物件會微微長大；
+/// 使用者明示羽化只能往內啃）。(2) alpha 只降不升（取 min）：抗鋸齒邊緣那一格模糊後可能比原本更不透明，
+/// 照抄會讓細邊變厚。半透明物件（整片 alpha 128）內部模糊後仍是 128，不會被誤當成邊緣。
+/// 模糊核用 paint.net GaussianBlurEffect 的三角核（權重 16·(i+1)，半徑 R），以兩趟方框模糊疊出來，O(w·h)。
 /// </summary>
 public sealed record ObjectFeatherEffect : IEffect
 {
@@ -914,7 +920,7 @@ public sealed record ObjectFeatherEffect : IEffect
     public string Name => "羽化";
     public string Category => "物件";
 
-    /// <summary>距離場要看到軟帶外一點才算得準；輸出不會長出去。</summary>
+    /// <summary>模糊核要看到軟帶外一點才算得準；輸出不會長出去。</summary>
     public int SourceMargin => Math.Clamp(Radius, 1, 100) + 2;
     public int OutputMargin => 0;
 
@@ -931,18 +937,18 @@ public sealed record ObjectFeatherEffect : IEffect
 
     public void Render(EffectContext ctx)
     {
-        var radius = (float)Math.Clamp(Radius, 1, 100);
+        var radius = Math.Clamp(Radius, 1, 100);
         var pad = SourceMargin;
         var w = ctx.Width + pad * 2;
         var h = ctx.Height + pad * 2;
         var strength = Math.Clamp(Strength, 0, 100) / 100f;
 
         var padded = DistanceTransform.PaddedSource(ctx, pad, FeatherCanvasEdge);
-        // 覆蓋率看「有沒有內容」而不是 alpha 多少：半透明的物件整片 alpha 128，拿 alpha 當覆蓋率
-        // 距離場會以為整片都是邊緣，把內部也啃掉
-        var coverage = new byte[padded.Length];
-        for (var i = 0; i < padded.Length; i++) coverage[i] = A(padded[i]) > 0 ? (byte)255 : (byte)0;
-        var sd = DistanceTransform.SignedFromCoverage(coverage, w, h);
+        var alpha = new float[padded.Length];
+        for (var i = 0; i < padded.Length; i++) alpha[i] = A(padded[i]);
+        // 半徑 R 的三角核 = 兩個方框模糊疊起來（k + k' = R，寬度 2R+1）；R 是奇數時第二趟多 1
+        var k = radius / 2;
+        var blurred = DistanceTransform.BoxBlur(DistanceTransform.BoxBlur(alpha, w, h, k), w, h, radius - k);
 
         ctx.ForRows(y =>
         {
@@ -951,15 +957,12 @@ public sealed record ObjectFeatherEffect : IEffect
                 var di = (y + pad) * w + (x + pad);
                 var oi = y * ctx.Width + x;
                 var src = padded[di];
-                if (A(src) == 0) { ctx.Dst[oi] = 0; continue; }
-                var d = sd[di];                                    // 往內為正（px）
-                if (d >= radius) { ctx.Dst[oi] = src; continue; }  // 離邊緣夠遠：一格都不動
-
-                var t = Math.Clamp(d / radius, 0f, 1f);
-                var s = t * t * (3f - 2f * t);                     // smoothstep：過渡沒有折角
-                var keep = 1f - strength * (1f - s);
-                if (keep >= 0.999f) { ctx.Dst[oi] = src; continue; }
-                var m = (byte)Math.Clamp(MathF.Round(keep * 255f), 0f, 255f);
+                var a = A(src);
+                if (a == 0) { ctx.Dst[oi] = 0; continue; }
+                var target = MathF.Min(a, blurred[di]);          // 只降不升
+                var newA = a + (target - a) * strength;
+                if (newA >= a - 0.5f) { ctx.Dst[oi] = src; continue; }
+                var m = (byte)Math.Clamp(MathF.Round(newA / a * 255f), 0f, 255f);
                 ctx.Dst[oi] = m == 0 ? 0 : LayerPixelSource.ScalePremul(src, m);
             }
         });
