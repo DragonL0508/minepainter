@@ -299,10 +299,10 @@ public partial class MainWindow
             if (!dialog.Confirmed || dialog.Replacements.Count == 0) return;
 
             // 找回那份文件所屬的分頁：對話框開著的時候使用者可能已經切走了
-            var tab = _tabs.FirstOrDefault(t => ReferenceEquals(t.Session.Document, doc));
+            var tab = _tabs.FirstOrDefault(t => ReferenceEquals(t.Document.Session.Document, doc));
             if (tab == null) return;
             var replaced = VectorCommands.ReplaceFontFamilies(
-                doc, tab.Session.History, dialog.Replacements, "替換缺少的字型");
+                doc, tab.Document.Session.History, dialog.Replacements, "替換缺少的字型");
             if (replaced == 0) return;
 
             doc.NotifyChanged(doc.Bounds);
@@ -314,7 +314,7 @@ public partial class MainWindow
 
     /// <summary>存檔／匯出對話框的預設檔名：沿用目前檔案，或匯入來源（.pdn／影像）的名字。</summary>
     private string SuggestedName(string fallback) =>
-        Path.GetFileNameWithoutExtension(_activeTab?.FilePath ?? _activeTab?.ImportedName) is { Length: > 0 } name
+        Path.GetFileNameWithoutExtension(_activeTab?.Document.FilePath ?? _activeTab?.Document.ImportedName) is { Length: > 0 } name
             ? name
             : fallback;
 
@@ -328,12 +328,13 @@ public partial class MainWindow
         // 以分頁為單位：背景存檔期間就算切到別的分頁，寫檔與旗標更新仍作用在原本那份
         var tab = _activeTab;
         if (tab == null) return false;
-        var session = tab.Session;
+        var document = tab.Document;
+        var session = document.Session;
 
         CommitCanvasTextEdit();   // 存檔前先把進行中的編輯落地
         session.CommitFloating();
 
-        var path = tab.FilePath;
+        var path = document.FilePath;
         if (saveAs || path == null)
         {
             var file = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
@@ -350,17 +351,14 @@ public partial class MainWindow
         try
         {
             // 寫檔丟背景執行緒（快照階段在 Save 內部鎖住文件，之後只讀不可變資料）。
-            // 存檔期間使用者可能又畫了東西：完成時不能直接清 dirty，
-            // 要看「按下儲存之後」有沒有新變更（快照一定在那之後才拍，此判斷偏保守但安全）。
+            // 存檔期間使用者可能又畫了東西：先拿版本，存完交給 OpenDocument 判斷還 dirty 不 dirty
+            //（快照一定在拿版本之後才拍，此判斷偏保守但安全）。
             var doc = session.Document;
-            var changesAtStart = Volatile.Read(ref tab.ChangeCount);
+            var saveVersion = document.CaptureSaveVersion();
             await ProgressDialog.RunAsync(this, "儲存專案", p => MppFormat.Save(doc, path, p));
 
-            tab.FilePath = path;
+            document.CompleteSave(path, saveVersion); // StateChanged 會刷新標題與分頁
             RememberRecentFile(path);
-            tab.IsDirty = Volatile.Read(ref tab.ChangeCount) != changesAtStart;
-            UpdateTitle();
-            UpdateTabVisuals();
             return true;
         }
         catch (Exception ex)
@@ -553,7 +551,7 @@ public partial class MainWindow
     protected override async void OnClosing(WindowClosingEventArgs e)
     {
         base.OnClosing(e);
-        if (_forceClose || _tabs.All(t => !t.IsDirty))
+        if (_forceClose || _tabs.All(t => !t.Document.IsDirty))
         {
             // 先掛上關閉旗標：子視窗的退場動畫會 Cancel 掉一次 Closing，
             // 那會連帶中止整個關閉流程（症狀＝要按兩次才關得掉）。
@@ -578,10 +576,10 @@ public partial class MainWindow
         _closingPrompt = true;
         try
         {
-            foreach (var tab in _tabs.Where(t => t.IsDirty).ToList())
+            foreach (var tab in _tabs.Where(t => t.Document.IsDirty).ToList())
             {
                 ActivateTab(tab);
-                var choice = await ShowUnsavedDialog(tab.Name);
+                var choice = await ShowUnsavedDialog(tab.Document.Name);
                 if (choice == UnsavedChoice.Cancel ||
                     (choice == UnsavedChoice.Save && !await SaveAsync(saveAs: false)))
                 {

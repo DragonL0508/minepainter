@@ -52,7 +52,8 @@ release.bat 1.8.2           推標籤，GitHub Actions 跑測試、建置、出 
 - **App 不直接改文件。** 所有改到 `Document`／圖層的操作都是 Core 的指令（`History/*Commands.cs`），App 只呼叫指令、刷新畫面。（同一個操作要能從選單、快捷鍵、測試三個入口叫到，邏輯只能在一處。）
 - **圖層面板是多選的。** 拿選取一律用 `LayersPanel.SelectedNodes`，交給 `LayerCommands` 的多節點版（`GroupNodes`／`MoveNodes`／`ShiftNodes`／`RemoveNodes`，內部先 `NormalizeSelection` 去掉祖先已選的子層）並綑成一步 undo；作用中圖層永遠是選取裡的一個。守門：`MultiSelectLayerCommandTests`、`LayersPanelMultiSelectTests`。
 - **Core 子目錄職責**：`Documents` 文件與縮放規則 · `Layers` 圖層樹、原始高清來源 · `Tiles` 稀疏像素表面、遮罩 · `History` 所有可 undo 的指令 · `Tools` 互動工具與 `EditorSession` · `Effects` 非破壞性效果堆疊 · `Adjustments` 色彩調整 · `Vectors` 文字／形狀物件 · `Selections` 選取與浮動內容 · `Compositing` 合成 · `IO` `.mpp`／`.pdn`／`.psd`／影像編解碼 · `AI` 去背。
-- **App 子目錄職責**：`Views` 視窗與面板 · `Controls` 可重用控制項（含 `Motion`） · `Rendering` 畫布上屏與 GPU 路徑 · `Services` 設定、字型、更新、安裝 · `Platform` Win32 互通。
+- **App 子目錄職責**：`Views` 視窗與面板 · `Controls` 可重用控制項（含 `Motion`） · `Rendering` 畫布上屏與 GPU 路徑 · `Services` 設定、字型、更新、安裝 · `Platform` Win32 互通 · `Workspace` 開啟中的文件（`OpenDocument`：session、檔案路徑、dirty），不碰任何 Avalonia 型別。
+- **MainWindow 只做視窗層的 orchestration，不擁有文件狀態。** 文件的 session／路徑／dirty／訂閱生命週期都在 `OpenDocument`：dirty 是「變更版本 ≠ 已存版本」的衍生值（存檔先 `CaptureSaveVersion`、成功再 `CompleteSave`），關分頁只 `Dispose()`；分頁的視口與控制項在 `DocumentTabView`。`OpenDocument` 的事件不保證在 UI 執行緒，要 `Dispatcher.UIThread.Post` 的是訂閱端。守門：`OpenDocumentTests`。
 
 ### 文件與像素的鐵律
 

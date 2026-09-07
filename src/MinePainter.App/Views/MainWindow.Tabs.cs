@@ -13,6 +13,7 @@ using Material.Icons;
 using Material.Icons.Avalonia;
 using MinePainter.App.Controls;
 using MinePainter.App.Services;
+using MinePainter.App.Workspace;
 using MinePainter.Core.Adjustments;
 using MinePainter.Core.AI;
 using MinePainter.Core.Effects;
@@ -31,27 +32,22 @@ public partial class MainWindow
 {
     // ---- 文件分頁（paint.net 的多文件模式）----
 
-    /// <summary>一個開啟中的文件：session + 檔案身分 + dirty 狀態 + 各自的視口與分頁 UI。</summary>
-    private sealed class DocumentTab
+    /// <summary>
+    /// 一份文件在這個視窗裡的呈現狀態：視口、分頁項、縮圖。
+    /// 文件本身（session、路徑、dirty）在 <see cref="OpenDocument"/>，這裡只是 View。
+    /// </summary>
+    private sealed class DocumentTabView
     {
-        public required EditorSession Session { get; init; }
-        public string? FilePath;      // 目前的 .mpp 路徑（null = 尚未存過）
-        public string? ImportedName;  // 匯入來源的檔名（.pdn／.psd／影像）；只用於標題與存檔預設名
-        public bool IsDirty;
-        public int ChangeCount;       // Interlocked 累計；背景存檔期間的編輯靠它保住 dirty 旗標
-        public Action? DirtyHandler;  // 關分頁時解除訂閱用
-        public Action? SizeHandler;
+        public required OpenDocument Document { get; init; }
         public Rendering.ViewportTransform? Viewport; // 切到背景時保存，切回來還原
         public Border TabItem = null!;
         public TextBlock TabLabel = null!;
         public Image Thumb = null!;
-        public int ThumbChangeCount = -1; // 上次畫縮圖時的 ChangeCount（-1 = 還沒畫過）
-
-        public string Name => FilePath != null ? Path.GetFileName(FilePath) : ImportedName ?? "未命名";
+        public int ThumbChangeVersion = -1; // 上次畫縮圖時的 ChangeVersion（-1 = 還沒畫過）
     }
 
-    private readonly List<DocumentTab> _tabs = new();
-    private DocumentTab? _activeTab;
+    private readonly List<DocumentTabView> _tabs = new();
+    private DocumentTabView? _activeTab;
 
     // ---- 文件生命週期（分頁） ----
 
@@ -59,18 +55,23 @@ public partial class MainWindow
     private void SetDocument(
         MinePainter.Core.Documents.Document doc, string? mppPath = null, string? importedName = null)
     {
-        var session = new EditorSession(doc);
-        var tab = new DocumentTab { Session = session, FilePath = mppPath, ImportedName = importedName };
-        tab.DirtyHandler = () => MarkTabDirty(tab);
-        session.History.Changed += tab.DirtyHandler;
+        var document = new OpenDocument(doc, mppPath, importedName);
+        var session = document.Session;
         // 畫布內的文字編輯是 UI 端狀態，Core 不知道它的存在；
         // 註冊成 IPendingEdit，undo/redo/指令/存檔就都會自動先落地它
         session.RegisterPendingEdit(new CanvasTextPendingEdit(this));
+        session.Notified += msg => Avalonia.Threading.Dispatcher.UIThread.Post(() => Toasts.Show(msg));
+
+        var tab = new DocumentTabView { Document = document };
+        // OpenDocument 的事件不保證在 UI 執行緒，丟回來是這裡的責任
+        document.StateChanged += () => Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            UpdateTitle();
+            UpdateTabVisuals();
+        });
         // 畫布尺寸的唯一真相來源 —— 裁切/旋轉/調整大小「以及它們的 undo」都會走到這裡。
         // 只在各個 handler 裡更新標籤會漏掉 undo/redo。
-        tab.SizeHandler = () => OnDocumentSizeChanged(tab);
-        doc.SizeChanged += tab.SizeHandler;
-        session.Notified += msg => Avalonia.Threading.Dispatcher.UIThread.Post(() => Toasts.Show(msg));
+        document.DocumentSizeChanged += () => OnDocumentSizeChanged(tab);
 
         _tabs.Add(tab);
         BuildTabItem(tab);
@@ -81,7 +82,7 @@ public partial class MainWindow
     /// 立即切換作用中分頁（無動畫）：保存舊視口、接上所有面板。
     /// 程式流程（關分頁、關窗詢問、開新文件）走這個，之後的邏輯才能同步依賴 _activeTab。
     /// </summary>
-    private void ActivateTab(DocumentTab tab)
+    private void ActivateTab(DocumentTabView tab)
     {
         _pendingSwitch = null; // 蓋掉進行中的動畫切換
         SnapCanvasOpacity();
@@ -99,7 +100,7 @@ public partial class MainWindow
 
         var previous = _activeTab;
         _activeTab = tab;
-        var session = tab.Session;
+        var session = tab.Document.Session;
         session.Compositor.Resume(); // 切回前景：重新排隊合成（切走時丟掉了）
         Canvas.SetSession(session, tab.Viewport);
         _layersContent.SetSession(session);
@@ -123,7 +124,7 @@ public partial class MainWindow
         // 不然這一幀還在畫它的 render thread 會撞上。
         if (previous != null && !ReferenceEquals(previous, tab))
         {
-            previous.Session.Compositor.Suspend();
+            previous.Document.Session.Compositor.Suspend();
             TilePool.Shared.Trim(64); // 剛還回來一大批，留一點週轉就好
         }
     }
@@ -132,7 +133,7 @@ public partial class MainWindow
     // fade 由 CanvasView.ContentFade 在 draw op 裡自己套（外圍底色不動），
     // 不碰 Visual.Opacity —— Opacity=0 時 Avalonia 會剔除子樹，畫面會閃黑。
 
-    private DocumentTab? _pendingSwitch;
+    private DocumentTabView? _pendingSwitch;
 
     private void InitCanvasFade()
     {
@@ -140,7 +141,7 @@ public partial class MainWindow
     }
 
     /// <summary>點分頁的切換：Quick 淡出 → 換 session → Base 淡入。</summary>
-    private void ActivateTabAnimated(DocumentTab tab)
+    private void ActivateTabAnimated(DocumentTabView tab)
     {
         if (ReferenceEquals(tab, _activeTab) && _pendingSwitch == null) return;
 
@@ -168,12 +169,12 @@ public partial class MainWindow
     private void SnapCanvasOpacity() => Canvas.SnapContentFade(1);
 
     /// <summary>關閉分頁（dirty 先問存檔）。回傳 false = 使用者取消。</summary>
-    private async Task<bool> CloseTabAsync(DocumentTab tab)
+    private async Task<bool> CloseTabAsync(DocumentTabView tab)
     {
-        if (tab.IsDirty)
+        if (tab.Document.IsDirty)
         {
             ActivateTab(tab); // 讓使用者看見要存的是哪一份
-            var choice = await ShowUnsavedDialog(tab.Name);
+            var choice = await ShowUnsavedDialog(tab.Document.Name);
             if (choice == UnsavedChoice.Cancel) return false;
             if (choice == UnsavedChoice.Save && !await SaveAsync(saveAs: false)) return false;
         }
@@ -183,8 +184,6 @@ public partial class MainWindow
         _tabs.RemoveAt(index);
         // 與新分頁的淡入對稱：縮小淡出後才從列上拿掉
         Motion.FadeOut(tab.TabItem, () => TabStrip.Children.Remove(tab.TabItem), "scale(0.9)");
-        tab.Session.History.Changed -= tab.DirtyHandler;
-        tab.Session.Document.SizeChanged -= tab.SizeHandler;
 
         if (ReferenceEquals(tab, _activeTab))
         {
@@ -212,36 +211,24 @@ public partial class MainWindow
             UpdateTabVisuals();
         }
 
-        tab.Session.Dispose(); // 畫布已切走，這裡才是唯一的釋放點
+        tab.Document.Dispose(); // 畫布已切走，這裡才是唯一的釋放點；訂閱由它自己解
         TilePool.Shared.Trim(64); // 整份文件的 tile 剛還回池子，別讓它留著
         return true;
     }
 
-    private void MarkTabDirty(DocumentTab tab)
-    {
-        Interlocked.Increment(ref tab.ChangeCount); // History.Changed 可能來自非 UI 執行緒
-        if (tab.IsDirty) return;
-        tab.IsDirty = true;
-        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
-        {
-            UpdateTitle();
-            UpdateTabVisuals();
-        });
-    }
-
     /// <summary>文件尺寸變了（含 undo/redo）：同步狀態列與捲動範圍。可能在非 UI 執行緒發出。</summary>
-    private void OnDocumentSizeChanged(DocumentTab tab) =>
+    private void OnDocumentSizeChanged(DocumentTabView tab) =>
         Avalonia.Threading.Dispatcher.UIThread.Post(() =>
         {
             if (!ReferenceEquals(tab, _activeTab)) return;
-            DocSizeLabel.Text = DocSizeText(tab.Session.Document);
+            DocSizeLabel.Text = DocSizeText(tab.Document.Session.Document);
             UpdateViewportStatus();
             RefreshUiState();
         });
 
     private void UpdateTitle() =>
         Title = _activeTab is { } tab
-            ? $"MinePainter — {tab.Name}{(tab.IsDirty ? " *" : "")}"
+            ? $"MinePainter — {tab.Document.Name}{(tab.Document.IsDirty ? " *" : "")}"
             : "MinePainter";
 
     // ---- 分頁條 UI ----
@@ -269,7 +256,7 @@ public partial class MainWindow
         TabStrip.Children.Add(_newTabButton);
     }
 
-    private void BuildTabItem(DocumentTab tab)
+    private void BuildTabItem(DocumentTabView tab)
     {
         // 縮圖預覽（棋盤感不需要，襯個內凹底色就好）
         tab.Thumb = new Image
@@ -347,19 +334,20 @@ public partial class MainWindow
     {
         foreach (var tab in _tabs)
         {
-            tab.TabLabel.Text = tab.IsDirty ? $"{tab.Name} •" : tab.Name;
+            var doc = tab.Document;
+            tab.TabLabel.Text = doc.IsDirty ? $"{doc.Name} •" : doc.Name;
             tab.TabItem.Background = ReferenceEquals(tab, _activeTab) ? AppTheme.HeaderBrush : Brushes.Transparent;
-            ToolTip.SetTip(tab.TabItem, tab.FilePath ?? tab.Name);
+            ToolTip.SetTip(tab.TabItem, doc.FilePath ?? doc.Name);
         }
     }
 
-    /// <summary>重畫分頁縮圖（有變更才畫；ChangeCount 沒動就直接跳過）。</summary>
-    private void RefreshTabThumbnail(DocumentTab tab)
+    /// <summary>重畫分頁縮圖（有變更才畫；ChangeVersion 沒動就直接跳過）。</summary>
+    private void RefreshTabThumbnail(DocumentTabView tab)
     {
-        var changes = Volatile.Read(ref tab.ChangeCount);
-        if (changes == tab.ThumbChangeCount) return;
-        tab.ThumbChangeCount = changes;
-        var doc = tab.Session.Document;
+        var version = tab.Document.ChangeVersion;
+        if (version == tab.ThumbChangeVersion) return;
+        tab.ThumbChangeVersion = version;
+        var doc = tab.Document.Session.Document;
         tab.Thumb.Source = Rendering.LayerThumbnail.Render(doc, doc.Root, 46, 34);
     }
 
@@ -391,7 +379,7 @@ public partial class MainWindow
                 ? $"{stats.Fps:F0} fps・合成中 {stats.PendingTiles}"
                 : frames >= 10 ? $"{stats.Fps:F0} fps" : "閒置";
 
-            // 順便讓作用中分頁的縮圖跟上編輯（ChangeCount 沒變就是免費檢查）
+            // 順便讓作用中分頁的縮圖跟上編輯（ChangeVersion 沒變就是免費檢查）
             if (_activeTab is { } tab) RefreshTabThumbnail(tab);
             EnsurePanelsVisible(); // 開關亮著的面板一定看得到（自我修復）
         };
