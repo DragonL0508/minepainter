@@ -26,14 +26,20 @@ public sealed class CanvasDrawOperation : ICustomDrawOperation
 
     private readonly bool _highlightSelection;
     private readonly bool _showPixelGrid;
+    private readonly bool _showPrintGuides;
+    private readonly Core.Documents.PrintSpec? _printSpec;
+    private readonly double _printDpi;
     private readonly float _contentFade;
 
     private readonly bool _smoothZoom;
 
     public CanvasDrawOperation(Rect bounds, EditorSession session, ViewportTransform viewport,
         FrameStats stats, GpuLayerRenderer gpuRenderer, bool showPixelGrid = false, float contentFade = 1f,
-        bool smoothZoom = false)
+        bool smoothZoom = false, bool showPrintGuides = true)
     {
+        _showPrintGuides = showPrintGuides;
+        _printSpec = session.Document.Print;
+        _printDpi = session.Document.Dpi;
         _gpuRenderer = gpuRenderer;
         _smoothZoom = smoothZoom;
         _contentFade = Math.Clamp(contentFade, 0f, 1f);
@@ -225,6 +231,7 @@ public sealed class CanvasDrawOperation : ICustomDrawOperation
         // 覆疊（螞蟻線／選取框／把手）不裁切：物件或選取被拉到畫布外時，
         // 把手還是要看得見才拉得回來（Pinta 把「把手在畫布外就不畫」列為 bug #1955）。
         DrawSelectionAndPreview(canvas);
+        DrawPrintGuides(canvas);
         canvas.Restore();                       // viewport 變換
         if (hasAlphaLayer) canvas.Restore();    // 合成 alpha layer（fade）
         canvas.Restore();                       // 最外層 clip
@@ -394,6 +401,42 @@ public sealed class CanvasDrawOperation : ICustomDrawOperation
         scale < 1 ? SKFilterQuality.Medium
         : _smoothZoom ? SKFilterQuality.Low // 檢視 → 放大時平滑取樣（雙線性）
         : SKFilterQuality.None;
+
+    // 出血紅、安全框洋紅（InDesign 的慣例：bleed guide 紅、margin guide 洋紅）
+    private static readonly SKColor TrimGuideColor = new(0xE0, 0x30, 0x30);
+    private static readonly SKColor SafeGuideColor = new(0xD0, 0x40, 0xD0);
+
+    /// <summary>
+    /// 出血與安全框：裁切線＝畫布往內縮一個出血，安全框＝裁切線再往內縮安全距離。
+    /// 畫在文件範圍 clip 之外（線就壓在畫布邊界上，裁掉會只剩半條）。
+    /// **永遠只存在於畫面上** —— 匯出走的是合成結果，輔助線不在裡面。
+    /// </summary>
+    private void DrawPrintGuides(SKCanvas canvas)
+    {
+        if (!_showPrintGuides || _printSpec is not { } spec) return;
+        if (spec.BleedMm <= 0 && spec.SafeMm <= 0) return;
+
+        var screenPx = (float)(1.0 / _viewport.Scale); // 線寬在螢幕上恆為 1px
+        using var paint = new SKPaint { Style = SKPaintStyle.Stroke, StrokeWidth = screenPx };
+        var trim = spec.TrimRect(_docWidth, _docHeight, _printDpi);
+
+        if (spec.BleedMm > 0)
+        {
+            paint.Color = TrimGuideColor;
+            canvas.DrawRect(trim, paint);
+        }
+
+        if (spec.SafeMm > 0)
+        {
+            var safe = spec.SafeRect(_docWidth, _docHeight, _printDpi);
+            var dash = 4f * screenPx;
+            using var effect = SKPathEffect.CreateDash([dash, dash], 0);
+            paint.Color = SafeGuideColor;
+            paint.PathEffect = effect;
+            canvas.DrawRect(safe, paint);
+            paint.PathEffect = null;
+        }
+    }
 
     /// <summary>
     /// 像素格線（對像素創作是核心功能）。線寬用 1/zoom 讓螢幕上恆為 1px，

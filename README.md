@@ -75,6 +75,7 @@ release.bat 1.8.2           推標籤，GitHub Actions 跑測試、建置、出 
 14. **像素圖放大走 `ResampleMode.PixelArt`（`Documents/PixelArtScale`，Scale2x／3x）**：只用輸入裡有的顏色、把樓梯削成斜線；先疊 2×／3× 到不小於目標，整數倍時直接搬、不再重取樣。有原始高清來源的圖層不走它（從原圖重畫更準）。守門：`PixelArtScaleTests`。
 15. **色彩：進出都對齊 sRGB，中間不做色彩管理。** 匯入時解碼目標指定 `SKColorSpace.CreateSrgb()`，帶 ICC 的檔案（P3 截圖、Adobe RGB 相片）由 codec 轉成 sRGB，不指定會照數值搬、整張偏淡；JPEG 匯出用 4:4:4（`SKJpegEncoderDownsample.Downsample444`），預設 4:2:0 會把紅字邊緣糊成粉紅。刻意不做的：合成與效果在 sRGB gamma 空間算（與 paint.net、Photoshop 預設一致，改成線性會讓所有既有文件變色）；顯示端不做螢幕設定檔管理（paint.net 也沒有）。`.psd` 的內嵌 ICC（影像資源 1039）也要套（Adobe RGB／P3 的檔案不轉會整張偏淡）；解析不了的設定檔當成沒有，不能讓匯入炸掉。16 位元 `.psd` 降成 8 位元走有序抖色（Bayer 8×8，同 Photoshop 轉 8 位元的預設），直接四捨五入會讓平滑漸層出色帶。守門：`ColorAccuracyTests`、`PsdColorTests`。
     **天花板是刻意的**：tile 是 8 位元 BGRA premul，不做 16 位元／FP32 管線、不做 CMYK、不做 HDR。輸出是 8 位元的 PNG／JPEG，換來的是小上四倍的記憶體與簡單的合成器。天花板以下該準的要準。
+16. **出血與安全框是輔助線，不是像素。** `Document.Print`（`Documents/PrintSpec`）只有兩個數字：出血、安全距離（公釐）。**畫布本身就是含出血的尺寸**，裁切線＝畫布往內縮一個出血、安全框＝再往內縮安全距離 —— 刻意不存「裁切尺寸」，存了就會有「規格與畫布對不上」的狀態要處理。輔助線只由 `CanvasDrawOperation` 畫在畫面上，**任何輸出路徑都不能有它**（守門：`PrintSpecTests.匯出不含輔助線`）。送印檢查（`Documents/PrintCheck`）對應印刷廠的兩條規則：出血環不能有透明像素、圖文不能超出安全框；「圖文」的判準是「內容沒蓋滿畫布的圖層」，滿版底圖本來就該延伸到出血，不該被警告。守門：`PrintSpecTests`、`PrintCheckTests`。
 12. **Skia 物件的生命週期要明確。** `SKImage`／`SKBitmap`／`SKPath` 誰擁有誰釋放寫在註解裡；多份物件共用同一張 `SKImage` 時（`LayerPixelSource.Rebased`），只有一個擁有者，其餘 `Detach()`。合成執行緒可能在物件釋放後才畫到它，尺寸類屬性建構時就快取。
 
 ### UI 一致性

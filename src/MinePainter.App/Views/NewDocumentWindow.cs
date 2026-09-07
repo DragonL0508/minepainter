@@ -33,6 +33,7 @@ public sealed class NewDocumentWindow : ModalDialog
     private static int _lastWidth = 1920;
     private static int _lastHeight = 1080;
     private static double _lastDpi = PhysicalUnits.ScreenDpi;
+    private Core.Documents.PrintSpec? _print;
     private static LengthUnit _lastUnit = LengthUnit.Pixel;
     private static ResolutionUnit _lastResolutionUnit = ResolutionUnit.PixelsPerInch;
     private static int _lastBackground;
@@ -41,6 +42,9 @@ public sealed class NewDocumentWindow : ModalDialog
     public int DocWidth { get; private set; }
     public int DocHeight { get; private set; }
     public float Dpi { get; private set; } = PhysicalUnits.ScreenDpi;
+
+    /// <summary>送印預設集帶的出血／安全框；null＝一般文件。</summary>
+    public Core.Documents.PrintSpec? Print { get; private set; }
     public SKColor DocBackground { get; private set; }
 
     /// <summary>使用者選了快速模式：畫布用 <see cref="ProxyWidth"/>×<see cref="ProxyHeight"/>，輸出仍是 Doc 尺寸。</summary>
@@ -111,6 +115,7 @@ public sealed class NewDocumentWindow : ModalDialog
             _widthPx = preset.Width;
             _heightPx = preset.Height;
             _dpi = preset.Dpi;
+            _print = preset.Spec;
             // 印刷預設集用公釐看比較直覺；螢幕的看像素
             _unit = preset.Group == "印刷" && _unit == LengthUnit.Pixel ? LengthUnit.Millimeter
                 : preset.Group == "螢幕" ? LengthUnit.Pixel : _unit;
@@ -185,6 +190,7 @@ public sealed class NewDocumentWindow : ModalDialog
             DocWidth = _widthPx;
             DocHeight = _heightPx;
             Dpi = (float)_dpi;
+            Print = _print;
             FastMode = _fastMode.IsVisible && _fastMode.IsChecked == true;
             var (proxyW, proxyH) = Core.Documents.FastMode.ProxySize(DocWidth, DocHeight);
             ProxyWidth = proxyW;

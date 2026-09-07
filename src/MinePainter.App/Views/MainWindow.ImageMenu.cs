@@ -192,6 +192,53 @@ public partial class MainWindow
         Toasts.Show($"畫布大小：{dialog.NewWidth} × {dialog.NewHeight}");
     }
 
+    /// <summary>出血與安全框：設定送印規格，需要時把畫布改成含出血的尺寸（併成一步 undo）。</summary>
+    private async void OnPrintSpecClicked(object? sender, RoutedEventArgs e)
+    {
+        var session = CommitPending();
+        if (session == null) return;
+        var doc = session.Document;
+        var dialog = new PrintSpecDialog(doc);
+        await dialog.ShowDialog(this);
+        if (!dialog.Confirmed) return;
+
+        var resized = dialog.CanvasWidth != doc.Width || dialog.CanvasHeight != doc.Height;
+        DocumentCommands.ApplyPrintSpec(session, dialog.Spec, dialog.CanvasWidth, dialog.CanvasHeight, dialog.Dpi);
+        if (resized) AfterDocumentResized(session);
+        _layersContent.Refresh();
+        RefreshUiState();
+
+        if (dialog.Spec is { } spec)
+        {
+            var (mmW, mmH) = spec.TrimSizeMm(doc);
+            Toasts.Show($"裁切後 {mmW:0.#} × {mmH:0.#} mm，出血 {spec.BleedMm:0.#} mm、安全距離 {spec.SafeMm:0.#} mm" +
+                        (resized ? "（畫布已改成含出血的尺寸，內容置中）" : ""));
+        }
+        else
+        {
+            Toasts.Show("已移除出血與安全框");
+        }
+    }
+
+    /// <summary>送印檢查：底圖有沒有鋪滿出血、圖文有沒有超出安全框（見 Core.Documents.PrintCheck）。</summary>
+    private async void OnPrintCheckClicked(object? sender, RoutedEventArgs e)
+    {
+        var session = CommitPending();
+        if (session == null) return;
+        var doc = session.Document;
+        if (doc.Print is not { } spec)
+        {
+            Toasts.Show("這份文件還沒有出血設定：影像 → 出血與安全框…");
+            return;
+        }
+
+        Core.Documents.PrintCheckResult? result = null;
+        // 要合成整張圖來看出血環，丟背景執行緒（PrintCheck 內部自己取 SyncRoot）
+        await ProgressDialog.RunAsync(this, "送印檢查", _ => result = Core.Documents.PrintCheck.Run(doc));
+        if (result == null) return;
+        await new PrintCheckDialog(result, spec).ShowDialog(this);
+    }
+
     private void OnFlipLayerHorizontalClicked(object? sender, RoutedEventArgs e) =>
         FlipActiveLayer(GeometryOp.FlipHorizontal, "水平翻轉圖層");
 

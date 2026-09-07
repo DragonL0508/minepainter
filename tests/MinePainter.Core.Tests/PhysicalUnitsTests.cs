@@ -32,8 +32,13 @@ public class PhysicalUnitsTests
     [Fact]
     public void Presets_PrintSizesUse300DpiAndScreenSizesUse96()
     {
-        var a4 = Assert.Single(PhysicalUnits.Presets, p => p.Label.StartsWith("A4", StringComparison.Ordinal));
+        // 「A4」現在有兩個：一般尺寸與送印版（畫布含出血）。這裡看的是一般的那個。
+        var a4 = Assert.Single(PhysicalUnits.Presets,
+            p => p.Label.StartsWith("A4", StringComparison.Ordinal) && p.Spec == null);
         Assert.Equal((2480, 3508, 300f), (a4.Width, a4.Height, a4.Dpi));
+        var a4Bleed = Assert.Single(PhysicalUnits.Presets,
+            p => p.Label.StartsWith("A4", StringComparison.Ordinal) && p.Spec != null);
+        Assert.Equal(2551, a4Bleed.Width); // 210 + 3 + 3 = 216 mm @ 300 dpi
         var fullHd = Assert.Single(PhysicalUnits.Presets, p => p.Label.Contains("Full HD", StringComparison.Ordinal));
         Assert.Equal((1920, 1080, PhysicalUnits.ScreenDpi), (fullHd.Width, fullHd.Height, fullHd.Dpi));
         Assert.All(PhysicalUnits.Presets, p => Assert.True(p.Width > 0 && p.Height > 0 && p.Dpi > 0));

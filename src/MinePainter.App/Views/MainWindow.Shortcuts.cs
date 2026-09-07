@@ -63,6 +63,8 @@ public partial class MainWindow
             ["image.rotateCcw"] = () => OnRotateCcwClicked(null, new RoutedEventArgs()),
             ["image.rotate180"] = () => OnRotate180Clicked(null, new RoutedEventArgs()),
             ["image.flatten"] = () => OnFlattenClicked(null, new RoutedEventArgs()),
+            ["image.printSpec"] = () => OnPrintSpecClicked(null, new RoutedEventArgs()),
+            ["image.printCheck"] = () => OnPrintCheckClicked(null, new RoutedEventArgs()),
 
             ["layer.add"] = () => OnAddLayerClicked(null, new RoutedEventArgs()),
             ["layer.duplicate"] = () => OnDuplicateLayerClicked(null, new RoutedEventArgs()),

@@ -54,7 +54,20 @@ public static class MppFormat
         /// </summary>
         public float? Dpi { get; set; }
 
+        /// <summary>
+        /// 印刷的出血與安全框（公釐）。沒有這個欄位＝不是印刷檔。
+        /// 同 <see cref="Dpi"/>：舊版程式讀到會忽略，檔案照樣打得開，所以不升 FormatVersion。
+        /// </summary>
+        public PrintDto? Print { get; set; }
+
         public Node Root { get; set; } = new();
+    }
+
+    /// <summary>出血與安全框（公釐）。只有兩個數字：裁切線＝畫布內縮出血，安全框＝再內縮安全距離。</summary>
+    public sealed class PrintDto
+    {
+        public double BleedMm { get; set; }
+        public double SafeMm { get; set; }
     }
 
     public sealed class Node
@@ -199,6 +212,9 @@ public static class MppFormat
                 OutputWidth = doc.IsFastMode ? doc.OutputWidth : 0,
                 OutputHeight = doc.IsFastMode ? doc.OutputHeight : 0,
                 Dpi = doc.Dpi,
+                Print = doc.Print is { } print
+                    ? new PrintDto { BleedMm = print.BleedMm, SafeMm = print.SafeMm }
+                    : null,
                 Root = BuildNode(doc.Root, rasters, masks, sources),
             };
             // 只有真的寫了原始高清來源才升版本，一般檔案照舊是 v1（舊版程式仍讀得到）
@@ -493,6 +509,7 @@ public static class MppFormat
         var doc = new Document(manifest.Width, manifest.Height);
         doc.SetOutputSize(manifest.OutputWidth, manifest.OutputHeight);
         if (manifest.Dpi is { } dpi) doc.Dpi = dpi;
+        if (manifest.Print is { } print) doc.Print = new Documents.PrintSpec(print.BleedMm, print.SafeMm);
         lock (doc.SyncRoot)
         {
             foreach (var childNode in manifest.Root.Children ?? [])

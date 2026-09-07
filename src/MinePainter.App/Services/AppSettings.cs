@@ -40,6 +40,9 @@ public sealed class AppSettings
     /// </summary>
     public bool CanvasLod { get; set; } = true;
 
+    /// <summary>顯示出血與安全框輔助線（送印文件才有）。</summary>
+    public bool PrintGuides { get; set; } = true;
+
     /// <summary>啟動時靜默檢查 GitHub 有沒有新版（開發建置不檢查）。</summary>
     public bool CheckUpdatesOnStartup { get; set; } = true;
 

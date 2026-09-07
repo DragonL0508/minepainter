@@ -45,6 +45,16 @@ public partial class MainWindow
         Toasts.Show(Canvas.ShowPixelGrid ? "像素格線：開（放大 300% 以上顯示）" : "像素格線：關");
     }
 
+    private void OnTogglePrintGuidesClicked(object? sender, RoutedEventArgs e)
+    {
+        Canvas.ShowPrintGuides = PrintGuidesMenuItem.IsChecked;
+        Services.AppSettings.Instance.PrintGuides = Canvas.ShowPrintGuides;
+        Services.AppSettings.Instance.Save();
+        Toasts.Show(Canvas.ShowPrintGuides
+            ? "出血與安全框：開（送印文件才看得到）"
+            : "出血與安全框：關");
+    }
+
     private void OnToggleSmoothZoomClicked(object? sender, RoutedEventArgs e)
     {
         Canvas.SmoothZoom = SmoothZoomMenuItem.IsChecked;

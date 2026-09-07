@@ -51,6 +51,8 @@ public static class ShortcutMap
         new("image.resize", "影像", "調整影像大小", new KeyGesture(Key.R, KeyModifiers.Control)),
         new("image.canvasSize", "影像", "調整畫布大小", new KeyGesture(Key.R, KeyModifiers.Control | KeyModifiers.Shift)),
         new("image.flatten", "影像", "平面化", new KeyGesture(Key.F, KeyModifiers.Control | KeyModifiers.Shift)),
+        new("image.printSpec", "影像", "出血與安全框", null),
+        new("image.printCheck", "影像", "送印檢查", null),
 
         new("adjust.autoLevel", "調整", "自動色階", new KeyGesture(Key.L, KeyModifiers.Control | KeyModifiers.Shift)),
         new("adjust.blackWhite", "調整", "黑白", new KeyGesture(Key.G, KeyModifiers.Control | KeyModifiers.Shift)),

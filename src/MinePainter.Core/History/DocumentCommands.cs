@@ -88,6 +88,45 @@ public static class DocumentCommands
             }));
     }
 
+    /// <summary>
+    /// 設定／清除印刷的出血與安全框，需要時順便把畫布改成含出血的尺寸（置中）。
+    /// 兩件事併成一步 undo —— 使用者按的是一個「套用」。
+    /// </summary>
+    /// <param name="canvasWidth">目標畫布尺寸；與現在相同就不動畫布。</param>
+    public static void ApplyPrintSpec(EditorSession session, Documents.PrintSpec? spec,
+        int canvasWidth, int canvasHeight, float dpi, string label = "出血與安全框")
+    {
+        var doc = session.Document;
+        var resized = canvasWidth >= 1 && canvasHeight >= 1 &&
+                      (canvasWidth != doc.Width || canvasHeight != doc.Height);
+        var beforeSpec = doc.Print;
+        var beforeDpi = doc.Dpi;
+        // dpi 一起收進來：它決定「一公釐是幾個像素」，也就決定輔助線畫在哪，兩者是同一個設定
+        var settingsChanged = !Equals(beforeSpec, spec) || Math.Abs(beforeDpi - dpi) > 1e-4f;
+        if (!resized && !settingsChanged) return;
+
+        if (resized) ImageCommands.ResizeCanvas(session, canvasWidth, canvasHeight, 0.5f, 0.5f, label);
+
+        if (settingsChanged)
+        {
+            Assign(doc, spec, dpi);
+            session.History.Push(new ActionHistoryEntry(label, SKRectI.Empty,
+                undo: d => Assign(d, beforeSpec, beforeDpi),
+                redo: d => Assign(d, spec, dpi)));
+        }
+
+        if (resized && settingsChanged) session.History.CollapseLast(2, label);
+    }
+
+    private static void Assign(Documents.Document doc, Documents.PrintSpec? spec, float dpi)
+    {
+        doc.Print = spec;
+        doc.Dpi = dpi;
+        // 輔助線是畫面上的東西，改了要重畫。整份標髒對送印尺寸的文件只有十幾格，
+        // 不值得為它多做一條更細的訊號。
+        doc.NotifyChanged(doc.Bounds);
+    }
+
     /// <summary>裁切到選取範圍：文件縮成選取的外接矩形，範圍外的像素清掉。</summary>
     public static void CropToSelection(EditorSession session)
     {

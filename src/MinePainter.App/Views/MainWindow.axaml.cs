@@ -87,6 +87,8 @@ public partial class MainWindow : Window
         Canvas.TextEditRequested += StartCanvasTextEdit;
         Canvas.SmoothZoom = Services.AppSettings.Instance.SmoothZoom;
         SmoothZoomMenuItem.IsChecked = Canvas.SmoothZoom;
+        Canvas.ShowPrintGuides = Services.AppSettings.Instance.PrintGuides;
+        PrintGuidesMenuItem.IsChecked = Canvas.ShowPrintGuides;
         Rendering.GpuLayerRenderer.LodEnabled = Services.AppSettings.Instance.CanvasLod;
         CanvasLodMenuItem.IsChecked = Rendering.GpuLayerRenderer.LodEnabled;
         BuildFrameActions();
@@ -642,10 +644,18 @@ public partial class MainWindow : Window
     }
 
     /// <summary>狀態列的尺寸文字。快速模式要看得出「畫布是代理、輸出是另一個尺寸」。</summary>
-    private static string DocSizeText(Core.Documents.Document doc) =>
-        doc.IsFastMode
-            ? $"{doc.Width} × {doc.Height}（快速模式 → 輸出 {doc.OutputWidth} × {doc.OutputHeight}）"
-            : $"{doc.Width} × {doc.Height}";
+    private static string DocSizeText(Core.Documents.Document doc)
+    {
+        if (doc.IsFastMode)
+            return $"{doc.Width} × {doc.Height}（快速模式 → 輸出 {doc.OutputWidth} × {doc.OutputHeight}）";
+        // 送印文件看的是「裁切後幾公釐」，不是畫布幾個像素
+        if (doc.Print is { } spec)
+        {
+            var (mmW, mmH) = spec.TrimSizeMm(doc);
+            return $"{doc.Width} × {doc.Height}（裁切後 {mmW:0.#} × {mmH:0.#} mm ＠ {doc.Dpi:0} dpi）";
+        }
+        return $"{doc.Width} × {doc.Height}";
+    }
 
     private void RefreshUiState()
     {

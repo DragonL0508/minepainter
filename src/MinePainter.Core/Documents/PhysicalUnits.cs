@@ -82,7 +82,9 @@ public static class PhysicalUnits
         unit == ResolutionUnit.PixelsPerCentimeter ? dpi / CentimetersPerInch : dpi;
 
     /// <summary>新增影像的預設集：螢幕類直接給像素；印刷類給實體尺寸 + 300 dpi，像素算出來。</summary>
-    public sealed record Preset(string Group, string Label, int Width, int Height, float Dpi)
+    /// <param name="Spec">送印預設集帶的出血／安全框；null＝一般尺寸預設集。</param>
+    public sealed record Preset(string Group, string Label, int Width, int Height, float Dpi,
+        PrintSpec? Spec = null)
     {
         public static Preset Pixels(string label, int width, int height) => new("螢幕", label, width, height, ScreenDpi);
 
@@ -90,6 +92,17 @@ public static class PhysicalUnits
             new("印刷", label,
                 ToPixels(widthMm, LengthUnit.Millimeter, dpi),
                 ToPixels(heightMm, LengthUnit.Millimeter, dpi), dpi);
+
+        /// <summary>
+        /// 送印用：給的是「裁切後」尺寸，畫布自動放大成含出血的尺寸，並帶著出血／安全框規格。
+        /// 廠商要的檔案就是這個尺寸（名片裁切 90×54 mm、出血 1 mm → 畫布 92×56 mm）。
+        /// </summary>
+        public static Preset PrintBleed(string label, double trimWidthMm, double trimHeightMm,
+            double bleedMm = PrintSpec.CommonBleedMm, double safeMm = PrintSpec.CommonSafeMm, float dpi = PrintDpi)
+        {
+            var size = PrintSpec.CanvasSizeFor(trimWidthMm, trimHeightMm, bleedMm, dpi);
+            return new("印刷", label, size.Width, size.Height, dpi, new PrintSpec(bleedMm, safeMm));
+        }
 
         public static Preset PrintInches(string label, double widthIn, double heightIn, float dpi = PrintDpi) =>
             new("印刷", label,
@@ -120,5 +133,10 @@ public static class PhysicalUnits
         Preset.PrintInches("相片 4 × 6 in", 4, 6),
         Preset.Print("名片（90 × 54 mm）", 90, 54),
         Preset.Print("明信片（100 × 148 mm）", 100, 148),
+        // 送印用（畫布＝裁切尺寸＋出血，開起來就有裁切線與安全框）
+        Preset.PrintBleed("名片 送印（裁切 90 × 54 mm，出血 1 mm）", 90, 54, bleedMm: 1),
+        Preset.PrintBleed("名片 送印（裁切 90 × 54 mm，出血 3 mm）", 90, 54),
+        Preset.PrintBleed("明信片 送印（裁切 100 × 148 mm，出血 3 mm）", 100, 148),
+        Preset.PrintBleed("A4 送印（裁切 210 × 297 mm，出血 3 mm）", 210, 297),
     ];
 }

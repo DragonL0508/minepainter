@@ -51,7 +51,14 @@ public partial class MainWindow
             return;
         }
 
-        SetDocument(ImageCodec.CreateBlankDocument(dialog.DocWidth, dialog.DocHeight, dialog.DocBackground, dpi: dialog.Dpi));
+        var created = ImageCodec.CreateBlankDocument(dialog.DocWidth, dialog.DocHeight, dialog.DocBackground, dpi: dialog.Dpi);
+        created.Print = dialog.Print; // 送印預設集：畫布已經是含出血的尺寸，開起來就有裁切線與安全框
+        SetDocument(created);
+        if (dialog.Print is { } spec)
+        {
+            var (mmW, mmH) = spec.TrimSizeMm(created);
+            Toasts.Show($"送印文件：裁切後 {mmW:0.#} × {mmH:0.#} mm，出血 {spec.BleedMm:0.#} mm。底圖請鋪滿整張畫布。");
+        }
     }
 
     private async void OnOpenClicked(object? sender, RoutedEventArgs e)

@@ -121,6 +121,14 @@
             <MenuItem Header="調整畫布大小(_S)…" Click="OnCanvasSizeClicked" Tag="image.canvasSize">
               <MenuItem.Icon><mi:MaterialIcon Kind="ArrowExpandAll" Width="16" Height="16" /></MenuItem.Icon>
             </MenuItem>
+            <MenuItem Header="出血與安全框(_B)…" Click="OnPrintSpecClicked" Tag="image.printSpec"
+                      ToolTip.Tip="送印用：畫布＝裁切尺寸＋出血，畫面上多出裁切線與安全框。輔助線只在畫面上，不會被匯出。">
+              <MenuItem.Icon><mi:MaterialIcon Kind="CropFree" Width="16" Height="16" /></MenuItem.Icon>
+            </MenuItem>
+            <MenuItem Header="送印檢查(_K)…" Click="OnPrintCheckClicked" Tag="image.printCheck"
+                      ToolTip.Tip="檢查底圖有沒有鋪滿出血區、圖文有沒有超出安全框。">
+              <MenuItem.Icon><mi:MaterialIcon Kind="Printer" Width="16" Height="16" /></MenuItem.Icon>
+            </MenuItem>
             <MenuItem x:Name="ToFastModeMenuItem" Header="轉成快速模式（實驗）" Click="OnToFastModeClicked"
                       ToolTip.Tip="畫布縮到代理級別編輯（預設 1080p，可在設定改）、輸出仍是現在的解析度。文字與效果輸出時重畫；畫過的像素會變成代理解析度（可復原）。">
               <MenuItem.Icon><mi:MaterialIcon Kind="Speedometer" Width="16" Height="16" /></MenuItem.Icon>
@@ -231,6 +239,11 @@
             <MenuItem x:Name="PixelGridMenuItem" Header="像素格線" Click="OnTogglePixelGridClicked"
                       ToggleType="CheckBox">
               <MenuItem.Icon><mi:MaterialIcon Kind="Grid" Width="16" Height="16" /></MenuItem.Icon>
+            </MenuItem>
+            <MenuItem x:Name="PrintGuidesMenuItem" Header="出血與安全框" Click="OnTogglePrintGuidesClicked"
+                      ToggleType="CheckBox"
+                      ToolTip.Tip="顯示裁切線（紅）與安全框（洋紅虛線）。只有設過出血的文件才有東西可看；輔助線不會被匯出。">
+              <MenuItem.Icon><mi:MaterialIcon Kind="CropFree" Width="16" Height="16" /></MenuItem.Icon>
             </MenuItem>
             <MenuItem x:Name="SmoothZoomMenuItem" Header="放大時平滑取樣" Click="OnToggleSmoothZoomClicked"
                       ToggleType="CheckBox"

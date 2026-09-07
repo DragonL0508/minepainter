@@ -111,6 +111,14 @@ public sealed class CanvasView : Control
     }
     private bool _showPixelGrid;
 
+    /// <summary>顯示出血與安全框（文件沒有印刷規格時本來就沒東西可畫）。只影響畫面，不影響輸出。</summary>
+    public bool ShowPrintGuides
+    {
+        get => _showPrintGuides;
+        set { _showPrintGuides = value; RequestRedraw(); }
+    }
+    private bool _showPrintGuides = true;
+
     /// <summary>放大時雙線性插值顯示（預設關：顯示真實像素、硬邊）。只影響上屏，不影響文件。</summary>
     public bool SmoothZoom
     {
@@ -467,7 +475,7 @@ public sealed class CanvasView : Control
 
         context.Custom(new CanvasDrawOperation(
             new Rect(0, 0, Bounds.Width, Bounds.Height), session, _viewport, _stats, _gpuRenderer,
-            ShowPixelGrid, (float)CurrentContentFade, SmoothZoom));
+            ShowPixelGrid, (float)CurrentContentFade, SmoothZoom, ShowPrintGuides));
 
         DrawBrushCursor(context);
     }

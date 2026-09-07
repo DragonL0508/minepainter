@@ -58,6 +58,12 @@ public sealed class Document : IDisposable
         set => _dpi = float.IsFinite(value) && value > 0 ? Math.Clamp(value, 1f, 10000f) : PhysicalUnits.ScreenDpi;
     }
 
+    /// <summary>
+    /// 印刷的出血與安全框；null＝不是印刷檔。只影響畫面上的輔助線與送印檢查，
+    /// 不影響任何像素，也不會被匯出（見 <see cref="PrintSpec"/>）。
+    /// </summary>
+    public PrintSpec? Print { get; set; }
+
     /// <summary>輸出比畫布大幾倍（一般模式為 1）。</summary>
     public float OutputScale => IsFastMode ? OutputWidth / (float)Width : 1f;
 
