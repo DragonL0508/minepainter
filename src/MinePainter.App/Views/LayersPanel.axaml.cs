@@ -631,6 +631,23 @@ public partial class LayersPanel : UserControl
     private static readonly IBrush GroupDropBrush =
         new SolidColorBrush(Color.FromArgb(0x40, 0x2A, 0x9D, 0xF4));
 
+    // 拉效果用紫色，跟搬圖層的藍色分開：一眼就知道現在拖的是哪一種東西
+    private static readonly IBrush EffectDropBrush =
+        new SolidColorBrush(Color.FromArgb(0x55, 0x9B, 0x59, 0xD0));
+
+    private static readonly IBrush EffectBadgeBrush =
+        new SolidColorBrush(Color.FromRgb(0x9B, 0x59, 0xD0));
+
+    // ---- Alt 拖曳＝搬的是「效果」不是圖層（Alt 在這個 App 一律是「複製」；再加 Shift＝取代） ----
+    // 判斷用的是「畫面上最後顯示的狀態」而不是放開滑鼠那一刻的按鍵：紫框與角標說會發生什麼，
+    // 就發生什麼。放開 Alt 之後只要動一下滑鼠，指示就會變回搬圖層。
+    private bool _effectDrag;
+    private bool _effectReplace;
+    private Row? _effectTarget;
+
+    /// <summary>拖著的那幾層的效果（面板由上到下串起來）；拖起來的瞬間拍一份。</summary>
+    private readonly List<LayerEffect> _dragEffects = new();
+
     private void OnListPointerPressed(object? sender, PointerPressedEventArgs e)
     {
         _pressNode = null;
@@ -657,6 +674,17 @@ public partial class LayersPanel : UserControl
         _pressNode = node;
         _pressRow = _rows.FirstOrDefault(r => ReferenceEquals(r.Item, item));
         _pressPoint = e.GetPosition(LayerList);
+
+        if (e.KeyModifiers.HasFlag(KeyModifiers.Alt))
+        {
+            // Alt 按下＝要拉效果，不是要選圖層：把事件吃掉，別讓 ListBox 動到選取。
+            // 不吃掉的話 Alt+Shift（取代）會被 ListBox 當成 Shift 連選，把落點那一列也選進來
+            // 一起拖，目標就變成「拖著的其中一列」而失效。
+            _pressSelection = null;
+            e.Handled = true;
+            return;
+        }
+
         var plain = (e.KeyModifiers & (KeyModifiers.Control | KeyModifiers.Shift)) == 0;
         var selected = SelectedNodes;
         _pressSelection = plain && selected.Count > 1 && selected.Contains(node) ? selected.ToList() : null;
@@ -709,7 +737,38 @@ public partial class LayersPanel : UserControl
 
         AutoScroll(p);
         MoveGhost(p);
+        UpdateDragMode(e.KeyModifiers);
         UpdateDropTarget(p);
+    }
+
+    /// <summary>拖曳中隨時可以改主意：Alt＝拉效果、Alt+Shift＝取代目標的效果堆疊。</summary>
+    private void UpdateDragMode(KeyModifiers modifiers)
+    {
+        // Alt 按著就一律進入拉效果模式（就算來源沒有效果）—— 不然使用者以為在拉效果，
+        // 結果圖層被搬走了
+        var effect = modifiers.HasFlag(KeyModifiers.Alt);
+        var replace = modifiers.HasFlag(KeyModifiers.Shift);
+        if (effect == _effectDrag && replace == _effectReplace) return;
+        _effectDrag = effect;
+        _effectReplace = replace;
+        UpdateGhostBadge();
+    }
+
+    /// <summary>拖曳幽靈右上角的角標：搬圖層時是「×N」，拉效果時說清楚是疊加還是取代。</summary>
+    private void UpdateGhostBadge()
+    {
+        if (_effectDrag)
+        {
+            DragGhostCount.Background = EffectBadgeBrush;
+            DragGhostCountText.Text = _dragEffects.Count == 0
+                ? "沒有效果"
+                : $"效果 ×{_dragEffects.Count}・{(_effectReplace ? "取代" : "疊加")}";
+            DragGhostCount.IsVisible = true;
+            return;
+        }
+        DragGhostCount.Background = AppTheme.AccentBrush;
+        DragGhostCountText.Text = $"×{_dragRows.Count}";
+        DragGhostCount.IsVisible = _dragRows.Count > 1;
     }
 
     private void OnListPointerReleased(object? sender, PointerReleasedEventArgs e)
@@ -726,8 +785,13 @@ public partial class LayersPanel : UserControl
             var nodes = _dragRows.Select(r => r.Node).ToList();
             var kind = _dropKind;
             var row = _dropRow;
+            var effectDrag = _effectDrag;
+            var effectReplace = _effectReplace;
+            var effectTarget = _effectTarget;
+            var effects = _dragEffects.ToList();
             CancelDrag();
-            CommitDrop(nodes, kind, row);
+            if (effectDrag) CommitEffectDrop(effects, effectTarget, effectReplace);
+            else CommitDrop(nodes, kind, row);
             e.Handled = true;
         }
         _pressNode = null;
@@ -755,6 +819,9 @@ public partial class LayersPanel : UserControl
         foreach (var row in _rows)
             if (dragging.Contains(row.Node)) _dragRows.Add(row);
         foreach (var row in _dragRows) row.Item.Opacity = 0.35;
+
+        _dragEffects.Clear();
+        foreach (var row in _dragRows) _dragEffects.AddRange(row.Node.Effects);
     }
 
     private void CancelDrag()
@@ -768,6 +835,10 @@ public partial class LayersPanel : UserControl
         foreach (var row in _dragRows) row.Item.Opacity = 1;
         if (_pressRow != null) _pressRow.Item.Opacity = 1;
         _dragRows.Clear();
+        _dragEffects.Clear();
+        _effectDrag = false;
+        _effectReplace = false;
+        _effectTarget = null;
         DragGhost.IsVisible = false;
         DragGhostImage.Source = null;
         DragGhostCount.IsVisible = false;
@@ -859,8 +930,7 @@ public partial class LayersPanel : UserControl
         DragGhostImage.Source = _ghost;
         DragGhost.Width = size.Width;
         DragGhost.Height = size.Height;
-        DragGhostCount.IsVisible = _dragRows.Count > 1;
-        DragGhostCountText.Text = $"×{_dragRows.Count}";
+        UpdateGhostBadge();
         // 抓在指標按下的那一點：拖起來的位置不會跳
         _ghostGrabY = item.TranslatePoint(default, LayerList) is { } pt
             ? Math.Clamp(_pressPoint.Y - pt.Y, 0, size.Height)
@@ -890,6 +960,7 @@ public partial class LayersPanel : UserControl
     {
         _dropKind = DropKind.None;
         _dropRow = null;
+        _effectTarget = null;
 
         // 只考慮實際在畫面上的列（虛擬化掉的 TranslatePoint 會是 null）
         var visible = new List<(Row Row, double Top, double Bottom)>();
@@ -914,6 +985,18 @@ public partial class LayersPanel : UserControl
                 hit = v;
                 break;
             }
+        }
+
+        if (_effectDrag)
+        {
+            // 拉效果：目標就是指標底下那一列（不分上下、群組也可以有效果），來源自己不算
+            if (hit != null && _dragEffects.Count > 0 &&
+                !_dragRows.Any(r => ReferenceEquals(r.Node, hit.Value.Row.Node)))
+            {
+                _effectTarget = hit.Value.Row;
+            }
+            ShowIndicator();
+            return;
         }
 
         if (hit == null)
@@ -965,6 +1048,14 @@ public partial class LayersPanel : UserControl
         _highlightItem?.ClearValue(BackgroundProperty);
         _highlightItem = null;
         DropIndicator.IsVisible = false;
+
+        if (_effectDrag)
+        {
+            if (_effectTarget == null) return;
+            _highlightItem = _effectTarget.Item;
+            _highlightItem.Background = EffectDropBrush;
+            return;
+        }
 
         if (_dropRow == null || _dropKind == DropKind.None) return;
 
@@ -1051,6 +1142,27 @@ public partial class LayersPanel : UserControl
         LayerCommands.MoveNode(_session.Document, _session.History, node, newParent, newIndex, "拖曳圖層");
         Refresh();
         StateChanged?.Invoke();
+    }
+
+    /// <summary>把拖著的效果放到目標圖層（來源保留自己的那份）。</summary>
+    private void CommitEffectDrop(List<LayerEffect> effects, Row? target, bool replace)
+    {
+        if (_session == null || target == null) return;
+        if (effects.Count == 0)
+        {
+            _session.Notify("拖著的圖層沒有效果可以拉");
+            return;
+        }
+
+        var mode = replace ? EffectDropMode.Replace : EffectDropMode.Append;
+        if (!LayerEffectCommands.CopyEffectsTo(_session.Document, _session.History, effects, target.Node, mode))
+            return;
+
+        Refresh();
+        StateChanged?.Invoke();
+        _session.Notify(replace
+            ? $"「{target.Node.Name}」的效果換成這 {effects.Count} 道"
+            : $"「{target.Node.Name}」加上 {effects.Count} 道效果");
     }
 
     // ---- 結構操作 ----

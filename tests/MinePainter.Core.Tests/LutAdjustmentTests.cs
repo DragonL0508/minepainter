@@ -193,7 +193,10 @@ public class LutAdjustmentTests : IDisposable
         lock (doc.SyncRoot) doc.Root.Add(adj);
 
         using var compositor = new Compositor(doc);
-        var deadline = Environment.TickCount64 + 3000;
+        // 這一格走的是像素路徑（LUT 表達不成 Skia 濾鏡），比一般合成貴得多，而合成的執行緒是
+        // 全行程共用的 2～4 條（CompositeWorkers）。整套測試平行跑時，3 秒偶爾不夠 ——
+        // 失敗時拿到的是「還沒有這一格」（alpha 0）而不是錯的顏色，所以是等太短、不是算錯。
+        var deadline = Environment.TickCount64 + 15000;
         SKColor last = default;
         while (Environment.TickCount64 < deadline)
         {

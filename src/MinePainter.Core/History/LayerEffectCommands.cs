@@ -12,8 +12,39 @@ namespace MinePainter.Core.History;
 /// 對象是 <see cref="LayerNode"/>：一般圖層與群組共用同一套（群組的效果吃的是整組合成後的樣子）。
 /// 只有「烙印」需要真的把像素寫回去，所以那一個仍限定點陣圖層。
 /// </summary>
+/// <summary>把效果放到別的圖層時，要疊在原有的後面還是整份取代。</summary>
+public enum EffectDropMode
+{
+    /// <summary>加在目標原有的效果後面（順序在後＝比較晚套用）。</summary>
+    Append,
+
+    /// <summary>整份換掉目標原有的效果。</summary>
+    Replace,
+}
+
 public static class LayerEffectCommands
 {
+    /// <summary>
+    /// 把一份效果複製到另一個圖層（來源保留自己的那份），一步 undo。
+    ///
+    /// 複本拿新的 Id —— 同一道效果放在兩個圖層上是兩個獨立實體，之後各改各的參數。
+    /// 遮罩（「限套用當時的選取範圍」）是文件座標而且建立之後不再變動，照既有慣例共用同一份參考。
+    /// </summary>
+    /// <returns>false＝沒事可做（沒有效果可複製，或取代後跟原本一樣是空的）。</returns>
+    public static bool CopyEffectsTo(Document doc, HistoryManager history,
+        IReadOnlyList<LayerEffect> effects, LayerNode target, EffectDropMode mode)
+    {
+        if (effects.Count == 0) return false;
+        var before = target.Effects;
+        var copies = effects.Select(fx => fx with { Id = Guid.NewGuid() }).ToList();
+        var after = mode == EffectDropMode.Replace ? copies : [.. before, .. copies];
+        var label = mode == EffectDropMode.Replace
+            ? (copies.Count == 1 ? $"取代效果：{copies[0].Name}" : $"取代成 {copies.Count} 道效果")
+            : (copies.Count == 1 ? $"加上效果：{copies[0].Name}" : $"加上 {copies.Count} 道效果");
+        SetEffects(doc, history, target, before, after, label);
+        return true;
+    }
+
     public static void SetEffects(Document doc, HistoryManager history, LayerNode layer,
         IReadOnlyList<LayerEffect> before, IReadOnlyList<LayerEffect> after, string label)
     {

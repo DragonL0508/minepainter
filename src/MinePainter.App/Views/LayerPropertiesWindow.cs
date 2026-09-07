@@ -377,7 +377,14 @@ public sealed class LayerPropertiesWindow : Window
         // 標題列：名稱＋數量膠囊；右側三顆主要動作
         var title = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center };
         title.Children.Add(new MaterialIcon { Kind = MaterialIconKind.AutoFix, Width = 15, Height = 15, Foreground = AppTheme.TextBrush, VerticalAlignment = VerticalAlignment.Center });
-        title.Children.Add(new TextBlock { Text = "效果堆疊", FontSize = 12, FontWeight = FontWeight.Bold, VerticalAlignment = VerticalAlignment.Center });
+        var stackTitle = new TextBlock
+        {
+            Text = "效果堆疊", FontSize = 12, FontWeight = FontWeight.Bold, VerticalAlignment = VerticalAlignment.Center,
+        };
+        ToolTip.SetTip(stackTitle,
+            "拖曳卡片可以調順序。\n" +
+            "在圖層面板按住 Alt 拖曳圖層＝把它的效果複製到另一層（疊加）；再加 Shift＝取代那一層原本的效果。");
+        title.Children.Add(stackTitle);
         if (effects.Count > 0)
         {
             title.Children.Add(new Border
