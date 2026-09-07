@@ -53,6 +53,41 @@ public class MinecraftGlintTests
     }
 
     [Fact]
+    public void 附魔是增亮_不能把鑽石的青綠與高光染暗()
+    {
+        // 使用者提供的原圖色票：附魔圖只增加光，綠色高光會到 255，不會往紫色混合而變暗。
+        uint[] colors = [Pack(203, 235, 51, 255), Pack(240, 253, 164, 255), Pack(32, 37, 8, 255), Pack(255, 255, 255, 255)];
+        var source = Enumerable.Range(0, 64 * 64).Select(i => colors[i % colors.Length]).ToArray();
+        var output = Render(new MinecraftGlintEffect(), source, 64, 64);
+        for (var i = 0; i < output.Length; i++)
+        {
+            Assert.True(R(output[i]) >= R(source[i]), "紅色不能被染暗");
+            Assert.True(G(output[i]) >= G(source[i]), "鑽石的綠色細節不能被染暗");
+            Assert.True(B(output[i]) >= B(source[i]), "藍色光澤只能增亮");
+        }
+    }
+
+    [Fact]
+    public void 預設光色符合參考圖的增亮比例()
+    {
+        // 參考圖未飽和像素的增量中位數：R/B 約 0.376、G/B 約 0.165。
+        var output = Render(new MinecraftGlintEffect(), Enumerable.Repeat(Pack(20, 20, 20, 255), 96 * 96).ToArray(), 96, 96);
+        var blue = output.Average(p => B(p) - 20);
+        Assert.True(blue > 45, "暗色物件上應有明顯藍紫增亮");
+        Assert.InRange(output.Average(p => R(p) - 20) / blue, 0.35, 0.40);
+        Assert.InRange(output.Average(p => G(p) - 20) / blue, 0.15, 0.18);
+    }
+
+    [Fact]
+    public void 相同位置的光量不隨底色改變()
+    {
+        var effect = new MinecraftGlintEffect { Strength = 50 };
+        var dark = Render(effect, Enumerable.Repeat(Pack(10, 10, 10, 255), 64 * 64).ToArray(), 64, 64);
+        var light = Render(effect, Enumerable.Repeat(Pack(90, 90, 90, 255), 64 * 64).ToArray(), 64, 64);
+        Assert.InRange(dark.Zip(light, (a, b) => Math.Abs(R(b) - R(a) - 80)).Max(), 0, 1);
+    }
+
+    [Fact]
     public void 光澤位置會改變亮帶_同參數重畫保持一致()
     {
         var source = Enumerable.Repeat(Pack(90, 90, 90, 255), 64 * 64).ToArray();

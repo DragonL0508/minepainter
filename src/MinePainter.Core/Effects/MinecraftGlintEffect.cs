@@ -4,7 +4,7 @@ using static MinePainter.Core.Effects.EffectMath;
 namespace MinePainter.Core.Effects;
 
 /// <summary>
-/// Minecraft 風格的靜態附魔光澤：兩層帶方格紋理的斜向亮帶，僅改原有像素的顏色。
+/// Minecraft 風格的靜態附魔光澤：交錯的斜向紋理疊加藍紫光，僅增亮原有像素。
 /// 紋理由來源內容的相對座標決定，不依時間或亂數狀態；存檔重開及輸出不會隨機換圖。
 /// </summary>
 public sealed record MinecraftGlintEffect : IEffect
@@ -14,7 +14,7 @@ public sealed record MinecraftGlintEffect : IEffect
     public float Angle { get; init; } = -45f;
     public int Phase { get; init; }
     public bool RelativeToObject { get; init; } = true;
-    public SKColor Color { get; init; } = new(190, 80, 255);
+    public SKColor Color { get; init; } = new(156, 104, 255);
 
     public string Name => "Minecraft 附魔效果";
     public string Category => "物件";
@@ -55,7 +55,7 @@ public sealed record MinecraftGlintEffect : IEffect
         var radians = ctx.FollowedAngleCw(angle, RelativeToObject) * MathF.PI / 180f;
         var cos = MathF.Cos(radians);
         var sin = MathF.Sin(radians);
-        var phase = Math.Clamp(Phase, 0, 100) / 100f;
+        var phase = Math.Clamp(Phase, 0, 100) / 100f + 0.75f;
         var red = Color.Red / 255f;
         var green = Color.Green / 255f;
         var blue = Color.Blue / 255f;
@@ -77,10 +77,11 @@ public sealed record MinecraftGlintEffect : IEffect
                 var py = (ctx.Region.Top + y - origin.Y + 0.5f) / scale;
                 var u = px * cos + py * sin;
                 var v = -px * sin + py * cos;
-                var grain = Grain((int)MathF.Floor(u * 8), (int)MathF.Floor(v * 8));
-                var first = Band(u + phase + grain * 0.16f);
-                var second = Band(v * 0.7f - u * 0.45f - phase + 0.37f + grain * 0.12f);
-                var amount = strength * (0.18f + (first * 0.56f + second * 0.26f) * (0.65f + grain * 0.35f));
+                var first = Texture(u * 3f + phase * 4f, v * 0.8f + 1.7f);
+                var second = Texture(v * 2.4f - phase * 3f + 8.3f, u * 0.7f + 4.1f);
+                var light = Math.Clamp((first * 0.6f + second * 0.4f - 0.5f) * 1.8f + 0.5f, 0f, 1f);
+                var detail = Texture(u * 12f + phase * 4f, v * 3f + 12.7f);
+                var amount = strength * (0.18f + 0.82f * light * light) * (0.85f + detail * 0.3f);
 
                 Unpremul(src, out var b, out var g, out var r, out _);
                 ctx.Dst[y * ctx.Width + x] = Premul(
@@ -111,11 +112,17 @@ public sealed record MinecraftGlintEffect : IEffect
             : new SKPointI(ctx.SrcRect.Left, ctx.SrcRect.Top);
     }
 
-    private static float Band(float value)
+    private static float Texture(float x, float y)
     {
-        var t = value - MathF.Floor(value);
-        var ridge = Math.Max(0f, 1f - Math.Abs(t - 0.5f) * 3.5f);
-        return ridge * ridge;
+        var ix = (int)MathF.Floor(x);
+        var iy = (int)MathF.Floor(y);
+        var tx = x - ix;
+        var ty = y - iy;
+        tx = tx * tx * (3f - 2f * tx);
+        ty = ty * ty * (3f - 2f * ty);
+        var top = Grain(ix, iy) * (1f - tx) + Grain(ix + 1, iy) * tx;
+        var bottom = Grain(ix, iy + 1) * (1f - tx) + Grain(ix + 1, iy + 1) * tx;
+        return top * (1f - ty) + bottom * ty;
     }
 
     private static float Grain(int x, int y)
@@ -130,8 +137,8 @@ public sealed record MinecraftGlintEffect : IEffect
 
     private static byte Shine(int original, float color, float amount)
     {
-        // 染色讓淺色物件也看得出紫光，再以濾色提亮；保留明暗細節且不改 alpha。
-        var tinted = original + (color * 255f - original) * amount * 0.7f;
-        return (byte)Math.Clamp((int)MathF.Round(tinted + (255f - tinted) * color * amount * 0.4f), 0, 255);
+        // 加光而非染色，避免壓暗鑽石的青綠與白色高光。
+        // 光色平方後的 RGB 比例對應參考圖中未飽和像素的增亮比例。
+        return (byte)Math.Clamp((int)MathF.Round(original + 255f * color * color * amount), 0, 255);
     }
 }
