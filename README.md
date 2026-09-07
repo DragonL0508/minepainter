@@ -53,6 +53,9 @@ release.bat 1.8.2           推標籤，GitHub Actions 跑測試、建置、出 
 - **圖層面板是多選的。** 拿選取一律用 `LayersPanel.SelectedNodes`，交給 `LayerCommands` 的多節點版（`GroupNodes`／`MoveNodes`／`ShiftNodes`／`RemoveNodes`，內部先 `NormalizeSelection` 去掉祖先已選的子層）並綑成一步 undo；作用中圖層永遠是選取裡的一個。守門：`MultiSelectLayerCommandTests`、`LayersPanelMultiSelectTests`。
 - **Core 子目錄職責**：`Documents` 文件與縮放規則 · `Layers` 圖層樹、原始高清來源 · `Tiles` 稀疏像素表面、遮罩 · `History` 所有可 undo 的指令 · `Tools` 互動工具與 `EditorSession` · `Effects` 非破壞性效果堆疊 · `Adjustments` 色彩調整 · `Vectors` 文字／形狀物件 · `Selections` 選取與浮動內容 · `Compositing` 合成 · `IO` `.mpp`／`.pdn`／`.psd`／影像編解碼 · `AI` 去背。
 - **App 子目錄職責**：`Views` 視窗與面板 · `Controls` 可重用控制項（含 `Motion`） · `Rendering` 畫布上屏與 GPU 路徑 · `Services` 設定、字型、更新、安裝 · `Platform` Win32 互通 · `Workspace` 開啟中的文件（`OpenDocument`：session、檔案路徑、dirty），不碰任何 Avalonia 型別。
+- **大型元件依狀態與資源擁有權拆分。** `EditorSession` 保留工具入口與選取協調；`FloatingEditor` 擁有浮動像素、續接來源與暫定貼上圖層，`SessionTransforms` 擁有變形提交／取消，`SessionOverlays` 擁有覆疊交接與影像退役，`SessionPixelReader` 負責複製／滴管取像。`TransformSession` 的來源擷取與物件預覽分別在 `TransformSourceCapture`、`TransformElementPreviews`。釋放仍先停止合成器，再收變形、浮動內容、覆疊，最後釋放合成器與文件。
+- **UI 的手勢狀態有自己的擁有者。** `LayersPanel.LayerDragController` 管拖曳／框選／效果複製，`LayerEffectStackEditor` 管效果卡片與排序；`CanvasNudgeController` 管微調與 Undo 併步，`CanvasViewportController` 管視口動畫，`CanvasCursor` 管游標幾何與繪製。視窗與面板仍負責模型綁定及事件入口。
+- **格式解析與合成運算和外層流程分開。** `PsdFormat` 保留開檔入口與區塊解析，`ChannelDecoder`／`LayerBuilder`／`Reader` 分別負責通道解碼、文件圖層建構與大端序讀取；`Compositor` 保留排程、鎖、快取與退役佇列，同步像素合成交給 `TileCompositing`。物件效果與距離轉換等工具按既有型別分檔，不改演算法。
 - **MainWindow 只做視窗層的 orchestration，不擁有文件狀態。** 文件的 session／路徑／dirty／訂閱生命週期都在 `OpenDocument`：dirty 是「`History.StateId` ≠ 存檔時的 StateId」的衍生值（存檔先 `CaptureSaveVersion`、成功再 `CompleteSave`），undo 回存檔點就變回乾淨；`StateId` 是狀態身分不是深度，分支／淘汰／併步都不會讓它說謊，守門：`HistoryStateIdTests`，關分頁只 `Dispose()`；分頁的視口與控制項在 `DocumentTabView`。`OpenDocument` 的事件不保證在 UI 執行緒，要 `Dispatcher.UIThread.Post` 的是訂閱端。守門：`OpenDocumentTests`。
 
 ### 文件與像素的鐵律

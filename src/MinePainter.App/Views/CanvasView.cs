@@ -1,4 +1,4 @@
-﻿using Avalonia;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
@@ -17,24 +17,12 @@ namespace MinePainter.App.Views;
 public sealed class CanvasView : Control
 {
     private readonly FrameStats _stats = new();
-
-    /// <summary>目前顯示中的視圖（動畫過程中會逐幀逼近 _targetViewport）。</summary>
-    private ViewportTransform _viewport = ViewportTransform.Identity;
-
-    /// <summary>縮放的目標視圖；滾輪改的是它，畫面再平滑跟上。</summary>
-    private ViewportTransform _targetViewport = ViewportTransform.Identity;
+    private readonly CanvasViewportController _view = new();
 
     private readonly System.Diagnostics.Stopwatch _animClock = System.Diagnostics.Stopwatch.StartNew();
-    private double _lastAnimSeconds;
 
     private EditorSession? _session;
 
-    private bool _viewportInitialized;
-    // 最近一次「自動 fit」的結果與當時的控制項大小：視口仍停在這個 fit 上而控制項大小又變了
-    // （典型：啟動時先以預設視窗大小算一次 fit、下一瞬間視窗才最大化），就重新 fit 一次置中。
-    // 使用者一旦縮放／平移過（視口 != fit）就不再干預。
-    private ViewportTransform? _autoFit;
-    private Size _autoFitSize;
     private bool _spaceDown;
     private bool _panning;
 
@@ -46,31 +34,8 @@ public sealed class CanvasView : Control
     /// <summary>指標下的把手索引（<see cref="MoveTool.HandlePoints"/> 的順序）；-1＝沒有、8＝四角／彎曲模式的控制點。</summary>
     private int _hoverHandle = -1;
 
-    /// <summary>圈小於這個螢幕半徑就看不出是圈了，改回十字游標。</summary>
-    private const double MinBrushCursorRadius = 3.5;
-
-    /// <summary>
-    /// 把手的命中半徑（螢幕像素）。把手畫出來是 8px 見方，命中範圍給得比它大一圈才好抓 ——
-    /// 拖角是高頻操作，抓不到的代價（不小心平移整層、或重畫一個選取範圍）比誤抓大。
-    /// </summary>
-    private const double HandleHitRadius = 13;
-
-    // 黑白交錯的虛線：任何底色上都看得見（純白圈在亮圖上、純黑圈在暗圖上都會消失）
-    private static readonly Pen BrushCursorPenDark =
-        new(Brushes.Black, 1, new DashStyle([4, 4], 0));
-    private static readonly Pen BrushCursorPenLight =
-        new(Brushes.White, 1, new DashStyle([4, 4], 4));
-
-    // 中心點細十字：圈大的時候光看圈抓不準筆刷會落在哪。白線＋深色外框，任何底色上都看得見
-    private static readonly Pen BrushCenterHaloPen =
-        new(new SolidColorBrush(Color.FromArgb(0xA0, 0, 0, 0)), 2.5);
-    private static readonly Pen BrushCenterPen = new(Brushes.White, 1);
-
-    /// <summary>十字臂長（螢幕像素）；圈太小時再縮短，不要戳出圈外。</summary>
-    private const double BrushCenterArm = 4;
-
-    /// <summary><see cref="HandleHitRadius"/> 換算成 doc 像素（命中測試都在 doc 座標做）。</summary>
-    private float DocHandleTolerance => (float)(HandleHitRadius / Math.Max(0.01, _viewport.Scale));
+    /// <summary><see cref="CanvasCursor.HandleHitRadius"/> 換算成 doc 像素（命中測試都在 doc 座標做）。</summary>
+    private float DocHandleTolerance => (float)(CanvasCursor.HandleHitRadius / Math.Max(0.01, _view.Current.Scale));
     private bool _toolActive;
     private Point _lastPointerView;
     private bool _animationRunning;
@@ -96,9 +61,9 @@ public sealed class CanvasView : Control
     /// </summary>
     public event Action<Core.Layers.RasterLayer, Core.Vectors.TextElement, bool>? TextEditRequested;
 
-    public double ZoomPercent => _viewport.Scale * 100;
+    public double ZoomPercent => _view.Current.Scale * 100;
 
-    public double Scale => _viewport.Scale;
+    public double Scale => _view.Current.Scale;
 
     /// <summary>渲染統計（狀態列顯示 FPS / 合成中 tile 數）。</summary>
     public FrameStats Stats => _stats;
@@ -128,33 +93,33 @@ public sealed class CanvasView : Control
     private bool _smoothZoom;
 
     /// <summary>doc 座標 → 此控制項的 view 座標。</summary>
-    public Point DocToView(SKPoint doc) => _viewport.DocToView(new Point(doc.X, doc.Y));
+    public Point DocToView(SKPoint doc) => _view.Current.DocToView(new Point(doc.X, doc.Y));
 
     /// <summary>此控制項的 view 座標 → doc 座標（貼上定位在可視範圍用）。</summary>
     public SKPoint ViewToDoc(Point view)
     {
-        var p = _viewport.ViewToDoc(view);
+        var p = _view.Current.ViewToDoc(view);
         return new SKPoint((float)p.X, (float)p.Y);
     }
 
     public void SetZoomPercent(double percent) =>
-        _targetViewport = _targetViewport.WithScaleAroundCenter(percent / 100.0, Bounds.Width, Bounds.Height);
+        _view.Target = _view.Target.WithScaleAroundCenter(percent / 100.0, Bounds.Width, Bounds.Height);
 
     /// <summary>縮放到剛好容納整份文件。</summary>
     public void ZoomToFit()
     {
         var doc = _session?.Document;
         if (doc == null || Bounds.Width <= 0) return;
-        _targetViewport = ViewportTransform.Fit(doc.Width, doc.Height, Bounds.Width, Bounds.Height);
-        _autoFit = _targetViewport;
-        _autoFitSize = Bounds.Size;
+        _view.Target = ViewportTransform.Fit(doc.Width, doc.Height, Bounds.Width, Bounds.Height);
+        _view.AutoFit = _view.Target;
+        _view.AutoFitSize = Bounds.Size;
     }
 
     /// <summary>以畫面中心為錨點縮放（選單的放大/縮小用）。</summary>
     public void ZoomBy(double factor)
     {
         if (Bounds.Width <= 0) return;
-        _targetViewport = _targetViewport.ZoomAt(new Point(Bounds.Width / 2, Bounds.Height / 2), factor);
+        _view.Target = _view.Target.ZoomAt(new Point(Bounds.Width / 2, Bounds.Height / 2), factor);
     }
 
     public CanvasView()
@@ -234,10 +199,10 @@ public sealed class CanvasView : Control
     /// <summary>這一幀非重繪不可（動畫進行中／合成尚未追上／手勢進行中）。</summary>
     private bool NeedsContinuousRedraw()
     {
-        if (!_viewportInitialized) return true;
-        if (_viewport != _targetViewport) return true;
+        if (!_view.Initialized) return true;
+        if (_view.Current != _view.Target) return true;
         if (_fadeDurationMs > 0 && Environment.TickCount64 - _fadeStartMs < _fadeDurationMs + 50) return true;
-        if (!_glide.IsIdle || _glide.AnyHeld) return true;
+        if (_nudge.IsActive) return true;
         // 手勢進行中一律每幀重畫。畫布是「有變才畫」的，而把手拖曳／旋轉這幾種手勢
         // 以前不在這張清單上 —— 只有指標事件會把它標髒，畫面更新率就等於指標事件的到達率
         // （量到的畫面成本只有 0.6 ms／幀，卻只跑到 30fps，就是卡在這裡）。
@@ -271,29 +236,29 @@ public sealed class CanvasView : Control
         SubscribeSession(session);
         if (viewport is { } vp)
         {
-            _viewport = vp;
-            _targetViewport = vp;
-            _viewportInitialized = true;
-            _autoFit = null; // 分頁還原的視口是使用者的，不再自動置中
+            _view.Current = vp;
+            _view.Target = vp;
+            _view.Initialized = true;
+            _view.AutoFit = null; // 分頁還原的視口是使用者的，不再自動置中
             ViewportChanged?.Invoke();
         }
         else
         {
-            _viewportInitialized = false; // 下一幀重新 fit
+            _view.Initialized = false; // 下一幀重新 fit
         }
         StateChanged?.Invoke();
     }
 
     /// <summary>目前視口（分頁切換時保存用；尚未初始化回傳 null）。</summary>
-    public ViewportTransform? SaveViewport() => _viewportInitialized ? _viewport : null;
+    public ViewportTransform? SaveViewport() => _view.Initialized ? _view.Current : null;
 
     /// <summary>清空會話（最後一個分頁關掉後的零文件狀態）：畫布不再渲染任何東西。</summary>
     public void ClearSession()
     {
         _session = null;
         SubscribeSession(null);
-        _viewportInitialized = false;
-        _autoFit = null;
+        _view.Initialized = false;
+        _view.AutoFit = null;
         InvalidateVisual();
         StateChanged?.Invoke();
     }
@@ -311,94 +276,7 @@ public sealed class CanvasView : Control
         _gpuRenderer.Dispose(); // 每格 tile 的 GPU 貼圖跟著畫布走，畫布收掉就一起還
     }
 
-    // ---- 方向鍵微調：按一下走一格，按住則由動畫迴圈等速滑行 ----
-    //
-    // 節奏本身在 Core 的 NudgeGlide（可單元測試）；這裡只負責把按鍵與幀時間餵進去、
-    // 把它吐出的整數位移交給 MoveTool.Nudge。所有微調目標都適用（浮動內容／變形框／
-    // 選取的像素／文字物件／整個圖層）；會壓 undo 的那幾條在滑行結束時併回一步。
-
-    private readonly Core.Tools.NudgeGlide _glide = new();
-
-    /// <summary>滑行期間壓進歷史的步數起算點（放開時併回一步）。</summary>
-    private int _nudgeUndoBase = -1;
-
-    /// <summary>
-    /// 滑行期間擋住 History.Changed。每幀壓一步、每步都讓圖層面板與歷史面板整份重建清單的話，
-    /// UI 執行緒會被自己排的重建塞爆 —— 連放開按鍵的事件都排不進去，看起來就是當掉、
-    /// 而且物件停不下來。放開時併回一步，那時才發一次事件。
-    /// </summary>
-    private IDisposable? _nudgeHistoryHold;
-
-    /// <summary>微調的四個方向也是可自訂的按鍵（預設方向鍵）；不是微調鍵就回 null。</summary>
-    private static (int X, int Y)? NudgeDirection(Key key)
-    {
-        if (Services.ShortcutMap.MatchesKey("nudge.left", key)) return (-1, 0);
-        if (Services.ShortcutMap.MatchesKey("nudge.right", key)) return (1, 0);
-        if (Services.ShortcutMap.MatchesKey("nudge.up", key)) return (0, -1);
-        if (Services.ShortcutMap.MatchesKey("nudge.down", key)) return (0, 1);
-        return null;
-    }
-
-    /// <summary>方向鍵按下：第一次按記一格，之後的 OS 重複事件交給滑行處理。</summary>
-    private void BeginNudge(EditorSession session, Key key, bool shift)
-    {
-        if (!Core.Tools.MoveTool.HasNudgeTarget(session)) return;
-        if (NudgeDirection(key) is not { } dir) return;
-        var (dirX, dirY) = dir;
-        _glide.Shift = shift;
-        if (!_glide.Press(dirX, dirY, shift ? 10 : 1)) return; // 按鍵重複：滑行已經在動了
-        if (_nudgeUndoBase < 0)
-        {
-            _nudgeUndoBase = session.History.UndoStack.Count;
-            _nudgeHistoryHold ??= session.History.SuspendNotifications();
-        }
-    }
-
-    private void EndNudge(Key key)
-    {
-        if (NudgeDirection(key) is not { } dir) return;
-        var (dirX, dirY) = dir;
-        _glide.Release(dirX, dirY);
-    }
-
-    /// <summary>一段微調結束：滑行期間每幀壓的那些步併回一步，Ctrl+Z 一次回到起點。</summary>
-    private void FinishNudge(EditorSession? session)
-    {
-        if (_nudgeUndoBase >= 0 && session != null)
-        {
-            var added = session.History.UndoStack.Count - _nudgeUndoBase;
-            if (added > 1) session.History.CollapseLast(added);
-        }
-        _nudgeUndoBase = -1;
-        _glide.Reset();
-        // 併回一步之後才解除，面板只會重建一次（順序不能反，否則中間那幾百步會先送出去）
-        var hold = _nudgeHistoryHold;
-        _nudgeHistoryHold = null;
-        hold?.Dispose();
-    }
-
-    /// <summary>畫布不再是焦點／目標消失：滑行停掉並收尾。</summary>
-    private void CancelNudge() => FinishNudge(_session);
-
-    /// <summary>這一幀的微調。</summary>
-    private void StepNudgeAnimation(double dt)
-    {
-        if (_glide.IsIdle && !_glide.AnyHeld && _nudgeUndoBase < 0) return; // 沒在微調
-
-        var session = _session;
-        // 中途落地／取消（Enter、Esc、切工具）：剩下的位移就此作廢，不要事後補跳一段
-        if (session == null || !Core.Tools.MoveTool.HasNudgeTarget(session))
-        {
-            CancelNudge();
-            return;
-        }
-
-        var (dx, dy) = _glide.Step(dt);
-        if ((dx != 0 || dy != 0) && Core.Tools.MoveTool.Nudge(session, dx, dy)) StateChanged?.Invoke();
-
-        // 都放開、殘餘也送完了 → 收尾（把這一段的歷史併回一步）
-        if (!_glide.AnyHeld && _glide.IsIdle) FinishNudge(session);
-    }
+    private readonly CanvasNudgeController _nudge = new();
 
     private TimeSpan _lastFrameTime;
 
@@ -417,7 +295,7 @@ public sealed class CanvasView : Control
             _lastFrameTime = now;
             _session?.CollectOverlayGhost(); // 落地後的殘影：合成器追上就收掉
             StepViewportAnimation();
-            StepNudgeAnimation(dt);
+            _nudge.Step(_session, dt, () => StateChanged?.Invoke());
             ApplyCursor();
             FrameTick?.Invoke();
 
@@ -451,30 +329,11 @@ public sealed class CanvasView : Control
         }
         var doc = session.Document;
 
-        if (!_viewportInitialized && Bounds.Width > 0 && Bounds.Height > 0)
-        {
-            var fit = ViewportTransform.Fit(doc.Width, doc.Height, Bounds.Width, Bounds.Height);
-            _viewport = fit;
-            _targetViewport = fit;
-            _viewportInitialized = true;
-            _autoFit = fit;
-            _autoFitSize = Bounds.Size;
+        if (_view.EnsureFit(doc.Width, doc.Height, Bounds.Size))
             Avalonia.Threading.Dispatcher.UIThread.Post(() => ViewportChanged?.Invoke());
-        }
-        else if (_autoFit is { } autoFit && _viewport == autoFit && _targetViewport == autoFit &&
-                 Bounds.Size != _autoFitSize && Bounds.Width > 0 && Bounds.Height > 0)
-        {
-            // 控制項大小變了（視窗最大化／拉大），視口還停在舊的 fit 上：重新置中，不走動畫
-            var fit = ViewportTransform.Fit(doc.Width, doc.Height, Bounds.Width, Bounds.Height);
-            _viewport = fit;
-            _targetViewport = fit;
-            _autoFit = fit;
-            _autoFitSize = Bounds.Size;
-            Avalonia.Threading.Dispatcher.UIThread.Post(() => ViewportChanged?.Invoke());
-        }
 
         context.Custom(new CanvasDrawOperation(
-            new Rect(0, 0, Bounds.Width, Bounds.Height), session, _viewport, _stats, _gpuRenderer,
+            new Rect(0, 0, Bounds.Width, Bounds.Height), session, _view.Current, _stats, _gpuRenderer,
             ShowPixelGrid, (float)CurrentContentFade, SmoothZoom, ShowPrintGuides));
 
         DrawBrushCursor(context);
@@ -546,13 +405,13 @@ public sealed class CanvasView : Control
             // 平移改的也是目標值，跟縮放共用同一套插值，滾起來一樣是連續的。
             // 往上滾 = 內容往下/往右走（跟捲軸同向）。
             case "wheel.zoom":
-                _targetViewport = _targetViewport.ZoomAt(e.GetPosition(this), Math.Pow(1.18, delta));
+                _view.Target = _view.Target.ZoomAt(e.GetPosition(this), Math.Pow(1.18, delta));
                 break;
             case "wheel.panHorizontal":
-                _targetViewport = _targetViewport.PanBy(delta * WheelPanStep, 0);
+                _view.Target = _view.Target.PanBy(delta * WheelPanStep, 0);
                 break;
             case "wheel.panVertical":
-                _targetViewport = _targetViewport.PanBy(0, delta * WheelPanStep);
+                _view.Target = _view.Target.PanBy(0, delta * WheelPanStep);
                 break;
             case { } id:
                 ToolWheel?.Invoke(id, Controls.WheelInput.Direction(e), Controls.WheelInput.Notches(e));
@@ -566,38 +425,14 @@ public sealed class CanvasView : Control
     /// <summary>每幀把顯示中的視圖指數插值逼近目標值（時間常數約 70ms）。</summary>
     private void StepViewportAnimation()
     {
-        var now = _animClock.Elapsed.TotalSeconds;
-        var dt = Math.Clamp(now - _lastAnimSeconds, 0, 0.1);
-        _lastAnimSeconds = now;
-
-        var dScale = _targetViewport.Scale - _viewport.Scale;
-        var dx = _targetViewport.OffsetX - _viewport.OffsetX;
-        var dy = _targetViewport.OffsetY - _viewport.OffsetY;
-
-        // 已經夠接近就直接吸附，避免無止盡的微小更新
-        if (Math.Abs(dScale) < _viewport.Scale * 0.0005 && Math.Abs(dx) < 0.05 && Math.Abs(dy) < 0.05)
-        {
-            if (dScale != 0 || dx != 0 || dy != 0)
-            {
-                _viewport = _targetViewport;
-                ViewportChanged?.Invoke();
-            }
-            return;
-        }
-
-        var t = 1 - Math.Exp(-dt / 0.07);
-        _viewport = new ViewportTransform(
-            _viewport.Scale + dScale * t,
-            _viewport.OffsetX + dx * t,
-            _viewport.OffsetY + dy * t);
-        ViewportChanged?.Invoke();
+        if (_view.Step(_animClock.Elapsed.TotalSeconds)) ViewportChanged?.Invoke();
     }
 
     /// <summary>直接設定視圖（平移等需要跟手的操作用，不走動畫）。</summary>
     private void SetViewportImmediate(ViewportTransform viewport)
     {
-        _viewport = viewport;
-        _targetViewport = viewport;
+        _view.Current = viewport;
+        _view.Target = viewport;
         ViewportChanged?.Invoke();
     }
 
@@ -612,10 +447,10 @@ public sealed class CanvasView : Control
         if (_session != null)
         {
             // 讓工具能以螢幕距離判定「算不算拖曳」，手感不受縮放影響
-            _session.Move.ViewScale = _viewport.Scale;
+            _session.Move.ViewScale = _view.Current.Scale;
             _session.Move.HandleTolerance = DocHandleTolerance;
             if (_session.ActiveTool is Core.Tools.VectorToolBase vector) vector.HandleTolerance = DocHandleTolerance;
-            _session.SnapTolerance = (float)(8 / Math.Max(0.01, _viewport.Scale)); // 對齊吸附 ≈ 螢幕 8px
+            _session.SnapTolerance = (float)(8 / Math.Max(0.01, _view.Current.Scale)); // 對齊吸附 ≈ 螢幕 8px
         }
         var point = e.GetCurrentPoint(this);
         _lastPointerView = point.Position;
@@ -707,32 +542,32 @@ public sealed class CanvasView : Control
         _pointerInside = true;
 
         {
-            var doc = _viewport.ViewToDoc(pos);
+            var doc = _view.Current.ViewToDoc(pos);
             PointerDocMoved?.Invoke(new SKPoint((float)doc.X, (float)doc.Y));
         }
 
         if (_panning)
         {
             // 平移要完全跟手，不走插值
-            SetViewportImmediate(_viewport.PanBy(pos.X - _lastPointerView.X, pos.Y - _lastPointerView.Y));
+            SetViewportImmediate(_view.Current.PanBy(pos.X - _lastPointerView.X, pos.Y - _lastPointerView.Y));
         }
         else if (_elementRotating && _session != null)
         {
-            var doc = _viewport.ViewToDoc(pos);
+            var doc = _view.Current.ViewToDoc(pos);
             _elementRotate.ContinueRotate(_session,
                 new SKPoint((float)doc.X, (float)doc.Y), ToModifiers(_currentModifiers));
             StateChanged?.Invoke();
         }
         else if (_transformRotating && _session != null)
         {
-            var doc = _viewport.ViewToDoc(pos);
+            var doc = _view.Current.ViewToDoc(pos);
             _session.Move.ContinueRotate(_session,
                 new SKPoint((float)doc.X, (float)doc.Y), ToModifiers(_currentModifiers));
             StateChanged?.Invoke();
         }
         else if (_handleDragging && _session != null)
         {
-            var doc = _viewport.ViewToDoc(pos);
+            var doc = _view.Current.ViewToDoc(pos);
             _handles.Continue(_session, new SKPoint((float)doc.X, (float)doc.Y), ToModifiers(_currentModifiers));
             StateChanged?.Invoke();
         }
@@ -826,10 +661,10 @@ public sealed class CanvasView : Control
         else if (_toolActive)
         {
             _toolActive = false;
-            var doc = _viewport.ViewToDoc(_lastPointerView);
+            var doc = _view.Current.ViewToDoc(_lastPointerView);
             session.ActiveTool.OnPointerUp(new ToolPointerEvent(
                 new SKPoint((float)doc.X, (float)doc.Y), 1f,
-                ToModifiers(_currentModifiers), _currentClickCount, (float)_viewport.Scale), session);
+                ToModifiers(_currentModifiers), _currentClickCount, (float)_view.Current.Scale), session);
         }
         else
         {
@@ -864,7 +699,7 @@ public sealed class CanvasView : Control
         if (!_panning) _hoverHandle = HoveredHandle();
         var wanted =
             _panning ? StandardCursorType.SizeAll
-            : _hoverHandle >= 0 ? CursorForHandle(_hoverHandle)
+            : _hoverHandle >= 0 ? CanvasCursor.ForHandle(_hoverHandle)
             : BrushCursorRadius() != null ? StandardCursorType.None
             : StandardCursorType.Cross;
         if (_appliedCursor == wanted) return;
@@ -890,7 +725,7 @@ public sealed class CanvasView : Control
         if (tool != session.Move && tool != session.RectSelect && tool != session.EllipseSelect &&
             tool != session.Lasso && tool != session.Wand && tool is not Core.Tools.VectorToolBase) return -1;
 
-        var view = _viewport.ViewToDoc(_hoverView);
+        var view = _view.Current.ViewToDoc(_hoverView);
         var p = new SKPoint((float)view.X, (float)view.Y);
         var tolerance = DocHandleTolerance;
 
@@ -908,55 +743,24 @@ public sealed class CanvasView : Control
         return MoveTool.HitCorner(rect, local, tolerance);
     }
 
-    private static StandardCursorType CursorForHandle(int handle) => handle switch
-    {
-        0 => StandardCursorType.TopLeftCorner,
-        1 => StandardCursorType.TopRightCorner,
-        2 => StandardCursorType.BottomRightCorner,
-        3 => StandardCursorType.BottomLeftCorner,
-        4 or 6 => StandardCursorType.SizeNorthSouth,
-        5 or 7 => StandardCursorType.SizeWestEast,
-        _ => StandardCursorType.SizeAll,
-    };
-
-    /// <summary>目前該畫的圈的螢幕半徑；不該畫時回 null。</summary>
-    private double? BrushCursorRadius()
-    {
-        if (_session?.ActiveTool is not IBrushCursorTool tool) return null;
-        var radius = tool.CursorRadius * _viewport.Scale;
-        return radius >= MinBrushCursorRadius ? radius : null;
-    }
+    private double? BrushCursorRadius() => CanvasCursor.BrushRadius(_session, _view.Current.Scale);
 
     private void DrawBrushCursor(DrawingContext context)
     {
         if (_panning || !_pointerInside) return;
-        if (BrushCursorRadius() is not { } radius) return;
-        context.DrawEllipse(null, BrushCursorPenDark, _hoverView, radius, radius);
-        context.DrawEllipse(null, BrushCursorPenLight, _hoverView, radius, radius);
-
-        var arm = Math.Min(BrushCenterArm, radius - 1);
-        if (arm < 2) return; // 圈已經很小，再畫十字只會糊成一團
-        var c = _hoverView;
-        var h1 = new Point(c.X - arm, c.Y);
-        var h2 = new Point(c.X + arm, c.Y);
-        var v1 = new Point(c.X, c.Y - arm);
-        var v2 = new Point(c.X, c.Y + arm);
-        context.DrawLine(BrushCenterHaloPen, h1, h2);
-        context.DrawLine(BrushCenterHaloPen, v1, v2);
-        context.DrawLine(BrushCenterPen, h1, h2);
-        context.DrawLine(BrushCenterPen, v1, v2);
+        if (BrushCursorRadius() is { } radius) CanvasCursor.DrawBrush(context, _hoverView, radius);
     }
 
     private ToolPointerEvent ToToolEvent(PointerPoint point)
     {
-        var doc = _viewport.ViewToDoc(point.Position);
+        var doc = _view.Current.ViewToDoc(point.Position);
         var pressure = point.Properties.Pressure;
         return new ToolPointerEvent(
             new SKPoint((float)doc.X, (float)doc.Y),
             pressure <= 0 ? 1f : pressure,
             ToModifiers(_currentModifiers),
             _currentClickCount,
-            (float)_viewport.Scale);
+            (float)_view.Current.Scale);
     }
 
     private KeyModifiers _currentModifiers;
@@ -977,7 +781,7 @@ public sealed class CanvasView : Control
     {
         base.OnKeyDown(e);
         // Shift 隨時反映：按住方向鍵之後才按 Shift 也要跟著加速
-        if (e.Key is Key.LeftShift or Key.RightShift) _glide.Shift = true;
+        if (e.Key is Key.LeftShift or Key.RightShift) _nudge.Shift = true;
         var session = _session;
         var ctrl = e.KeyModifiers.HasFlag(KeyModifiers.Control);
 
@@ -1041,11 +845,11 @@ public sealed class CanvasView : Control
         // 微調（預設方向鍵）：1px；Shift = 10px（Photoshop／paint.net 的慣例）。
         // 移動工具下依序動變形框 → 浮動內容 → 選中的文字物件 → 整個圖層／群組。
         // 按住不放時忽略 OS 的按鍵重複，改由動畫迴圈等速滑行（見 NudgeGlide）
-        if (session != null && !ctrl && NudgeDirection(e.Key) != null &&
+        if (session != null && !ctrl && CanvasNudgeController.Direction(e.Key) != null &&
             (session.ActiveTool == session.Move || session.SelectedElement != null))
         {
-            _glide.Shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
-            BeginNudge(session, e.Key, _glide.Shift);
+            _nudge.Shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
+            _nudge.Begin(session, e.Key, _nudge.Shift);
             e.Handled = true;
         }
     }
@@ -1053,19 +857,19 @@ public sealed class CanvasView : Control
     protected override void OnKeyUp(KeyEventArgs e)
     {
         base.OnKeyUp(e);
-        if (e.Key is Key.LeftShift or Key.RightShift) _glide.Shift = false;
+        if (e.Key is Key.LeftShift or Key.RightShift) _nudge.Shift = false;
         // 放開只看鍵本身：按住期間修飾鍵可能已經變了，比完整手勢會漏掉 KeyUp
         if (Services.ShortcutMap.MatchesKey("view.panHold", e.Key))
         {
             _spaceDown = false;
             e.Handled = true;
         }
-        EndNudge(e.Key);
+        _nudge.End(e.Key);
     }
 
     protected override void OnLostFocus(Avalonia.Interactivity.RoutedEventArgs e)
     {
         base.OnLostFocus(e);
-        CancelNudge(); // 焦點跑掉就收不到 KeyUp，會一直滑下去
+        _nudge.Finish(_session); // 焦點跑掉就收不到 KeyUp，會一直滑下去
     }
 }

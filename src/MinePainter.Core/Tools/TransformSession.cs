@@ -1,4 +1,4 @@
-﻿using MinePainter.Core.Compositing;
+using MinePainter.Core.Compositing;
 using MinePainter.Core.Documents;
 using MinePainter.Core.History;
 using MinePainter.Core.Layers;
@@ -27,46 +27,11 @@ namespace MinePainter.Core.Tools;
 /// </summary>
 public sealed class TransformSession : IDisposable
 {
-    private sealed class Item
-    {
-        public required RasterLayer Layer;
-        public required SKImage? Pixels;         // null = 該層沒有像素（可能只有文字）
-        public required SKRectI SrcBounds;       // 像素內容的 doc 範圍（Pixels 的位置；Offset=Base 時）
-        public required SKPointI BaseOffset;     // 開始時的圖層 Offset（平移位移疊在它之上）
-        public required TileSnapshot Before;
-        public required VectorElement[] StartElements;
-        public SKRectI LastStamp;                // 目前蓋章的 doc 範圍（Offset=Base 基準；呈現位置再加 OffsetDelta）
-
-        /// <summary>
-        /// Pixels 的擁有權在本 session 手上。false＝借用圖層的 <see cref="LayerPixelSource"/>
-        /// （續接時），釋放由圖層負責，session 結束不能動它。
-        /// </summary>
-        public bool OwnsPixels = true;
-
-        /// <summary>進入四角／彎曲模式時的文字物件（已含矩形模式的變形）：網格變形疊在它們的輸出端。</summary>
-        public Dictionary<Guid, VectorElement>? MeshStartElements;
-
-        /// <summary>
-        /// 手勢期間代替「物件（＋圖層效果）」呈現的快照。只給覆疊用 ——
-        /// 永遠不會被蓋回圖層像素（文字必須維持可再編輯）。
-        /// </summary>
-        public SKImage? ElementPreview;
-
-        /// <summary>ElementPreview 的 doc 範圍。</summary>
-        public SKRectI ElementPreviewBounds;
-
-        /// <summary>這一層的物件是本 session 藏起來的（放回來時只放自己藏的那些）。</summary>
-        public bool ElementsWereHidden;
-
-        /// <summary>拍下物件快照那一刻的手勢矩陣的反矩陣：畫的時候要把「已經含在快照裡」的那段扣掉。</summary>
-        public SKMatrix PreviewInverse = SKMatrix.Identity;
-    }
-
     /// <summary>
     /// 文字物件在目前狀態下該長什麼樣：矩形模式走參數式 TransformedBy；
     /// 四角／彎曲模式把單應／網格疊在進入時的物件輸出端（排版參數不動 → 文字永遠可編輯）。
     /// </summary>
-    private VectorElement TransformedElement(Item item, VectorElement start, SKMatrix m, float sx, float sy)
+    private VectorElement TransformedElement(TransformItem item, VectorElement start, SKMatrix m, float sx, float sy)
     {
         if (IsMeshMode && item.MeshStartElements != null &&
             item.MeshStartElements.TryGetValue(start.Id, out var meshStart) && meshStart is TextElement text)
@@ -103,10 +68,9 @@ public sealed class TransformSession : IDisposable
         _items.Any(i => i.StartElements.Any(e => e is TextElement { Deform: not null }));
 
     /// <summary>單層內容的尺寸上限（單邊），與整層提起相同的保險。</summary>
-    private const int MaxContentSide = 16384;
 
     private readonly Document _doc;
-    private readonly List<Item> _items;
+    private readonly List<TransformItem> _items;
     private bool _disposed;
 
     // 續接（見 TransformResume）：原始像素 → 上一輪落地結果 的映射（doc 座標）。
@@ -363,7 +327,7 @@ public sealed class TransformSession : IDisposable
 
     private volatile GestureOverlay? _overlay;
     private bool _gestureOverlay;      // 手勢覆疊進行中（像素已從合成結果拿掉）
-    private bool _elementsFrozen;      // 手勢覆疊進行中，且物件已由快照代表（見 CaptureElementPreviews）
+    private readonly TransformElementPreviews _elementPreviews;
     private bool _overlayEverPublished;
 
     /// <summary>render thread 每幀讀。</summary>
@@ -404,11 +368,12 @@ public sealed class TransformSession : IDisposable
     /// <summary>變形的目標（作用中圖層或群組；續接點要對得上同一個）。</summary>
     public LayerNode Target { get; }
 
-    private TransformSession(Document doc, LayerNode target, List<Item> items, SKRect sourceRect)
+    private TransformSession(Document doc, LayerNode target, List<TransformItem> items, SKRect sourceRect)
     {
         _doc = doc;
         Target = target;
         _items = items;
+        _elementPreviews = new TransformElementPreviews(doc, items);
         SourceRect = sourceRect;
         TargetRect = sourceRect;
         ResetSize = sourceRect.Size;
@@ -458,7 +423,7 @@ public sealed class TransformSession : IDisposable
         }
     }
 
-    /// <summary>原始像素（Item.SrcBounds）→ 目前狀態 的映射：續接時多乘一段上一輪的結果。</summary>
+    /// <summary>原始像素（TransformItem.SrcBounds）→ 目前狀態 的映射：續接時多乘一段上一輪的結果。</summary>
     private SKMatrix PixelMatrix => _preIsIdentity ? Matrix : SKMatrix.Concat(Matrix, _preMatrix);
 
     /// <summary>像素矩陣是不是整數平移（蓋章可用 None 取樣，逐位元無損）。</summary>
@@ -479,93 +444,8 @@ public sealed class TransformSession : IDisposable
     /// </summary>
     public static TransformSession? Begin(Document doc, LayerNode target, out string? reason)
     {
-        reason = null;
-        var layers = new List<RasterLayer>();
-        switch (target)
-        {
-            case RasterLayer r: layers.Add(r); break;
-            case GroupLayer g: Collect(g, layers); break;
-            default:
-                reason = "此圖層類型無法變形";
-                return null;
-        }
-
-        var items = new List<Item>();
-        SKRect? source = null;
-        void Accumulate(SKRect r) =>
-            source = source is { } a
-                ? new SKRect(Math.Min(a.Left, r.Left), Math.Min(a.Top, r.Top),
-                    Math.Max(a.Right, r.Right), Math.Max(a.Bottom, r.Bottom))
-                : r;
-
-        lock (doc.SyncRoot)
-        {
-            foreach (var layer in layers)
-            {
-                var content = layer.Surface.ExactContentBounds();
-                var hasPixels = content.Width > 0 && content.Height > 0;
-                if (hasPixels && (content.Width > MaxContentSide || content.Height > MaxContentSide))
-                {
-                    reason = "圖層內容過大，無法變形";
-                    DisposeItems(items);
-                    return null;
-                }
-
-                SKImage? pixels = null;
-                var docRect = SKRectI.Empty;
-                if (hasPixels)
-                {
-                    docRect = new SKRectI(
-                        content.Left + layer.Offset.X, content.Top + layer.Offset.Y,
-                        content.Right + layer.Offset.X, content.Bottom + layer.Offset.Y);
-                    var info = new SKImageInfo(docRect.Width, docRect.Height,
-                        SKColorType.Bgra8888, SKAlphaType.Premul);
-                    using var surface = SKSurface.Create(info);
-                    if (surface == null) continue;
-                    surface.Canvas.Clear(SKColors.Transparent);
-                    surface.Canvas.Save();
-                    surface.Canvas.Translate(-docRect.Left, -docRect.Top);
-                    Selections.FloatingSelection.DrawLayerPixels(layer, surface.Canvas, docRect);
-                    surface.Canvas.Restore();
-                    surface.Canvas.Flush();
-                    pixels = surface.Snapshot();
-                    Accumulate(new SKRect(docRect.Left, docRect.Top, docRect.Right, docRect.Bottom));
-                }
-
-                var elements = layer.HasElements ? layer.Elements.ToArray() : Array.Empty<VectorElement>();
-                foreach (var el in elements)
-                {
-                    // 使用者看到的框：FrameBounds（貼著字），不是 Bounds（失效用的保守外擴，含效果邊、行高餘裕）
-                    var b = el.FrameBounds;
-                    if (b.IsEmpty)
-                    {
-                        var pb = el.Bounds;
-                        b = new SKRect(pb.Left, pb.Top, pb.Right, pb.Bottom);
-                    }
-                    Accumulate(b);
-                }
-
-                if (pixels == null && elements.Length == 0) continue;
-                items.Add(new Item
-                {
-                    Layer = layer,
-                    Pixels = pixels,
-                    SrcBounds = docRect,
-                    BaseOffset = layer.Offset,
-                    Before = layer.Surface.Snapshot(),
-                    StartElements = elements,
-                    LastStamp = docRect,
-                });
-            }
-        }
-
-        if (items.Count == 0 || source is not { } src || src.Width < 1 || src.Height < 1)
-        {
-            reason ??= "沒有可變形的內容";
-            DisposeItems(items);
-            return null;
-        }
-        return new TransformSession(doc, target, items, src);
+        var capture = TransformSourceCapture.Begin(doc, target, out reason);
+        return capture is { } c ? new TransformSession(doc, target, c.Items, c.Bounds) : null;
     }
 
     /// <summary>
@@ -577,46 +457,8 @@ public sealed class TransformSession : IDisposable
     /// </summary>
     public static TransformSession? Resume(Document doc, LayerNode target, TransformResume resume)
     {
-        if (!ReferenceEquals(resume.Target, target)) return null;
-        var layers = new List<RasterLayer>();
-        switch (target)
-        {
-            case RasterLayer r: layers.Add(r); break;
-            case GroupLayer g: Collect(g, layers); break;
-            default: return null;
-        }
-        if (layers.Count != resume.Items.Length) return null;
-        for (var i = 0; i < layers.Count; i++)
-        {
-            if (!ReferenceEquals(layers[i], resume.Items[i].Layer)) return null;
-        }
-
-        var items = new List<Item>();
-        lock (doc.SyncRoot)
-        {
-            foreach (var (layer, pixels, srcBounds) in resume.Items)
-            {
-                if (layer.Document == null) { DisposeItems(items); return null; }
-                var content = layer.Surface.ExactContentBounds();
-                var current = content.Width > 0 && content.Height > 0
-                    ? new SKRectI(
-                        content.Left + layer.Offset.X, content.Top + layer.Offset.Y,
-                        content.Right + layer.Offset.X, content.Bottom + layer.Offset.Y)
-                    : SKRectI.Empty;
-                items.Add(new Item
-                {
-                    Layer = layer,
-                    Pixels = pixels,
-                    SrcBounds = srcBounds,
-                    BaseOffset = layer.Offset,
-                    Before = layer.Surface.Snapshot(),
-                    StartElements = layer.HasElements ? layer.Elements.ToArray() : Array.Empty<VectorElement>(),
-                    LastStamp = current,
-                    OwnsPixels = false, // 像素是圖層 LayerPixelSource 那份，session 只是借用
-                });
-            }
-        }
-
+        var items = TransformSourceCapture.Resume(doc, target, resume);
+        if (items == null) return null;
         var session = new TransformSession(doc, target, items, resume.TargetRect)
         {
             _preMatrix = resume.PreMatrix,
@@ -689,18 +531,6 @@ public sealed class TransformSession : IDisposable
         }
     }
 
-    private static void Collect(GroupLayer group, List<RasterLayer> into)
-    {
-        foreach (var child in group.Children)
-        {
-            switch (child)
-            {
-                case RasterLayer r: into.Add(r); break;
-                case GroupLayer g: Collect(g, into); break;
-            }
-        }
-    }
-
     /// <summary>
     /// 縮放/旋轉手勢開始：符合覆疊條件（各層上方都沒有看得見的東西）時，
     /// 把像素從合成結果拿掉一次，改由 render thread 每幀以目前矩陣直接畫。
@@ -736,154 +566,8 @@ public sealed class TransformSession : IDisposable
             if (!display.IsEmpty) item.Layer.Invalidate(display);
             item.LastStamp = SKRectI.Empty;
         }
-        CaptureElementPreviews();
+        _elementPreviews.Capture(Matrix, IsMeshMode);
         PublishOverlay(handingOver: false);
-    }
-
-    /// <summary>
-    /// 手勢開始時把每一層的「物件＋圖層效果」拍成一張圖，手勢期間只變換這張圖。
-    ///
-    /// 文字的外框／陰影／光暈是**圖層效果堆疊**（不是文字物件自己的參數），而效果是 CPU 逐像素
-    /// 算出來的：4K 文件上一個帶外光暈的字，整串算一次實測 120 ms（外框 37 ms、沒效果 0 ms）。
-    /// 手勢中每動一下就 ReplaceElement 一次 ＝ 每幀重算一次整串效果，畫面當然跟不上；而且重算
-    /// 是背景逐格寫回的，畫面上還會出現「一部分新角度、一部分舊角度」的撕裂。
-    /// 使用者回報「移動工具轉文字會卡、文字工具不會」就是這個 —— 文字工具走的正是快照那條路
-    /// （<see cref="EditorSession.BeginElementOverlayLocked"/>），這裡把同一套補給變形手勢。
-    ///
-    /// 拍完就把原件藏起來、手勢期間不再動它（<see cref="_elementsFrozen"/>），放開時由
-    /// <see cref="StampAll"/>／<see cref="RestoreOriginal"/> 一次落地。
-    /// 拍不成（沒有效果快取、範圍太大…）就整份放棄，照舊每幀重算 —— 慢，但不會畫錯。
-    /// </summary>
-    private void CaptureElementPreviews()
-    {
-        // 網格／四角模式的位移是套在網格上的，物件走的是另一條路（TransformedElement），
-        // 這裡不接手 —— 照舊每幀重算，慢但不會畫錯。
-        if (_quad != null || _warp != null) return;
-
-        var withElements = _items.Where(i => i.Pixels == null && i.Layer.HasElements).ToList();
-        if (withElements.Count == 0) return;
-
-        // 快照拍的是「此刻的樣子」，而此刻已經含了本 session 先前的位移／縮放 ——
-        // 畫的時候要把那一段扣掉，否則會被套第二次（見 GestureOverlay.Items）
-        if (!Matrix.TryInvert(out var inverse)) return;
-
-        foreach (var item in withElements)
-        {
-            if (!TryCaptureElementPreview(item))
-            {
-                ReleaseElementPreviews(null); // 有一層拍不成就整份放棄（免得半快照半即時）
-                return;
-            }
-        }
-
-        lock (_doc.SyncRoot)
-        {
-            foreach (var item in withElements)
-            {
-                item.Layer.ElementsHidden = true;
-                item.ElementsWereHidden = true;
-                item.PreviewInverse = inverse;
-            }
-        }
-        _elementsFrozen = true;
-    }
-
-    private bool TryCaptureElementPreview(Item item)
-    {
-        var layer = item.Layer;
-        lock (_doc.SyncRoot)
-        {
-            // 快照要是最新的：效果還在背景算的話先等它（與 EditorSession.BeginLayerDrag 同一套判斷）
-            var withEffects = layer.HasActiveEffects;
-            if (withEffects && (layer.FxCache.HasPending || !layer.EffectsRendered))
-                Effects.LayerEffectRenderer.RenderLayerNow(_doc, layer);
-            withEffects &= layer.EffectsRendered;
-
-            var region = withEffects ? layer.DisplayContentBounds : ElementBounds(layer);
-            if (region.Width <= 0 || region.Height <= 0) return false;
-            if (region.Width > MaxContentSide || region.Height > MaxContentSide) return false;
-
-            var info = new SKImageInfo(region.Width, region.Height, SKColorType.Bgra8888, SKAlphaType.Premul);
-            using var surface = SKSurface.Create(info);
-            if (surface == null) return false;
-            var canvas = surface.Canvas;
-            canvas.Clear(SKColors.Transparent);
-            canvas.Translate(-region.Left, -region.Top);
-            if (withEffects) DrawDisplayTiles(layer, canvas, region);
-            else foreach (var el in layer.Elements) el.Render(canvas);
-            canvas.Flush();
-
-            item.ElementPreview = surface.Snapshot();
-            item.ElementPreviewBounds = region;
-            return true;
-        }
-    }
-
-    /// <summary>整層物件的 doc 外框（含效果外擴的保守範圍）。</summary>
-    private static SKRectI ElementBounds(RasterLayer layer)
-    {
-        var bounds = SKRectI.Empty;
-        foreach (var el in layer.Elements)
-        {
-            var b = el.Bounds;
-            if (b.IsEmpty) continue;
-            bounds = bounds.IsEmpty ? b : SKRectI.Union(bounds, b);
-        }
-        return bounds;
-    }
-
-    /// <summary>把圖層的顯示用 tile（有效果堆疊時＝效果快取）畫到 canvas（doc 座標）。</summary>
-    private static void DrawDisplayTiles(RasterLayer layer, SKCanvas canvas, SKRectI docRect)
-    {
-        var surface = layer.DisplaySurface;
-        var layerRect = new SKRectI(
-            docRect.Left - layer.EffectOffset.X, docRect.Top - layer.EffectOffset.Y,
-            docRect.Right - layer.EffectOffset.X, docRect.Bottom - layer.EffectOffset.Y);
-        foreach (var idx in Tiles.TileIndex.CoveringRect(layerRect))
-        {
-            var tile = surface.GetTileForRead(idx);
-            if (tile == null) continue;
-            using var pixmap = tile.AsPixmap();
-            using var img = SKImage.FromPixels(pixmap);
-            var tileRect = idx.ToPixelRect();
-            canvas.DrawImage(img, tileRect.Left + layer.EffectOffset.X, tileRect.Top + layer.EffectOffset.Y);
-        }
-    }
-
-    /// <summary>
-    /// 把原件放回來（手勢一結束就做，快照本身還留著頂到合成器追上）。
-    ///
-    /// 順序很重要：交接是「等合成器把那塊畫好才收快照」，而合成器要畫得對，原件就得先解除隱藏
-    /// —— 反過來的話，合成器畫出來的是「沒有文字」的那份，收掉快照的瞬間文字會閃不見。
-    /// </summary>
-    private void UnfreezeElements()
-    {
-        _elementsFrozen = false;
-        lock (_doc.SyncRoot)
-        {
-            foreach (var item in _items)
-            {
-                if (item.ElementsWereHidden) item.Layer.ElementsHidden = false;
-                item.ElementsWereHidden = false;
-            }
-        }
-    }
-
-    /// <summary>收掉物件快照（合成器已追上，或 session 結束）。</summary>
-    private void ReleaseElementPreviews(Compositor? compositor)
-    {
-        UnfreezeElements();
-        foreach (var item in _items)
-        {
-            if (item.ElementPreview is { } image)
-            {
-                if (_overlayEverPublished && compositor != null) compositor.Retire(image);
-                else image.Dispose();
-                item.ElementPreview = null;
-            }
-            item.ElementPreviewBounds = SKRectI.Empty;
-            item.PreviewInverse = SKMatrix.Identity;
-        }
     }
 
     /// <summary>
@@ -902,7 +586,7 @@ public sealed class TransformSession : IDisposable
 
         // 交接的範圍要含物件快照的落點：合成器把那塊畫好之前，快照得繼續頂著（不然會閃一下）
         var elementHandover = ElementHandoverRegion();
-        UnfreezeElements(); // 先放回原件，下面才落地得到正確的位置
+        _elementPreviews.Unfreeze(); // 先放回原件，下面才落地得到正確的位置
 
         if (IsIdentity)
         {
@@ -999,7 +683,7 @@ public sealed class TransformSession : IDisposable
              compositor.IsRegionClean(state.HandoverRegion)))
         {
             _overlay = null;
-            ReleaseElementPreviews(compositor);
+            _elementPreviews.Release(compositor, _overlayEverPublished);
         }
     }
 
@@ -1019,7 +703,7 @@ public sealed class TransformSession : IDisposable
         {
             PublishOverlay(handingOver: false);
             // 物件已由快照代表：手勢期間不動原件（動一下就整串圖層效果重算一次）
-            if (!_elementsFrozen) UpdateElements();
+            if (!_elementPreviews.Frozen) UpdateElements();
             return;
         }
 
@@ -1195,7 +879,7 @@ public sealed class TransformSession : IDisposable
         }
     }
 
-    private void Stamp(Item item, SKMatrix m, SKRectI docStamp, bool lossless, bool preview)
+    private void Stamp(TransformItem item, SKMatrix m, SKRectI docStamp, bool lossless, bool preview)
     {
         var layer = item.Layer;
         var layerRect = new SKRectI(
@@ -1371,7 +1055,7 @@ public sealed class TransformSession : IDisposable
         if (_disposed) return;
         _disposed = true;
         _overlay = null;
-        ReleaseElementPreviews(compositor);
+        _elementPreviews.Release(compositor, _overlayEverPublished);
         foreach (var item in _items)
         {
             // 借來的原始像素屬於圖層的 LayerPixelSource，session 不能釋放它
@@ -1383,42 +1067,5 @@ public sealed class TransformSession : IDisposable
             item.Before.Dispose();
         }
         _items.Clear();
-    }
-
-    private static void DisposeItems(List<Item> items)
-    {
-        foreach (var item in items)
-        {
-            item.Pixels?.Dispose();
-            item.Before.Dispose();
-        }
-        items.Clear();
-    }
-}
-
-/// <summary>
-/// 開變形時交給 <see cref="TransformSession.Resume"/> 的「續接資料」：各層的原始高清像素
-/// ＋累積映射＋目前的框。內容由各圖層的 <see cref="LayerPixelSource"/> 組出來
-/// （見 <see cref="EditorSession.BuildResumeFromLayers"/>），像素的擁有權一直在圖層那邊，
-/// 本物件只是借過來用。</summary>
-public sealed class TransformResume
-{
-    internal LayerNode Target { get; }
-    internal (RasterLayer Layer, SKImage Pixels, SKRectI SrcBounds)[] Items { get; }
-    internal SKMatrix PreMatrix { get; }
-    internal SKRect TargetRect { get; }
-    internal float RotationDeg { get; }
-    internal SKSize OriginalSize { get; }
-
-    internal TransformResume(LayerNode target,
-        (RasterLayer Layer, SKImage Pixels, SKRectI SrcBounds)[] items,
-        SKMatrix preMatrix, SKRect targetRect, float rotationDeg, SKSize originalSize)
-    {
-        Target = target;
-        Items = items;
-        PreMatrix = preMatrix;
-        TargetRect = targetRect;
-        RotationDeg = rotationDeg;
-        OriginalSize = originalSize;
     }
 }
