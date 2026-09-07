@@ -125,6 +125,13 @@ public partial class MainWindow
     private Task ApplyAdjustmentAsync(AdjustmentRegistry.Entry entry) =>
         ApplyEffectAsync(Services.EffectParamMemory.Recall(new AdjustmentEffect(entry.CreateDefault()), Canvas.Session?.Foreground ?? SKColors.Black), entry.DisplayName, entry.HasDialog);
 
+    /// <summary>小工具入口沿用圖層效果的預覽、取消與單一步 Undo。</summary>
+    private void OnMinecraftGlintClicked(object? sender, RoutedEventArgs e)
+    {
+        var effect = EffectParamMemory.Recall(new MinecraftGlintEffect(), Canvas.Session?.Foreground ?? SKColors.Black);
+        _ = ApplyEffectAsync(effect, effect.Name, showDialog: true);
+    }
+
     private void ApplyAutoLevel()
     {
         var session = CommitPending();

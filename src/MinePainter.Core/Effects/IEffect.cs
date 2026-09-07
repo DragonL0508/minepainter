@@ -85,6 +85,7 @@ public static class EffectRegistry
         new("objectFill", "物件", "塗色", () => new ObjectFillEffect()),
         new("objectGradient", "物件", "漸層", () => new ObjectGradientEffect()),
         new("objectFeather", "物件", "羽化", () => new ObjectFeatherEffect()),
+        new("minecraftGlint", "物件", "Minecraft 附魔效果", () => new MinecraftGlintEffect()),
 
         new("glow", "相片", "光暈", () => new GlowEffect()),
         new("redEye", "相片", "紅眼移除", () => new RedEyeRemovalEffect()),

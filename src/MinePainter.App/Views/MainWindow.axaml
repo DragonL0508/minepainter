@@ -257,8 +257,12 @@
             </MenuItem>
           </MenuItem>
 
-          <!-- 小工具：各種與編輯本身無關的獨立小玩具 -->
+          <!-- 小工具：主題效果與預覽工具 -->
           <MenuItem x:Name="GadgetsMenu" Header="小工具(_G)">
+            <MenuItem Header="Minecraft 附魔效果(_M)…" Click="OnMinecraftGlintClicked"
+                      Tag="gadget.minecraftGlint">
+              <MenuItem.Icon><mi:MaterialIcon Kind="AutoFix" Width="16" Height="16" /></MenuItem.Icon>
+            </MenuItem>
             <MenuItem Header="YouTube 縮圖預覽(_Y)…" Click="OnYouTubePreviewClicked"
                       Tag="gadget.youtubePreview">
               <MenuItem.Icon><mi:MaterialIcon Kind="Youtube" Width="16" Height="16" /></MenuItem.Icon>

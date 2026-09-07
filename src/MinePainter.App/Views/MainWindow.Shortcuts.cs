@@ -94,6 +94,7 @@ public partial class MainWindow
         _shortcutActions["layer.removeBackground"] = () => OnRemoveBackgroundClicked(null, new RoutedEventArgs());
         _shortcutActions["layer.removeBackgroundLocal"] = () => OnRemoveBackgroundLocalClicked(null, new RoutedEventArgs());
         _shortcutActions["gadget.youtubePreview"] = () => OnYouTubePreviewClicked(null, new RoutedEventArgs());
+        _shortcutActions["gadget.minecraftGlint"] = () => OnMinecraftGlintClicked(null, new RoutedEventArgs());
 
         _shortcutActions["adjust.autoLevel"] = () => ApplyAutoLevel();
         foreach (var entry in AdjustmentRegistry.All)

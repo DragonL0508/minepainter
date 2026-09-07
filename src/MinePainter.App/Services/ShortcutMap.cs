@@ -87,6 +87,7 @@ public static class ShortcutMap
         new("layer.transformDistort", "圖層", "扭曲變形", null),
 
         new("gadget.youtubePreview", "小工具", "YouTube 縮圖預覽", null),
+        new("gadget.minecraftGlint", "小工具", "Minecraft 附魔效果", null),
 
         new("view.zoomIn", "檢視", "放大", new KeyGesture(Key.OemPlus, KeyModifiers.Control)),
         new("view.zoomOut", "檢視", "縮小", new KeyGesture(Key.OemMinus, KeyModifiers.Control)),
