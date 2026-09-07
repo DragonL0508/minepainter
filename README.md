@@ -63,7 +63,7 @@ release.bat 1.8.2           推標籤，GitHub Actions 跑測試、建置、出 
 4. **文字圖層不變式：有物件（文字／形狀）的圖層永遠沒有像素。** 任何會往圖層寫像素的入口（筆刷、貼上、填滿、去背、合併）遇到文字圖層要拒絕或改貼到新圖層。守門：`TextLayerInvariantTests`。
 5. **原始高清來源（快速模式的命脈）。** 圖層可帶 `LayerPixelSource`（原圖＋矩陣），失效判準是 `Revision` 對不上。**任何改圖層像素的操作，能保留它就要保留**：寫像素前 `ValidPixelSource` + `TakePixelSource()`，寫完掛新來源並對齊 `Revision`，undo/redo 用 `PixelSourceSwapEntry`。工具箱：`Masked`（遮罩套到原圖）、`Rebased`（仿射映射串進矩陣）、`Copy`、`OutputRender.RenderLayerAsSource`（含效果在輸出解析度算一份）。刻意作廢的只有筆刷、填色、文字平面化、向下合併。守門：`PixelSourceSurvivalTests`、`FastModeWorkflowTests`。
 6. **整份文件縮放的規則只有一份：`ScaleRules`。** 調整影像大小、快速模式輸出、開檔轉模式都走它（像素從原圖重畫、效果的像素長度參數與遮罩跟著縮、文字重新排版）。兩條路結果要一樣。
-7. **效果快取是圖層座標，與畫布無關。** 平移圖層不重算效果：位置變了用 `InvalidateComposite`，內容變了才 `Invalidate`。效果的輸出會延伸 `SourceMargin`，任何「重算範圍」都要含 margin。守門：`EffectCacheInvalidationTests`。
+7. **效果快取是圖層座標，與畫布無關。** 平移圖層不重算效果：位置變了用 `InvalidateComposite`，內容變了才 `Invalidate`。 筆劃拖曳中筆劃還在 `StrokeBuffer`、圖層像素沒動，也只能 `InvalidateComposite`（`Invalidate` 會讓效果堆疊每動一下滑鼠重算一次，合成器又等它算完才合成，效果多就一頓一頓；守門：`BrushEffectCacheTests`）。效果的輸出會延伸 `SourceMargin`，任何「重算範圍」都要含 margin。守門：`EffectCacheInvalidationTests`。
    位置相關的效果（`IsPositionIndependent = false`：暈影、聚焦、像素化…）以**畫布**為範圍、永遠整層重算 —— 圓心與半對角線看的是範圍，只算髒區或拿內容框當範圍都會讓圓跑掉（顯示切換後聚焦變深就是這樣來的）。
    **效果算爆了不能悄悄略過。** renderer 會跳過那一條讓其餘照算，但一定透過 `LayerEffectRenderer.EffectFailed` 回報（App 記 `error.log` ＋ toast），同一條只報一次、算成功後才重置。守門：`EffectFailureReportTests`。
 8. **「內容範圍」不能只信 em box，要含實際著墨。** 字面超出行高的字型、重音、外框都會超出排版框（`TextElement.Bounds` = 排版框 ∪ 著墨框）。
@@ -73,6 +73,7 @@ release.bat 1.8.2           推標籤，GitHub Actions 跑測試、建置、出 
 11. **`.mpp` 向後相容。** 加欄位要 bump `MppFormat.FormatVersion`、舊檔照讀、新檔在舊版開得起來或明確拒絕。每次改格式都要有 `MppFormatTests`。
 13. **漸層與兩色之間的過渡在 OKLab 內插（`Adjustments/OkLab`），alpha 線性。** `GradientStops.ColorAt`、文字漸層都走它；Skia 的著色器只會在 sRGB 內插，要餵它一串 OKLab 取好的中間色（`OkLab.Ramp`）。像素合成（不透明度、圖層混合）仍是 premul sRGB，不要改。刻意不做的：`.psd` 匯出的漸層節點照寫，Photoshop 端會用它自己的內插，中段會略有差異。守門：`OkLabGradientTests`。
 14. **像素圖放大走 `ResampleMode.PixelArt`（`Documents/PixelArtScale`，Scale2x／3x）**：只用輸入裡有的顏色、把樓梯削成斜線；先疊 2×／3× 到不小於目標，整數倍時直接搬、不再重取樣。有原始高清來源的圖層不走它（從原圖重畫更準）。守門：`PixelArtScaleTests`。
+15. **色彩：進出都對齊 sRGB，中間不做色彩管理。** 匯入時解碼目標指定 `SKColorSpace.CreateSrgb()`，帶 ICC 的檔案（P3 截圖、Adobe RGB 相片）由 codec 轉成 sRGB，不指定會照數值搬、整張偏淡；JPEG 匯出用 4:4:4（`SKJpegEncoderDownsample.Downsample444`），預設 4:2:0 會把紅字邊緣糊成粉紅。刻意不做的：合成與效果在 sRGB gamma 空間算（與 paint.net、Photoshop 預設一致，改成線性會讓所有既有文件變色）；顯示端不做螢幕設定檔管理（paint.net 也沒有）。守門：`ColorAccuracyTests`。
 12. **Skia 物件的生命週期要明確。** `SKImage`／`SKBitmap`／`SKPath` 誰擁有誰釋放寫在註解裡；多份物件共用同一張 `SKImage` 時（`LayerPixelSource.Rebased`），只有一個擁有者，其餘 `Detach()`。合成執行緒可能在物件釋放後才畫到它，尺寸類屬性建構時就快取。
 
 ### UI 一致性

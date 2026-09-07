@@ -138,8 +138,8 @@ internal static class ClipboardImage
         }
         if (fileBytes == null) return dib == null ? null : DibCodec.Decode(dib);
 
-        using var decoded = SKBitmap.Decode(fileBytes);
-        if (decoded == null) return null;
+        // 走 ImageCodec：帶 ICC 的 PNG 要轉成 sRGB，跟開檔一致
+        using var decoded = MinePainter.Core.IO.ImageCodec.LoadBitmap(new MemoryStream(fileBytes));
 
         // 統一成 BGRA premul（Skia 解出來的格式依來源而異）
         var info = new SKImageInfo(decoded.Width, decoded.Height, SKColorType.Bgra8888, SKAlphaType.Premul);

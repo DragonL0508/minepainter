@@ -941,10 +941,21 @@ public static class MppFormat
                 surface.Canvas.DrawImage(composite, SKRect.Create(outW, outH), paint);
             }
             using var flattened = surface.Snapshot();
-            encoded = flattened.Encode(
-                isJpeg ? SKEncodedImageFormat.Jpeg : SKEncodedImageFormat.Png,
-                isJpeg ? Math.Clamp(jpegQuality, 1, 100) : 100)
-                ?? throw new InvalidOperationException("影像編碼失敗");
+            if (isJpeg)
+            {
+                // 色度不次取樣（4:4:4）：預設的 4:2:0 把色度縮成四分之一，紅字、細色線的邊緣會糊成粉紅／暗紅，
+                // 縮圖上最常見的「顏色不準」就是它。檔案大一些，但縮圖本來就沒幾百 KB。
+                using var pixmap = flattened.PeekPixels()
+                    ?? throw new InvalidOperationException("影像編碼失敗");
+                encoded = pixmap.Encode(new SKJpegEncoderOptions(Math.Clamp(jpegQuality, 1, 100),
+                    SKJpegEncoderDownsample.Downsample444, SKJpegEncoderAlphaOption.Ignore))
+                    ?? throw new InvalidOperationException("影像編碼失敗");
+            }
+            else
+            {
+                encoded = flattened.Encode(SKEncodedImageFormat.Png, 100)
+                    ?? throw new InvalidOperationException("影像編碼失敗");
+            }
         }
         else
         {

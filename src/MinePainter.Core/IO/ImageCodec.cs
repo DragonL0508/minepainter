@@ -26,8 +26,10 @@ public static class ImageCodec
         using var codec = SKCodec.Create(stream)
             ?? throw new InvalidDataException("無法辨識的影像格式。");
 
+        // 目標指定 sRGB：檔案帶 ICC（手機截圖多是 Display P3、相機圖是 Adobe RGB）時 codec 會先轉成 sRGB。
+        // 不指定的話 Skia 照數值搬，P3 的圖進來會整張偏淡（「顏色跟原圖不一樣」的來源之一）。
         var info = new SKImageInfo(codec.Info.Width, codec.Info.Height,
-            SKColorType.Bgra8888, SKAlphaType.Premul);
+            SKColorType.Bgra8888, SKAlphaType.Premul, SKColorSpace.CreateSrgb());
 
         var bitmap = new SKBitmap(info);
         var result = codec.GetPixels(info, bitmap.GetPixels());

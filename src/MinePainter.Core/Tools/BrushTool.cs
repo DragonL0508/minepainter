@@ -71,7 +71,11 @@ public class BrushTool : ITool, IBrushCursorTool
         }
         _targetLayer = layer;
         _strokeActive = true;
-        layer.Invalidate(dirty); // 走 layer 失效使祖先群組快取被標髒
+        // 筆劃還在 StrokeBuffer 裡、圖層像素一個都沒動：只要重新合成（合成器把筆劃疊上去），
+        // 不能走 Invalidate —— 那會把效果快取標髒，效果堆疊每動一下滑鼠就整段重算一次，
+        // 而合成器要等效果算完才肯合成，效果多的專案畫起來就一頓一頓的（2026-09-07 回報）。
+        // 祖先群組的快取仍要標髒，InvalidateComposite 有做。
+        layer.InvalidateComposite(dirty);
     }
 
     public void OnPointerMove(ToolPointerEvent e, EditorSession session)
@@ -90,7 +94,7 @@ public class BrushTool : ITool, IBrushCursorTool
             dirty = _engine.ContinueStroke(e.DocPosition, session.StrokeBuffer, Settings,
                 session.Selection?.Mask, doc.Bounds);
         }
-        if (!dirty.IsEmpty) _targetLayer?.Invalidate(dirty);
+        if (!dirty.IsEmpty) _targetLayer?.InvalidateComposite(dirty); // 同 OnPointerDown：像素沒變，效果快取別動
     }
 
     public void OnPointerUp(ToolPointerEvent e, EditorSession session)
