@@ -81,8 +81,9 @@ public static partial class PsdFormat
         var reader = new Reader(stream);
         var header = ReadHeader(reader);
         var palette = ReadColorModeData(reader, header);
-        var (globalAngle, dpi) = ReadImageResources(reader);
-        header = header with { GlobalAngle = globalAngle, Dpi = dpi };
+        var (globalAngle, dpi, icc) = ReadImageResources(reader);
+        using var colorSpace = ColorSpaceFromIcc(icc);
+        header = header with { GlobalAngle = globalAngle, Dpi = dpi, ColorSpace = colorSpace };
 
         var records = ReadLayerSection(reader, header, notes);
 
@@ -115,6 +116,9 @@ public static partial class PsdFormat
     {
         /// <summary>圖層樣式「使用整體光源」的角度（影像資源 1037；Photoshop 預設 120）。</summary>
         public int GlobalAngle { get; init; } = 120;
+
+        /// <summary>內嵌 ICC（影像資源 1039）解析出的色彩空間；null＝沒有、就是 sRGB、或 Skia 不認得（CMYK／灰階）。</summary>
+        public SKColorSpace? ColorSpace { get; init; }
 
         /// <summary>解析度（影像資源 1005；Photoshop 預設 72）。</summary>
         public float Dpi { get; init; } = 72f;
@@ -178,15 +182,16 @@ public static partial class PsdFormat
 
     /// <summary>
     /// 影像資源區：一串 8BIM + ID + Pascal 名稱（補到偶數）+ 長度 + 資料（補到偶數）。
-    /// 只要整體光源角度（1037）與解析度（1005：hRes 是 16.16 定點數，單位 1 = 每英寸、2 = 每公分），
-    /// 其餘（縮圖、ICC）匯入用不到。
+    /// 只要整體光源角度（1037）、解析度（1005：hRes 是 16.16 定點數，單位 1 = 每英寸、2 = 每公分）
+    /// 與 ICC 設定檔（1039：Adobe RGB／ProPhoto 的檔案要轉成 sRGB，不然整張偏淡），其餘（縮圖）匯入用不到。
     /// </summary>
-    private static (int GlobalAngle, float Dpi) ReadImageResources(Reader reader)
+    private static (int GlobalAngle, float Dpi, byte[]? Icc) ReadImageResources(Reader reader)
     {
         var length = reader.UInt32();
         var end = reader.Position + length;
         var globalAngle = 120;
         var dpi = 72f;
+        byte[]? icc = null;
         while (reader.Position + 12 <= end)
         {
             if (!reader.Bytes(4).AsSpan().SequenceEqual("8BIM"u8)) break;
@@ -196,6 +201,7 @@ public static partial class PsdFormat
             var size = reader.UInt32();
             var dataStart = reader.Position;
             if (id == 1037 && size >= 4) globalAngle = reader.Int32();
+            if (id == 1039 && size > 0) icc = reader.Bytes((int)size);
             if (id == 1005 && size >= 6)
             {
                 var fixedRes = reader.UInt32() / 65536f;
@@ -205,7 +211,30 @@ public static partial class PsdFormat
             reader.Position = dataStart + size + size % 2;
         }
         reader.Position = end;
-        return (globalAngle, dpi);
+        return (globalAngle, dpi, icc);
+    }
+
+    /// <summary>
+    /// ICC → Skia 色彩空間；sRGB 或解析不了（CMYK、灰階、壞檔）都回 null＝不轉。
+    /// 先自己解析 profile 再建色彩空間：<c>SKColorSpace.CreateIcc(byte[])</c> 解析失敗時
+    /// 是丟 ArgumentNullException 而不是回 null，直接呼叫會讓一份壞掉的設定檔炸掉整個匯入。
+    /// </summary>
+    private static SKColorSpace? ColorSpaceFromIcc(byte[]? icc)
+    {
+        if (icc == null || icc.Length == 0) return null;
+        var profile = SKColorSpaceIccProfile.Create(icc);
+        if (profile == null) return null;
+        using (profile)
+        {
+            var space = SKColorSpace.CreateIcc(profile);
+            if (space == null) return null;
+            if (space.IsSrgb)
+            {
+                space.Dispose();
+                return null;
+            }
+            return space;
+        }
     }
 
     // ---- 圖層區 ----
@@ -490,7 +519,7 @@ public static partial class PsdFormat
                 throw new InvalidDataException($".psd 圖層「{layerName}」使用了無法辨識的壓縮方式（{compression}）。");
         }
 
-        return bytesPerSample == 1 ? raw : Downconvert16(raw);
+        return bytesPerSample == 1 ? raw : Downconvert16(raw, width);
     }
 
     /// <summary>PackBits：先是每一列的壓縮後長度（PSD 2 位元組、PSB 4 位元組），接著才是資料。</summary>
@@ -568,13 +597,39 @@ public static partial class PsdFormat
         }
     }
 
-    private static byte[] Downconvert16(byte[] raw)
+    /// <summary>8×8 Bayer 矩陣（0..63）：16→8 位元的有序抖色用。</summary>
+    private static readonly byte[] Bayer8 =
+    [
+        0, 32, 8, 40, 2, 34, 10, 42,
+        48, 16, 56, 24, 50, 18, 58, 26,
+        12, 44, 4, 36, 14, 46, 6, 38,
+        60, 28, 52, 20, 62, 30, 54, 22,
+        3, 35, 11, 43, 1, 33, 9, 41,
+        51, 19, 59, 27, 49, 17, 57, 25,
+        15, 47, 7, 39, 13, 45, 5, 37,
+        63, 31, 55, 23, 61, 29, 53, 21,
+    ];
+
+    /// <summary>
+    /// 16 位元樣本降成 8 位元：不是四捨五入而是有序抖色（Photoshop 轉 8 位元預設也開抖色）——
+    /// 平滑漸層直接量化會出一條條色帶，抖色把餘數攤成 ±1 的細紋，平坦區看不出來、色帶消失。
+    /// <paramref name="width"/> 是平面的列寬，抖色矩陣要按 x/y 取。
+    /// </summary>
+    internal static byte[] Downconvert16(byte[] raw, int width)
     {
         var result = new byte[raw.Length / 2];
+        if (width <= 0) width = result.Length;
         for (var i = 0; i < result.Length; i++)
         {
             var value = BinaryPrimitives.ReadUInt16BigEndian(raw.AsSpan(i * 2));
-            result[i] = (byte)((value * 255 + 32767) / 65535);
+            var x = i % width;
+            var y = i / width;
+            // value/257 的整數部分是底，餘數（0..256）與門檻（0..255，平均 128）比：超過就進位
+            var scaled = value * 255;          // 0..16711425
+            var floor = scaled / 65535;        // 0..255
+            var remainder = scaled - floor * 65535; // 0..65534
+            var threshold = (Bayer8[(y & 7) * 8 + (x & 7)] * 2 + 1) * 65535 / 128; // 1/128..127/128，平均 1/2
+            result[i] = (byte)Math.Min(255, floor + (remainder >= threshold ? 1 : 0));
         }
         return result;
     }
@@ -629,7 +684,7 @@ public static partial class PsdFormat
                         if ((record.Rect.Width <= 0 || record.Rect.Height <= 0) && record.ParameterBlocks.Count > 0)
                         {
                             // 沒有像素、靠參數呈現的圖層：調整圖層 → 我們的調整圖層；純色／漸層填色 → 整張畫布的像素
-                            var special = BuildParameterLayer(record, document, notes, out var fillBgra);
+                            var special = BuildParameterLayer(record, document, notes, header.ColorSpace, out var fillBgra);
                             if (special == null) break;
                             Current().Add(special);
                             if (special is RasterLayer fill && fillBgra != null)
@@ -687,7 +742,7 @@ public static partial class PsdFormat
     /// 調整圖層（levl／curv／brit…）→ <see cref="AdjustmentLayer"/>；純色／漸層填色（SoCo／GdFl）→ 整張畫布的點陣圖層
     /// （乘上它的遮色片）。對不上的提示後回 null。<paramref name="fillBgra"/> 是填色圖層的像素（剪裁／群組 alpha 用）。
     /// </summary>
-    private static LayerNode? BuildParameterLayer(LayerRecord record, Document document, List<string> notes, out byte[]? fillBgra)
+    private static LayerNode? BuildParameterLayer(LayerRecord record, Document document, List<string> notes, SKColorSpace? colorSpace, out byte[]? fillBgra)
     {
         fillBgra = null;
         var name = string.IsNullOrEmpty(record.Name) ? "圖層" : record.Name;
@@ -751,7 +806,7 @@ public static partial class PsdFormat
 
         var raster = new RasterLayer();
         ApplyProperties(raster, record, notes, isGroup: false);
-        if (!IsFullyTransparent(bgra)) CopyUnpremultiplied(raster, bgra, canvas);
+        if (!IsFullyTransparent(bgra)) CopyUnpremultiplied(raster, bgra, canvas, colorSpace);
         fillBgra = bgra;
         return raster;
     }
@@ -911,7 +966,7 @@ public static partial class PsdFormat
                 return null;
             }
 
-            if (!IsFullyTransparent(bgra)) CopyUnpremultiplied(layer, bgra, record.Rect);
+            if (!IsFullyTransparent(bgra)) CopyUnpremultiplied(layer, bgra, record.Rect, header.ColorSpace);
             return layer;
         }
         catch
@@ -1086,11 +1141,16 @@ public static partial class PsdFormat
         }
     }
 
-    /// <summary>Photoshop 的直通 alpha 交給 Skia 轉成我們 tile 用的預乘，寫到圖層範圍的左上角。</summary>
-    private static unsafe void CopyUnpremultiplied(RasterLayer layer, byte[] bgra, SKRectI rect)
+    /// <summary>
+    /// Photoshop 的直通 alpha 交給 Skia 轉成我們 tile 用的預乘，寫到圖層範圍的左上角。
+    /// <paramref name="colorSpace"/> 不是 null 時順便從檔案的色彩空間轉成 sRGB（同一次 ReadPixels 做完）。
+    /// </summary>
+    private static unsafe void CopyUnpremultiplied(RasterLayer layer, byte[] bgra, SKRectI rect, SKColorSpace? colorSpace)
     {
-        var sourceInfo = new SKImageInfo(rect.Width, rect.Height, SKColorType.Bgra8888, SKAlphaType.Unpremul);
-        using var premultiplied = new SKBitmap(sourceInfo.WithAlphaType(SKAlphaType.Premul));
+        var sourceInfo = new SKImageInfo(rect.Width, rect.Height, SKColorType.Bgra8888, SKAlphaType.Unpremul, colorSpace);
+        var targetInfo = sourceInfo.WithAlphaType(SKAlphaType.Premul);
+        if (colorSpace != null) targetInfo = targetInfo.WithColorSpace(SKColorSpace.CreateSrgb());
+        using var premultiplied = new SKBitmap(targetInfo);
         using var destination = premultiplied.PeekPixels();
 
         fixed (byte* scan0 = bgra)
@@ -1228,7 +1288,7 @@ public static partial class PsdFormat
             record.Channels.Add(new ChannelRecord
             {
                 Id = id,
-                Samples = bytesPerSample == 1 ? planes[c] : Downconvert16(planes[c]),
+                Samples = bytesPerSample == 1 ? planes[c] : Downconvert16(planes[c], width),
             });
         }
 
@@ -1236,7 +1296,7 @@ public static partial class PsdFormat
         try
         {
             var bgra = ComposeBgra(record, header, palette);
-            if (!IsFullyTransparent(bgra)) CopyUnpremultiplied(layer, bgra, record.Rect);
+            if (!IsFullyTransparent(bgra)) CopyUnpremultiplied(layer, bgra, record.Rect, header.ColorSpace);
             return layer;
         }
         catch

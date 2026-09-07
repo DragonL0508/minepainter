@@ -73,7 +73,8 @@ release.bat 1.8.2           推標籤，GitHub Actions 跑測試、建置、出 
 11. **`.mpp` 向後相容。** 加欄位要 bump `MppFormat.FormatVersion`、舊檔照讀、新檔在舊版開得起來或明確拒絕。每次改格式都要有 `MppFormatTests`。
 13. **漸層與兩色之間的過渡在 OKLab 內插（`Adjustments/OkLab`），alpha 線性。** `GradientStops.ColorAt`、文字漸層都走它；Skia 的著色器只會在 sRGB 內插，要餵它一串 OKLab 取好的中間色（`OkLab.Ramp`）。像素合成（不透明度、圖層混合）仍是 premul sRGB，不要改。刻意不做的：`.psd` 匯出的漸層節點照寫，Photoshop 端會用它自己的內插，中段會略有差異。守門：`OkLabGradientTests`。
 14. **像素圖放大走 `ResampleMode.PixelArt`（`Documents/PixelArtScale`，Scale2x／3x）**：只用輸入裡有的顏色、把樓梯削成斜線；先疊 2×／3× 到不小於目標，整數倍時直接搬、不再重取樣。有原始高清來源的圖層不走它（從原圖重畫更準）。守門：`PixelArtScaleTests`。
-15. **色彩：進出都對齊 sRGB，中間不做色彩管理。** 匯入時解碼目標指定 `SKColorSpace.CreateSrgb()`，帶 ICC 的檔案（P3 截圖、Adobe RGB 相片）由 codec 轉成 sRGB，不指定會照數值搬、整張偏淡；JPEG 匯出用 4:4:4（`SKJpegEncoderDownsample.Downsample444`），預設 4:2:0 會把紅字邊緣糊成粉紅。刻意不做的：合成與效果在 sRGB gamma 空間算（與 paint.net、Photoshop 預設一致，改成線性會讓所有既有文件變色）；顯示端不做螢幕設定檔管理（paint.net 也沒有）。守門：`ColorAccuracyTests`。
+15. **色彩：進出都對齊 sRGB，中間不做色彩管理。** 匯入時解碼目標指定 `SKColorSpace.CreateSrgb()`，帶 ICC 的檔案（P3 截圖、Adobe RGB 相片）由 codec 轉成 sRGB，不指定會照數值搬、整張偏淡；JPEG 匯出用 4:4:4（`SKJpegEncoderDownsample.Downsample444`），預設 4:2:0 會把紅字邊緣糊成粉紅。刻意不做的：合成與效果在 sRGB gamma 空間算（與 paint.net、Photoshop 預設一致，改成線性會讓所有既有文件變色）；顯示端不做螢幕設定檔管理（paint.net 也沒有）。`.psd` 的內嵌 ICC（影像資源 1039）也要套（Adobe RGB／P3 的檔案不轉會整張偏淡）；解析不了的設定檔當成沒有，不能讓匯入炸掉。16 位元 `.psd` 降成 8 位元走有序抖色（Bayer 8×8，同 Photoshop 轉 8 位元的預設），直接四捨五入會讓平滑漸層出色帶。守門：`ColorAccuracyTests`、`PsdColorTests`。
+    **天花板是刻意的**：tile 是 8 位元 BGRA premul，不做 16 位元／FP32 管線、不做 CMYK、不做 HDR。輸出是 8 位元的 PNG／JPEG，換來的是小上四倍的記憶體與簡單的合成器。天花板以下該準的要準。
 12. **Skia 物件的生命週期要明確。** `SKImage`／`SKBitmap`／`SKPath` 誰擁有誰釋放寫在註解裡；多份物件共用同一張 `SKImage` 時（`LayerPixelSource.Rebased`），只有一個擁有者，其餘 `Detach()`。合成執行緒可能在物件釋放後才畫到它，尺寸類屬性建構時就快取。
 
 ### UI 一致性
