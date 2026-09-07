@@ -20,6 +20,10 @@ internal sealed class OpenDocument : IDisposable
 
     // 縮圖要的是「有沒有動過」，不是「等不等於存檔點」：undo 也算動過，這裡才用計數
     private int _changeVersion;
+
+    // History.Changed 可能在背景執行緒（平面化、調整大小、去背都是背景 Push），CompleteSave 在 UI 執行緒。
+    // 「算 dirty → 跟上次通知比 → 記下來」要在同一把鎖裡做，不然兩邊交錯會漏掉一次翻轉，標題的 * 就卡住。
+    private readonly object _gate = new();
     private bool _lastNotifiedDirty; // 上次通知 UI 時的 dirty；只在翻轉時再通知
 
     public EditorSession Session { get; }
@@ -35,7 +39,10 @@ internal sealed class OpenDocument : IDisposable
     /// <summary>History 累計的變更次數（含 undo/redo）；縮圖用它判斷「有沒有變」。</summary>
     public int ChangeVersion => Volatile.Read(ref _changeVersion);
 
-    public bool IsDirty => Session.History.StateId != Volatile.Read(ref _savedStateId);
+    public bool IsDirty
+    {
+        get { lock (_gate) return Session.History.StateId != _savedStateId; }
+    }
 
     /// <summary>
     /// 檔案路徑或 dirty 狀態變了。編輯只在 dirty 翻轉那一刻發（乾淨→dirty，或 undo 回存檔點），
@@ -62,12 +69,14 @@ internal sealed class OpenDocument : IDisposable
     private void OnHistoryChanged()
     {
         Interlocked.Increment(ref _changeVersion); // History.Changed 可能來自非 UI 執行緒
-        var dirty = IsDirty;
-        if (dirty != _lastNotifiedDirty)
+        bool flipped;
+        lock (_gate)
         {
+            var dirty = Session.History.StateId != _savedStateId;
+            flipped = dirty != _lastNotifiedDirty;
             _lastNotifiedDirty = dirty;
-            StateChanged?.Invoke();
         }
+        if (flipped) StateChanged?.Invoke();
     }
 
     /// <summary>存檔開始時先拿狀態身分：存檔期間的編輯不會被這次存檔涵蓋。</summary>
@@ -77,9 +86,12 @@ internal sealed class OpenDocument : IDisposable
     public void CompleteSave(string path, long savedStateId)
     {
         FilePath = path;
-        Volatile.Write(ref _savedStateId, savedStateId);
-        _lastNotifiedDirty = IsDirty;
-        StateChanged?.Invoke();
+        lock (_gate)
+        {
+            _savedStateId = savedStateId;
+            _lastNotifiedDirty = Session.History.StateId != _savedStateId;
+        }
+        StateChanged?.Invoke(); // 路徑可能變了，不論 dirty 有沒有翻轉都要刷
     }
 
     /// <summary>解除自己掛的訂閱再釋放 session；之後不再對外發任何事件。</summary>

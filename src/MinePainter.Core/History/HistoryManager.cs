@@ -3,7 +3,9 @@
 namespace MinePainter.Core.History;
 
 /// <summary>
-/// undo/redo 雙堆疊。Push/Undo/Redo 都在 UI thread 呼叫；
+/// undo/redo 雙堆疊。Undo/Redo 在 UI thread 呼叫；Push 不一定 ——
+/// 平面化、調整影像大小、烙印效果、去背都在 ProgressDialog／Task.Run 的背景執行緒跑完才 Push，
+/// 所以 <see cref="Changed"/> 沒有 UI 執行緒保證，訂閱端自己 Dispatcher.UIThread.Post。
 /// 內部進入 Document.SyncRoot 執行 entry。
 /// 記憶體總量超過上限時從最舊淘汰。
 ///

@@ -78,13 +78,15 @@ public class HistoryStateIdTests
         using var s = NewSession();
         var h = s.History;
         Push(s);
+        var beforeCollapsed = h.StateId; // 併步範圍之前的狀態
         Push(s);
         Push(s);
         var last = h.StateId;
         h.CollapseLast(2);
         Assert.Equal(last, h.StateId); // 收尾併步後狀態沒變，存檔點不能因此變 dirty
         Assert.Equal(2, h.UndoStack.Count);
-        s.Undo();
+        s.Undo(); // 併成一步後 undo 一次就跨過兩步：要回到併步範圍之前，不是中間那步
+        Assert.Equal(beforeCollapsed, h.StateId);
         s.Redo();
         Assert.Equal(last, h.StateId);
     }
