@@ -16,10 +16,10 @@ public class GradientStopsTests
         ]);
         Assert.Equal(SKColors.Red, g.ColorAt(0f));       // 首節點之前 = 首色
         Assert.Equal(SKColors.Blue, g.ColorAt(1f));      // 末節點之後 = 末色
-        var mid = g.ColorAt(0.35f);                      // 紅→綠一半
-        Assert.InRange(mid.Red, 120, 136);
-        Assert.InRange(mid.Green, 120, 136);
-        Assert.Equal(0, mid.Blue);
+        var mid = g.ColorAt(0.35f);                      // 紅→綠一半：OKLab 內插，是亮黃不是 sRGB 的暗橄欖 (128,128,0)
+        Assert.True(mid.Red + mid.Green > 300, $"中點 {mid} 太暗：內插沒走 OKLab");
+        Assert.True(Math.Abs(mid.Red - mid.Green) < 60, $"中點 {mid} 偏向其中一端");
+        Assert.True(mid.Blue < 40, $"紅→綠之間不該跑出藍：{mid}");
         Assert.Equal(SKColors.Lime, g.ColorAt(0.5f));
     }
 

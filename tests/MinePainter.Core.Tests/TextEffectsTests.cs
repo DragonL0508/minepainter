@@ -251,8 +251,9 @@ public class TextEffectsTests : IDisposable
                 if (pIx.Alpha < 200) continue;
                 var upper = y < top + (bottom - top) / 4;
                 var lower = y > bottom - (bottom - top) / 4;
-                if (upper && pIx.Red > 180 && pIx.Blue < 80) reddish++;
-                if (lower && pIx.Blue > 180 && pIx.Red < 80) bluish++;
+                // OKLab 內插的中段比 sRGB 飽和，紅端附近已經帶一點藍：看「哪邊佔優」而不是絕對值
+                if (upper && pIx.Red > pIx.Blue + 60) reddish++;
+                if (lower && pIx.Blue > pIx.Red + 60) bluish++;
             }
         }
         Assert.True(reddish > 0, "漸層起點（上緣）應該偏紅");

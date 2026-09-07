@@ -21,7 +21,7 @@ public sealed class ResizeImageDialog : ModalDialog
     private readonly ComboBox _resampleCombo = new()
     {
         Width = 150, FontSize = 12,
-        ItemsSource = new[] { "最佳品質（雙三次）", "雙線性", "最接近像素" },
+        ItemsSource = new[] { "最佳品質（雙三次）", "雙線性", "最接近像素", "像素圖（Scale2x/3x）" },
         SelectedIndex = 0,
     };
     private bool _suppress;
@@ -34,6 +34,7 @@ public sealed class ResizeImageDialog : ModalDialog
     {
         1 => Core.History.ResampleMode.Bilinear,
         2 => Core.History.ResampleMode.Nearest,
+        3 => Core.History.ResampleMode.PixelArt,
         _ => Core.History.ResampleMode.Bicubic,
     };
 
@@ -89,7 +90,7 @@ public sealed class ResizeImageDialog : ModalDialog
                 _info,
             },
         };
-        ToolTip.SetTip(_resampleCombo, "放大縮小時像素怎麼混：雙三次最平滑；最接近像素不混色（像素圖整數倍縮放用）");
+        ToolTip.SetTip(_resampleCombo, "放大縮小時像素怎麼混：雙三次最平滑；最接近像素不混色；像素圖會把樓梯削成斜線、不產生新顏色（Minecraft 材質放大用）");
         SetBody(body, ButtonRow(MakeButton("確定", primary: true, confirm: true), MakeButton("取消")));
     }
 

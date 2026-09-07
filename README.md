@@ -71,6 +71,8 @@ release.bat 1.8.2           推標籤，GitHub Actions 跑測試、建置、出 
    調整預設是 Skia 色彩濾鏡；濾鏡表達不了的（3D LUT）標 `RequiresPixelPath = true` 並實作 `ApplyPixels`，合成器與破壞性套用走像素路徑、GPU 路徑整份退回合成器（SkiaSharp 2.88 的 runtime shader 在 CPU raster 會直接崩，不能用）。參數之外的大塊資料走 `SaveData`（.mpp 的 `AdjustmentData`、效果堆疊的 `data`）。
 10. **`.psd` 匯出以「Photoshop 裡還能改」為準。** `PsdFormat.Save` 是 `Load` 的反向：文字寫 `TySh`、效果寫 `lfx2`、調整寫參數區塊，鍵與單位照讀取端；對不上的效果整層烙成像素並回報 warnings，不准悄悄少一條效果。守門：`PsdSaveTests`（寫出再讀回）。`.pdn` 匯出只寫單一圖層（paint.net 沒有群組／文字／效果，逐層搬只會得到烙死的像素），物件圖照 paint.net 5.1 真檔逐欄位寫，改欄位前先用真檔傾印對照；守門：`PdnSaveTests`。
 11. **`.mpp` 向後相容。** 加欄位要 bump `MppFormat.FormatVersion`、舊檔照讀、新檔在舊版開得起來或明確拒絕。每次改格式都要有 `MppFormatTests`。
+13. **漸層與兩色之間的過渡在 OKLab 內插（`Adjustments/OkLab`），alpha 線性。** `GradientStops.ColorAt`、文字漸層都走它；Skia 的著色器只會在 sRGB 內插，要餵它一串 OKLab 取好的中間色（`OkLab.Ramp`）。像素合成（不透明度、圖層混合）仍是 premul sRGB，不要改。刻意不做的：`.psd` 匯出的漸層節點照寫，Photoshop 端會用它自己的內插，中段會略有差異。守門：`OkLabGradientTests`。
+14. **像素圖放大走 `ResampleMode.PixelArt`（`Documents/PixelArtScale`，Scale2x／3x）**：只用輸入裡有的顏色、把樓梯削成斜線；先疊 2×／3× 到不小於目標，整數倍時直接搬、不再重取樣。有原始高清來源的圖層不走它（從原圖重畫更準）。守門：`PixelArtScaleTests`。
 12. **Skia 物件的生命週期要明確。** `SKImage`／`SKBitmap`／`SKPath` 誰擁有誰釋放寫在註解裡；多份物件共用同一張 `SKImage` 時（`LayerPixelSource.Rebased`），只有一個擁有者，其餘 `Detach()`。合成執行緒可能在物件釋放後才畫到它，尺寸類屬性建構時就快取。
 
 ### UI 一致性

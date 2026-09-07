@@ -20,6 +20,8 @@ public enum ResampleMode
     Bilinear,
     /// <summary>最接近像素：不混色，像素圖／點陣風整數倍縮放用。</summary>
     Nearest,
+    /// <summary>像素圖（Scale2x／3x）：放大時把樓梯削成斜線、不產生新顏色；縮小同雙三次。</summary>
+    PixelArt,
 }
 
 public static class ImageCommands
@@ -135,7 +137,12 @@ public static class ImageCommands
         var bounds = layer.Surface.ExactContentBounds();
         if (bounds.IsEmpty || bounds.Width <= 0 || bounds.Height <= 0) return result;
 
-        using var src = ReadRegion(layer.Surface, bounds);
+        using var region = ReadRegion(layer.Surface, bounds);
+        // 像素圖：先用 Scale2x／3x 疊到不小於目標倍率，再（必要時）縮回精確尺寸；整數倍時一格不差
+        var passes = resample == ResampleMode.PixelArt ? Documents.PixelArtScale.PlanPasses(Math.Max(sx, sy)) : [];
+        var upscaled = passes.Length > 0;
+        using var scaled = upscaled ? Documents.PixelArtScale.Upscale(region, passes) : null;
+        var src = scaled ?? region;
         var docRect = new SKRect(
             (bounds.Left + layer.Offset.X) * sx, (bounds.Top + layer.Offset.Y) * sy,
             (bounds.Right + layer.Offset.X) * sx, (bounds.Bottom + layer.Offset.Y) * sy);
@@ -151,6 +158,9 @@ public static class ImageCommands
                    {
                        ResampleMode.Nearest => SKFilterQuality.None,
                        ResampleMode.Bilinear => SKFilterQuality.Low,
+                       // 疊出來剛好是目標尺寸就直接搬，不然會被雙三次再糊一次
+                       ResampleMode.PixelArt when upscaled && src.Width == dstRect.Width && src.Height == dstRect.Height
+                           => SKFilterQuality.None,
                        _ => SKFilterQuality.High, // 雙三次（含縮小時的 mipmap）
                    },
                    IsAntialias = resample != ResampleMode.Nearest,

@@ -6,8 +6,8 @@ namespace MinePainter.Core.Effects;
 public readonly record struct GradientStop(float Position, SKColor Color);
 
 /// <summary>
-/// 多節點漸層（不可變）：節點依位置排序，至少一個。兩節點之間線性內插 RGBA，
-/// 首節點之前／末節點之後取端點色。存檔格式："pos:AARRGGBB;pos:AARRGGBB;…"。
+/// 多節點漸層（不可變）：節點依位置排序，至少一個。兩節點之間在 OKLab 內插（alpha 線性），
+/// 中段不會像 sRGB 內插那樣發灰；首節點之前／末節點之後取端點色。存檔格式："pos:AARRGGBB;pos:AARRGGBB;…"。
 /// </summary>
 public sealed class GradientStops : IEquatable<GradientStops>
 {
@@ -46,11 +46,7 @@ public sealed class GradientStops : IEquatable<GradientStops>
         return Lerp(a.Color, b.Color, f);
     }
 
-    private static SKColor Lerp(SKColor a, SKColor b, float f) => new(
-        (byte)Math.Round(a.Red + (b.Red - a.Red) * f),
-        (byte)Math.Round(a.Green + (b.Green - a.Green) * f),
-        (byte)Math.Round(a.Blue + (b.Blue - a.Blue) * f),
-        (byte)Math.Round(a.Alpha + (b.Alpha - a.Alpha) * f));
+    private static SKColor Lerp(SKColor a, SKColor b, float f) => Adjustments.OkLab.Lerp(a, b, f);
 
     /// <summary>查表：size 格（含兩端）。</summary>
     public SKColor[] BuildLut(int size = 257)

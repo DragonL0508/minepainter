@@ -19,7 +19,8 @@ public sealed record TextGradient
     /// </summary>
     public SKShader CreateShader(SKRect block)
     {
-        SKColor[] colors = [Start, End];
+        // Skia 的著色器只會在 sRGB 內插，所以先在 OKLab 取好一串中間色餵給它（與 GradientStops 同一套規則）
+        var colors = Adjustments.OkLab.Ramp(Start, End, 17);
         if (Radial)
         {
             var radius = Math.Max(1f, Math.Max(block.Width, block.Height) / 2f);
