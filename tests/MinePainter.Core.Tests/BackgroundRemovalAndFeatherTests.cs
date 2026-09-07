@@ -25,33 +25,65 @@ public class BackgroundRemovalAndFeatherTests
         return a;
     }
 
-    // ---- 羽化物件（照 BoltBait Feather Object：模糊 alpha，物件內保留原色） ----
+    // ---- 羽化物件：削去最外圍 R px，再柔邊 S px，內部不動 ----
 
     [Fact]
-    public void Feather_EdgeStaysAboutHalf_FadesInwardOverRadius_LeavesInteriorUntouched()
+    public void Feather_ErodesOuterPixelsCompletely_ThenShortRamp_InteriorUntouched()
     {
         const int w = 64, h = 64;
-        // 內容在 x = 12..51，左邊界線落在 x = 11 與 12 之間
+        // 內容在 x = 12..51；最外圍那一格是 x = 12
         var src = Canvas(w, h, (x, y) => x is >= 12 and < 52 && y is >= 12 and < 52 ? Premul(0, 0, 255, 255) : 0);
-        var fx = new ObjectFeatherEffect { Radius = 8, Strength = 100 };
+        var fx = new ObjectFeatherEffect { Radius = 2, Softness = 4, Strength = 100 };
         var ctx = EffectContext.FromPixels(src, w, h, fx.SourceMargin);
         fx.Render(ctx);
 
-        // 離邊緣比寬度遠的內部一格都不動
-        Assert.Equal(255, A(ctx.Dst[32 * w + 32]));
-        Assert.Equal(255, A(ctx.Dst[32 * w + 21]));
-
-        // BoltBait 的招牌手感：直邊最外圍那一格剩約一半（不是幾乎透明），往內單調回到不透明
-        var edge = A(ctx.Dst[32 * w + 12]);
-        Assert.InRange(edge, 100, 170);
-        for (var x = 12; x < 20; x++)
+        // 削去 2：最外圍兩格真的沒了（不是變淡）
+        Assert.Equal(0u, ctx.Dst[32 * w + 12]);
+        Assert.Equal(0u, ctx.Dst[32 * w + 13]);
+        // 柔邊 4：接下來單調回到不透明
+        for (var x = 14; x < 18; x++)
             Assert.True(A(ctx.Dst[32 * w + x]) < A(ctx.Dst[32 * w + x + 1]), $"x={x} 不單調");
-        // 中段是模糊核的累積曲線：邊緣往內 R/2 處已經明顯比一半高
-        Assert.True(A(ctx.Dst[32 * w + 16]) > 200, $"mid {A(ctx.Dst[32 * w + 16])}");
-
-        // 只往內啃、不往外長：邊緣外面仍是空的（BoltBait 會長一圈模糊尾巴，這裡刻意不要）
+        // 削去＋柔邊之外：一格都不動（使用者：內部不透明度不能被拉低）
+        Assert.Equal(255, A(ctx.Dst[32 * w + 19]));
+        Assert.Equal(255, A(ctx.Dst[32 * w + 32]));
+        // 外面不長
         Assert.Equal(0u, ctx.Dst[32 * w + 11]);
-        Assert.Equal(0u, ctx.Dst[32 * w + 5]);
+    }
+
+    [Fact]
+    public void Feather_SoftnessZero_IsAHardCutWithOnePixelAntialias()
+    {
+        const int w = 64, h = 64;
+        var src = Canvas(w, h, (x, y) => x is >= 12 and < 52 && y is >= 12 and < 52 ? Premul(0, 0, 255, 255) : 0);
+        var fx = new ObjectFeatherEffect { Radius = 3, Softness = 0 };
+        var ctx = EffectContext.FromPixels(src, w, h, fx.SourceMargin);
+        fx.Render(ctx);
+        Assert.Equal(0u, ctx.Dst[32 * w + 14]);          // 第三格也被吃掉
+        Assert.Equal(255, A(ctx.Dst[32 * w + 16]));       // 之後就是原本的
+        var semi = 0;
+        for (var x = 12; x < 20; x++) if (A(ctx.Dst[32 * w + x]) is > 0 and < 255) semi++;
+        Assert.True(semi <= 1, $"半透明的過渡有 {semi} 格，柔邊 0 應該只留一格抗鋸齒");
+    }
+
+    [Fact]
+    public void Feather_EatsBackgroundColoredFringe_KeepsBodyOpaque()
+    {
+        // 去背殘留：物件最外一圈是 alpha 40 的背景灰；削去 1 就把那圈整個吃掉，主體一格不動
+        const int w = 48, h = 48;
+        var src = Canvas(w, h, (x, y) =>
+        {
+            if (x is < 11 or >= 37 || y is < 11 or >= 37) return 0u;
+            var fringe = x is 11 or 36 || y is 11 or 36;
+            return fringe ? Premul(200, 200, 200, 40) : Premul(0, 0, 255, 255);
+        });
+        var fx = new ObjectFeatherEffect { Radius = 1, Softness = 2 };
+        var ctx = EffectContext.FromPixels(src, w, h, fx.SourceMargin);
+        fx.Render(ctx);
+        Assert.Equal(0u, ctx.Dst[24 * w + 11]);                       // 毛邊沒了
+        Assert.Equal(0u, ctx.Dst[11 * w + 24]);
+        Assert.True(A(ctx.Dst[24 * w + 12]) > 0);                     // 主體最外圍還在（柔邊裡）
+        Assert.Equal(Premul(0, 0, 255, 255), ctx.Dst[24 * w + 15]);   // 主體離邊 3 格以上原封不動
+        Assert.Equal(Premul(0, 0, 255, 255), ctx.Dst[24 * w + 24]);
     }
 
     [Fact]
@@ -59,7 +91,7 @@ public class BackgroundRemovalAndFeatherTests
     {
         const int w = 64, h = 64;
         var src = Canvas(w, h, (x, y) => x is >= 12 and < 52 && y is >= 12 and < 52 ? Premul(0, 0, 255, 255) : 0);
-        var fx = new ObjectFeatherEffect { Radius = 10 };
+        var fx = new ObjectFeatherEffect { Radius = 2, Softness = 6 };
         var ctx = EffectContext.FromPixels(src, w, h, fx.SourceMargin);
         fx.Render(ctx);
 
@@ -73,10 +105,10 @@ public class BackgroundRemovalAndFeatherTests
         }
         Assert.True(after < before, "羽化沒有啃掉任何像素");
 
-        // 半透明的邊緣像素顏色仍是原本的紅
-        var edge = ctx.Dst[32 * w + 14];
+        // 柔邊裡的半透明像素顏色仍是原本的紅
+        var edge = ctx.Dst[32 * w + 16];
         Unpremul(edge, out var b, out var g, out var r, out var a);
-        Assert.True(a > 0);
+        Assert.True(a is > 0 and < 255, $"alpha {a}");
         Assert.InRange(r, 240, 255);
         Assert.InRange(g, 0, 12);
         Assert.InRange(b, 0, 12);
@@ -87,26 +119,13 @@ public class BackgroundRemovalAndFeatherTests
     {
         const int w = 48, h = 48;
         var src = Canvas(w, h, (x, y) => x is >= 12 and < 36 && y is >= 12 and < 36 ? Premul(0, 0, 255, 128) : 0);
-        var fx = new ObjectFeatherEffect { Radius = 8 };
+        var fx = new ObjectFeatherEffect { Radius = 2, Softness = 2 };
         var ctx = EffectContext.FromPixels(src, w, h, fx.SourceMargin);
         fx.Render(ctx);
 
-        Assert.Equal(128, A(ctx.Dst[24 * w + 24]));           // 內部原樣
-        Assert.InRange(A(ctx.Dst[24 * w + 12]), 50, 90);      // 邊緣剩約一半（相對於自己的 128）
+        Assert.Equal(128, A(ctx.Dst[24 * w + 24]));           // 內部原樣（整片半透明不算邊）
+        Assert.Equal(0u, ctx.Dst[24 * w + 12]);               // 最外圍被吃掉
         Assert.Equal(0u, ctx.Dst[24 * w + 11]);               // 外面不長
-    }
-
-    [Fact]
-    public void Feather_AntiAliasedEdgePixel_NeverGetsMoreOpaque()
-    {
-        // 抗鋸齒的最外圍一格 alpha 40：模糊後鄰居的濃度會把它拉高，照抄 BoltBait 細邊會變厚；這裡只降不升
-        const int w = 48, h = 48;
-        var src = Canvas(w, h, (x, y) =>
-            x is >= 12 and < 36 && y is >= 12 and < 36 ? Premul(0, 0, 255, x == 12 ? 40 : 255) : 0);
-        var fx = new ObjectFeatherEffect { Radius = 2 };
-        var ctx = EffectContext.FromPixels(src, w, h, fx.SourceMargin);
-        fx.Render(ctx);
-        Assert.True(A(ctx.Dst[24 * w + 12]) <= 40, $"AA edge {A(ctx.Dst[24 * w + 12])}");
     }
 
     [Fact]
@@ -114,12 +133,12 @@ public class BackgroundRemovalAndFeatherTests
     {
         const int w = 32, h = 32;
         var src = Canvas(w, h, (x, y) => x >= 8 && x < 24 && y >= 8 && y < 24 ? Premul(0, 0, 255, 255) : 0);
-        var full = new ObjectFeatherEffect { Radius = 6, Strength = 100 };
+        var full = new ObjectFeatherEffect { Radius = 2, Softness = 4, Strength = 100 };
         var ctx = EffectContext.FromPixels(src, w, h, full.SourceMargin);
         full.Render(ctx);
         var strong = A(ctx.Dst[16 * w + 9]);
 
-        var half = new ObjectFeatherEffect { Radius = 6, Strength = 50 };
+        var half = new ObjectFeatherEffect { Radius = 2, Softness = 4, Strength = 50 };
         ctx = EffectContext.FromPixels(src, w, h, half.SourceMargin);
         half.Render(ctx);
         var mild = A(ctx.Dst[16 * w + 9]);
@@ -127,7 +146,7 @@ public class BackgroundRemovalAndFeatherTests
         Assert.True(mild > strong);          // 強度越低，邊緣越接近原本的不透明
         Assert.True(mild < 255);
 
-        var none = new ObjectFeatherEffect { Radius = 6, Strength = 0 };
+        var none = new ObjectFeatherEffect { Radius = 2, Softness = 4, Strength = 0 };
         ctx = EffectContext.FromPixels(src, w, h, none.SourceMargin);
         none.Render(ctx);
         Assert.Equal(src, ctx.Dst);          // 強度 0 = 原封不動
@@ -138,15 +157,15 @@ public class BackgroundRemovalAndFeatherTests
     {
         const int w = 32, h = 32;
         var src = Canvas(w, h, (_, _) => Premul(0, 0, 255, 255));
-        var keep = new ObjectFeatherEffect { Radius = 6, FeatherCanvasEdge = false };
+        var keep = new ObjectFeatherEffect { Radius = 2, Softness = 2, FeatherCanvasEdge = false };
         var ctx = EffectContext.FromPixels(src, w, h, keep.SourceMargin);
         keep.Render(ctx);
         Assert.Equal(255, A(ctx.Dst[0]));
 
-        var fade = new ObjectFeatherEffect { Radius = 6, FeatherCanvasEdge = true };
+        var fade = new ObjectFeatherEffect { Radius = 2, Softness = 2, FeatherCanvasEdge = true };
         ctx = EffectContext.FromPixels(src, w, h, fade.SourceMargin);
         fade.Render(ctx);
-        Assert.True(A(ctx.Dst[0]) < 110, $"corner {A(ctx.Dst[0])}");   // 貼畫布邊的角落被啃掉（兩個方向各剩一半）
+        Assert.Equal(0u, ctx.Dst[0]);               // 貼畫布邊的角落被吃掉
         Assert.Equal(255, A(ctx.Dst[8 * w + 8]));   // 離邊夠遠的地方完全不動
     }
 
