@@ -225,9 +225,11 @@ public class RemoveBgTests : IDisposable
     /// 遮罩經原圖引導濾波後邊緣貼回真實邊界（方塊內緣不透明、外緣透明）。
     /// </summary>
     [Fact]
-    public void Command_RemoveBg_PreviewSize_KeepsOriginalPixels_AndSnapsMaskToRealEdge()
+    public void Command_RemoveBg_PreviewSize_KeepsOriginalPixels_MaskIsServersUpscaled()
     {
-        // 伺服器：把圖縮到 1/4、回一個每邊比真實方塊多包 6px 的方形遮罩（模擬低解析度的邊緣誤差），顏色全塗成綠色
+        // 伺服器：把圖縮到 1/4、回一個每邊比真實方塊多包 6px 的方形遮罩，顏色全塗成綠色。
+        // 之前會用原圖做引導濾波把多包的那圈修掉；2026-09-07 起 remove.bg 的遮罩照用（引導濾波在毛茸茸的
+        // 物件上會產生塊狀毛邊），所以多包的那圈會留下 —— 這是刻意的，範圍由伺服器決定
         _server.Respond = png =>
         {
             using var src = SKBitmap.Decode(png);
@@ -273,9 +275,10 @@ public class RemoveBgTests : IDisposable
         Assert.Equal(0xFF141EA0u, PixelAt(layer, 128, 128));
         Assert.Equal(255, AlphaAt(layer, 90, 90));   // 方塊內緣：不透明
         Assert.Equal(255, AlphaAt(layer, 165, 128));
-        // 伺服器遮罩多包的那圈背景（方塊外 3px）被原圖引導精修掉
-        Assert.True(AlphaAt(layer, 171, 128) < 60, $"outside {AlphaAt(layer, 171, 128)}");
-        Assert.True(AlphaAt(layer, 128, 171) < 60, $"outside {AlphaAt(layer, 128, 171)}");
+        // 伺服器遮罩多包的那圈（方塊外 3px）照它的：放大 4 倍後是約 8px 寬的軟邊，方塊外仍留著明顯的 alpha
+        Assert.True(AlphaAt(layer, 171, 128) >= 100, $"outside {AlphaAt(layer, 171, 128)}");
+        Assert.True(AlphaAt(layer, 128, 171) >= 100, $"outside {AlphaAt(layer, 128, 171)}");
+        Assert.Equal(0, AlphaAt(layer, 182, 128));
         Assert.Equal(0, AlphaAt(layer, 250, 250));
     }
 

@@ -23,9 +23,10 @@ public sealed record RemoveBgOptions(IReadOnlyList<string> ApiKeys, RemoveBgSize
 /// remove.bg 的回應：<see cref="Alpha"/> 是縮回來源尺寸的前景遮罩（0..255），
 /// <see cref="ServerWidth"/>／<see cref="ServerHeight"/> 是伺服器實際回的解析度（沒點數時只給預覽尺寸）。
 /// <see cref="Pixels"/> 是伺服器回的整張結果（premul BGRA，來源尺寸）—— 伺服器已把邊緣像素的背景色
-/// 去掉（去汙染），只有它跟來源同尺寸時才有；縮過的回 null（放大回來的顏色是糊的，不能用）。
+/// 去掉（去汙染）。伺服器回的比較小時是高品質放大回來的：內部的顏色糊了不能用（呼叫端改拿原圖），
+/// 但邊緣那一圈半透明像素本來就該用它去汙染過的顏色 —— 拿原圖的話會混到背景色、留一圈毛邊。
 /// </summary>
-public sealed record RemoveBgResult(byte[] Alpha, int ServerWidth, int ServerHeight, uint[]? Pixels = null)
+public sealed record RemoveBgResult(byte[] Alpha, int ServerWidth, int ServerHeight, uint[] Pixels)
 {
     /// <summary>伺服器回的圖比來源小（預覽解析度、或超過 25 MP）。</summary>
     public bool Downscaled(int width, int height) => ServerWidth < width || ServerHeight < height;
@@ -137,15 +138,15 @@ public static class RemoveBgClient
         for (var y = 0; y < height; y++)
             new ReadOnlySpan<byte>(basePtr + y * output.RowBytes, width).CopyTo(alpha.AsSpan(y * width, width));
 
-        // 同尺寸：整張結果留下來（顏色已去汙染），呼叫端拿它的顏色、我們的遮罩
-        uint[]? pixels = null;
-        if (big == null)
-        {
-            pixels = new uint[width * height];
-            var dp = (byte*)decoded.GetPixels();
-            for (var y = 0; y < height; y++)
-                new ReadOnlySpan<uint>(dp + y * decoded.RowBytes, width).CopyTo(pixels.AsSpan(y * width, width));
-        }
+        // 整張結果留下來（顏色已去汙染）；縮過的以高品質放大回來源尺寸（premul 下放大，半透明邊不會混進黑）
+        using var bigColor = big == null ? null
+            : decoded.Resize(new SKImageInfo(width, height, SKColorType.Bgra8888, SKAlphaType.Premul), SKFilterQuality.High)
+              ?? throw new InvalidOperationException("縮放 remove.bg 結果失敗");
+        var color = bigColor ?? decoded;
+        var pixels = new uint[width * height];
+        var cp = (byte*)color.GetPixels();
+        for (var y = 0; y < height; y++)
+            new ReadOnlySpan<uint>(cp + y * color.RowBytes, width).CopyTo(pixels.AsSpan(y * width, width));
         return new RemoveBgResult(alpha, decoded.Width, decoded.Height, pixels);
     }
 

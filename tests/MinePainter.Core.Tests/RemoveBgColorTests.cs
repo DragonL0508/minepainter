@@ -143,21 +143,41 @@ public class RemoveBgColorTests : IDisposable
     }
 
     [Fact]
-    public void 伺服器只回預覽解析度_顏色仍用原圖()
+    public void 伺服器只回預覽解析度_內部用原圖_邊緣一圈用它的顏色_不做引導濾波()
     {
+        // 使用者 2026-09-07 拿浣熊照比對：預覽遮罩放大後跑引導濾波＋填實，邊緣變成一塊塊毛邊；
+        // 現在遮罩就是它放大回來的軟邊，內部像素是原圖，邊上半透明那圈用它去汙染過的顏色
         RemoveBgClient.HandlerFactory = () => new FakeServer(png => GreenCircle(png, scale: 0.25f));
         var (session, layer) = GrayDocument();
         using (session)
         {
             Assert.True(BackgroundRemovalCommand.Run(session, layer, new BackgroundRemovalOptions
             {
-                RemoveBg = new RemoveBgOptions("k", RemoveBgSize.Preview), HardEdge = false, SolidCore = false,
+                RemoveBg = new RemoveBgOptions("k", RemoveBgSize.Preview),
             }));
-            // 縮過的顏色是糊的，不能用：留原圖的灰（R = G，不是伺服器的綠）；軟遮罩經引導濾波後中心可能差 1
-            var p = PixelAt(layer, 128, 128);
-            Assert.True(p >> 24 >= 250, $"alpha {p >> 24}");
-            Assert.Equal((p >> 16) & 0xFF, (p >> 8) & 0xFF);
-            Assert.True(((p >> 8) & 0xFF) >= 190, $"pixel {p:X8}");
+            // 內部：原圖的灰、完全不透明
+            Assert.Equal(0xFFC8C8C8u, PixelAt(layer, 128, 128));
+            // 圓周：放大 4 倍的軟邊約 8px 寬，中間那格半透明、顏色是伺服器的綠（premul 後 G = alpha、R = 0）
+            var found = false;
+            for (var x = 128 + 54; x <= 128 + 66 && !found; x++)
+            {
+                var p = PixelAt(layer, x, 128);
+                var a = p >> 24;
+                if (a is 0 or 255) continue;
+                Assert.Equal(0u, (p >> 16) & 0xFF);
+                Assert.InRange((int)((p >> 8) & 0xFF), (int)a - 2, (int)a + 1);
+                found = true;
+            }
+            Assert.True(found, "圓周上沒有半透明的過渡像素：軟邊被丟掉了");
+            // 遮罩單調：從內到外 alpha 不會忽高忽低（引導濾波跟著紋理走就會）
+            var prev = 256u;
+            for (var x = 128 + 50; x <= 128 + 70; x++)
+            {
+                var a = PixelAt(layer, x, 128) >> 24;
+                Assert.True(a <= prev, $"x={x} alpha {a} > {prev}");
+                prev = a;
+            }
+            Assert.Equal(0u, PixelAt(layer, 5, 5));
         }
     }
 

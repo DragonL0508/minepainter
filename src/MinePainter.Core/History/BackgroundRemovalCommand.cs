@@ -11,8 +11,10 @@ public sealed record BackgroundRemovalOptions
 {
     /// <summary>
     /// remove.bg 線上服務（同 paint.net 的 Remove Background 插件）；null＝本機演算（<see cref="GrabCut"/>）。
-    /// 伺服器回全解析度時連它去汙染過的顏色一起用；只回預覽解析度（或本機演算）時只有遮罩、顏色仍是原圖，
-    /// 遮罩是低解析度放大來的就用原圖做引導濾波貼回真實邊緣。
+    /// 伺服器回全解析度時整張照用；只回預覽解析度時遮罩與邊緣顏色用它放大回來的、內部像素用原圖
+    /// （見 <see cref="MergeServerFringe"/>）。remove.bg 的結果一律不做引導濾波、不填實、不硬邊：
+    /// 使用者 2026-09-07 拿浣熊照比對，App 這邊的邊緣是一塊塊毛邊、網站的是乾淨柔邊 —— 塊狀毛邊就是
+    /// 引導濾波在毛茸茸的深色物件上跟著紋理走、再被邊帶對比二值化出來的。本機演算（GrabCut）才走引導濾波。
     /// </summary>
     public RemoveBgOptions? RemoveBg { get; init; }
     /// <summary>引導濾波精修半徑（全解析度 px；一律精修，見 <see cref="GuidedFilter"/>）。</summary>
@@ -158,6 +160,7 @@ public static class BackgroundRemovalCommand
             // ---- 3. 推論 + 後處理（鎖外）----
             byte[] mask;
             uint[]? serverPixels;
+            var fullRes = false;
             LayerPixelSource? sourceAfter;
             var hiResRegion = sourceBefore != null && sourceBefore.SourcePixelsPerLayerPixel >= HiResThreshold
                 ? sourceBefore.SourceRegionFor(crop)
@@ -172,7 +175,7 @@ public static class BackgroundRemovalCommand
                     for (var i = 0; i < sourcePixels.Length; i++)
                         if (sourceCoverage[i] != 255) sourcePixels[i] = Scale(sourcePixels[i], sourceCoverage[i]);
 
-                var (sourceMask, serverSource) = ComputeMask(sourcePixels, hiResRegion.Width, hiResRegion.Height, sourceCoverage, options,
+                var (sourceMask, serverSource, serverFullRes) = ComputeMask(sourcePixels, hiResRegion.Width, hiResRegion.Height, sourceCoverage, options,
                     shift: (int)MathF.Round(options.Shift * ratio), ct);
                 var sourceBase = serverSource != null ? WithServerColors(sourcePixels, serverSource) : sourcePixels;
                 if (options.HardEdge)
@@ -185,7 +188,8 @@ public static class BackgroundRemovalCommand
                 }
                 else if (serverSource != null)
                 {
-                    sourceAfter = sourceBefore.WithRegionPixels(hiResRegion, ServerWithAlpha(serverSource, sourceMask), ct);
+                    var merged = serverFullRes ? ServerWithAlpha(serverSource, sourceMask) : MergeServerFringe(sourcePixels, serverSource, sourceMask);
+                    sourceAfter = sourceBefore.WithRegionPixels(hiResRegion, merged, ct);
                 }
                 else
                 {
@@ -198,7 +202,7 @@ public static class BackgroundRemovalCommand
             }
             else
             {
-                (mask, serverPixels) = ComputeMask(pixels, crop.Width, crop.Height, coverage, options, options.Shift, ct);
+                (mask, serverPixels, fullRes) = ComputeMask(pixels, crop.Width, crop.Height, coverage, options, options.Shift, ct);
                 // 原始高清來源也套同一份遮罩（依來源矩陣反查、雙線性取樣），成為新的來源
                 sourceAfter = sourceBefore?.Masked(crop, mask, ct: ct);
             }
@@ -214,7 +218,7 @@ public static class BackgroundRemovalCommand
             }
             else if (serverPixels != null)
             {
-                layerPixels = ServerWithAlpha(serverPixels, mask);
+                layerPixels = fullRes ? ServerWithAlpha(serverPixels, mask) : MergeServerFringe(pixels, serverPixels, mask);
             }
             ct.ThrowIfCancellationRequested();
 
@@ -303,12 +307,13 @@ public static class BackgroundRemovalCommand
     }
 
     /// <summary>
-    /// 一塊像素 → 前景遮罩：模型（remove.bg 或本機 GrabCut）給機率圖，低解析度放大來的用原圖引導濾波貼回邊緣，
-    /// 再做內部填實、對比、收縮／擴張、乘上選取覆蓋度。太大的圖先縮到 <see cref="MaxModelPixels"/> 以內送模型。
-    /// 回傳的 ServerPixels 是 remove.bg 回的整張結果（與 pixels 同尺寸、顏色已去汙染），只有伺服器回全解析度、
-    /// 而且沒有先縮小送出時才有。
+    /// 一塊像素 → 前景遮罩。remove.bg：它的 alpha 就是遮罩（縮過的高品質放大回來，不做引導濾波、不填實）；
+    /// 本機 GrabCut：機率圖，低解析度放大來的用原圖引導濾波貼回邊緣，再做內部填實。
+    /// 之後共同做對比、收縮／擴張、乘上選取覆蓋度。太大的圖先縮到 <see cref="MaxModelPixels"/> 以內送模型。
+    /// 回傳的 ServerPixels 是 remove.bg 回的整張結果（與 pixels 同尺寸、premul、顏色已去汙染）；
+    /// ServerFullRes = 伺服器回的就是這個尺寸（沒縮過），整張可以照用。
     /// </summary>
-    private static (byte[] Mask, uint[]? ServerPixels) ComputeMask(uint[] pixels, int width, int height, byte[]? coverage,
+    private static (byte[] Mask, uint[]? ServerPixels, bool ServerFullRes) ComputeMask(uint[] pixels, int width, int height, byte[]? coverage,
         BackgroundRemovalOptions options, int shift, CancellationToken ct)
     {
         var area = (long)width * height;
@@ -318,12 +323,14 @@ public static class BackgroundRemovalCommand
         byte[] model;
         bool refine;
         uint[]? serverPixels = null;
+        var serverFullRes = false;
         if (options.RemoveBg is { } remote)
         {
             var result = RemoveBgClient.Cutout(modelPixels, modelW, modelH, remote, ct);
             model = result.Alpha;
-            refine = result.Downscaled(modelW, modelH);
-            if (ReferenceEquals(modelPixels, pixels)) serverPixels = result.Pixels;
+            refine = false;
+            serverPixels = ReferenceEquals(modelPixels, pixels) ? result.Pixels : Upscale(result.Pixels, modelW, modelH, width, height);
+            serverFullRes = ReferenceEquals(modelPixels, pixels) && !result.Downscaled(modelW, modelH);
         }
         else
         {
@@ -337,15 +344,15 @@ public static class BackgroundRemovalCommand
         {
             model = LayerPixelSource.ResampleMask(model, new SKRectI(0, 0, modelW, modelH),
                 SKMatrix.CreateScale(width / (float)modelW, height / (float)modelH), new SKRectI(0, 0, width, height));
-            refine = true;
+            refine = serverPixels == null;
         }
 
         // 精修半徑隨圖片大小放大：模型的一個像素在大圖上是好幾個像素
         var scale = Math.Max(1, (int)MathF.Ceiling(Math.Max(width, height) / 1024f));
         var radius = Math.Max(options.RefineRadius, 6 * scale);
         var mask = refine ? GuidedFilter.Refine(model, pixels, width, height, radius, ct: ct) : (byte[])model.Clone();
-        // 內部填實是給「機率圖」用的（本機演算、或預覽解析度放大後經引導濾波漏進內部紋理的）；
-        // remove.bg 回全解析度時內部本來就是實的，填實只會把它的軟邊以 0.5 二值化再推向 0／1，白白丟掉髮絲
+        // 內部填實是給「機率圖」用的（本機演算經引導濾波會漏進內部紋理）；
+        // remove.bg 的結果內部本來就是實的，填實只會把它的軟邊以 0.5 二值化再推向 0／1，白白丟掉髮絲
         if (options.SolidCore && serverPixels == null)
             mask = BackgroundRemover.SolidifyCore(mask, model, width, height, radius);
         BackgroundRemover.ApplyContrast(mask, options.Contrast);
@@ -353,7 +360,50 @@ public static class BackgroundRemovalCommand
         if (coverage != null)
             for (var i = 0; i < mask.Length; i++)
                 if (coverage[i] != 255) mask[i] = (byte)(mask[i] * coverage[i] / 255);
-        return (mask, serverPixels);
+        return (mask, serverPixels, serverFullRes);
+    }
+
+    /// <summary>
+    /// 伺服器回的比原圖小時的合成：遮罩全滿的內部用原圖像素（原解析度的細節），邊緣那一圈半透明像素用
+    /// 伺服器放大回來的去汙染顏色配上最後的遮罩 —— 邊上本來就是半透明，顏色糊一點看不出來，
+    /// 混到背景色的毛邊才看得出來。就是使用者說的「採用 remove.bg 的效果、但保留原圖解析度」。
+    /// </summary>
+    internal static uint[] MergeServerFringe(uint[] original, uint[] server, byte[] mask)
+    {
+        var output = new uint[original.Length];
+        for (var i = 0; i < output.Length; i++)
+        {
+            var m = mask[i];
+            if (m == 0) continue;
+            var o = original[i];
+            if (m == 255 || (server[i] >> 24) == 0)
+            {
+                output[i] = Scale(o, m);
+                continue;
+            }
+            var s = server[i];
+            var sa = s >> 24;
+            var r = Math.Min(255u, ((s >> 16) & 0xFF) * 255 / sa);
+            var g = Math.Min(255u, ((s >> 8) & 0xFF) * 255 / sa);
+            var b = Math.Min(255u, (s & 0xFF) * 255 / sa);
+            output[i] = ((uint)m << 24) | ((r * m / 255) << 16) | ((g * m / 255) << 8) | (b * m / 255);
+        }
+        return output;
+    }
+
+    /// <summary>premul 像素高品質放大到 (W, H)。</summary>
+    private static unsafe uint[] Upscale(uint[] pixels, int w, int h, int W, int H)
+    {
+        using var bmp = new SKBitmap(new SKImageInfo(w, h, SKColorType.Bgra8888, SKAlphaType.Premul));
+        fixed (uint* p = pixels)
+            Buffer.MemoryCopy(p, (void*)bmp.GetPixels(), (long)w * h * 4, (long)w * h * 4);
+        using var big = bmp.Resize(new SKImageInfo(W, H, SKColorType.Bgra8888, SKAlphaType.Premul), SKFilterQuality.High)
+            ?? throw new InvalidOperationException("放大 remove.bg 結果失敗");
+        var output = new uint[W * H];
+        var bp = (byte*)big.GetPixels();
+        for (var y = 0; y < H; y++)
+            new ReadOnlySpan<uint>(bp + y * big.RowBytes, W).CopyTo(output.AsSpan(y * W, W));
+        return output;
     }
 
     /// <summary>
