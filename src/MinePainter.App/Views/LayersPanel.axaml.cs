@@ -611,7 +611,6 @@ public partial class LayersPanel : UserControl
     private DropKind _dropKind;
     private Row? _dropRow;
     private Row? _pressRow;
-    private ListBoxItem? _highlightItem;
 
     /// <summary>
     /// 按下時如果按的是多選裡的一列，先記下整份選取 —— ListBox 會在按下的瞬間把選取收成只剩這一列，
@@ -631,9 +630,12 @@ public partial class LayersPanel : UserControl
     private static readonly IBrush GroupDropBrush =
         new SolidColorBrush(Color.FromArgb(0x40, 0x2A, 0x9D, 0xF4));
 
-    // 拉效果用紫色，跟搬圖層的藍色分開：一眼就知道現在拖的是哪一種東西
+    private static readonly IBrush GroupDropBorderBrush = AppTheme.AccentBrush;
+
+    // 拉效果用紫色，跟搬圖層的藍色分開：一眼就知道現在拖的是哪一種東西。
+    // 底色只是淡淡一層，真正指出落點的是外框 —— 一次只有一列有框，掃過去不會糊成一片
     private static readonly IBrush EffectDropBrush =
-        new SolidColorBrush(Color.FromArgb(0x55, 0x9B, 0x59, 0xD0));
+        new SolidColorBrush(Color.FromArgb(0x26, 0x9B, 0x59, 0xD0));
 
     private static readonly IBrush EffectBadgeBrush =
         new SolidColorBrush(Color.FromRgb(0x9B, 0x59, 0xD0));
@@ -830,8 +832,7 @@ public partial class LayersPanel : UserControl
         _dropKind = DropKind.None;
         _dropRow = null;
         DropIndicator.IsVisible = false;
-        _highlightItem?.ClearValue(BackgroundProperty);
-        _highlightItem = null;
+        DropRowHighlight.IsVisible = false;
         foreach (var row in _dragRows) row.Item.Opacity = 1;
         if (_pressRow != null) _pressRow.Item.Opacity = 1;
         _dragRows.Clear();
@@ -1045,15 +1046,12 @@ public partial class LayersPanel : UserControl
 
     private void ShowIndicator()
     {
-        _highlightItem?.ClearValue(BackgroundProperty);
-        _highlightItem = null;
+        DropRowHighlight.IsVisible = false;
         DropIndicator.IsVisible = false;
 
         if (_effectDrag)
         {
-            if (_effectTarget == null) return;
-            _highlightItem = _effectTarget.Item;
-            _highlightItem.Background = EffectDropBrush;
+            if (_effectTarget != null) HighlightRow(_effectTarget, EffectDropBrush, EffectBadgeBrush);
             return;
         }
 
@@ -1061,8 +1059,7 @@ public partial class LayersPanel : UserControl
 
         if (_dropKind == DropKind.Into)
         {
-            _highlightItem = _dropRow.Item;
-            _highlightItem.Background = GroupDropBrush;
+            HighlightRow(_dropRow, GroupDropBrush, GroupDropBorderBrush);
             return;
         }
 
@@ -1073,6 +1070,22 @@ public partial class LayersPanel : UserControl
         Canvas.SetTop(DropIndicator, Math.Clamp(y - 1.5, 0, LayerList.Bounds.Height - 3));
         DropIndicator.Width = Math.Max(0, LayerList.Bounds.Width - indent - 8);
         DropIndicator.IsVisible = true;
+    }
+
+    /// <summary>
+    /// 把「整列都是落點」的框畫在那一列上。用覆疊層而不是改 <c>ListBoxItem.Background</c> ——
+    /// 那個屬性有 160ms 的漸變（Animations.axaml），掃過一串列會留下一整排還在褪色的殘影。
+    /// </summary>
+    private void HighlightRow(Row row, IBrush fill, IBrush border)
+    {
+        if (row.Item.TranslatePoint(default, LayerList) is not { } pt) return;
+        DropRowHighlight.Background = fill;
+        DropRowHighlight.BorderBrush = border;
+        DropRowHighlight.Width = Math.Max(0, LayerList.Bounds.Width - 8);
+        DropRowHighlight.Height = row.Item.Bounds.Height;
+        Canvas.SetLeft(DropRowHighlight, 4);
+        Canvas.SetTop(DropRowHighlight, pt.Y);
+        DropRowHighlight.IsVisible = true;
     }
 
     private void CommitDrop(List<LayerNode> nodes, DropKind kind, Row? target)

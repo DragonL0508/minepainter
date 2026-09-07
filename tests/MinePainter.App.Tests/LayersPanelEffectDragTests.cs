@@ -109,6 +109,38 @@ public class LayersPanelEffectDragTests
         Assert.Equal(2, source.Effects.Count);
     }
 
+    /// <summary>
+    /// 落點框走覆疊層，不去改 ListBoxItem.Background —— 那個屬性有 160ms 的漸變
+    /// （Animations.axaml），改它的話掃過一串圖層會留下一整排還在褪色的紫色殘影
+    /// （使用者 2026-09-07 回報：「一堆圖層都會變成紫色」）。
+    /// </summary>
+    [AvaloniaFact]
+    public void 落點框只有一個_不去染ListBoxItem的背景()
+    {
+        var (window, panel, session, source, target) = Open();
+        using var _ = session;
+
+        var highlight = panel.GetVisualDescendants().OfType<Border>().First(b => b.Name == "DropRowHighlight");
+        Assert.False(highlight.IsVisible);
+
+        var from = CenterOf(window, panel, source);
+        window.MouseDown(from, MouseButton.Left, RawInputModifiers.Alt);
+        window.MouseMove(new Point(from.X, from.Y + 10), RawInputModifiers.LeftMouseButton | RawInputModifiers.Alt);
+        window.MouseMove(CenterOf(window, panel, target), RawInputModifiers.LeftMouseButton | RawInputModifiers.Alt);
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+
+        Assert.True(highlight.IsVisible, "指到目標圖層時要看得到落點框");
+        var targetItem = panel.GetVisualDescendants().OfType<ListBoxItem>().First(i => ReferenceEquals(i.Tag, target));
+        var top = targetItem.TranslatePoint(default, panel.GetVisualDescendants().OfType<ListBox>().First())!.Value.Y;
+        Assert.Equal(top, Canvas.GetTop(highlight), 1);
+        Assert.All(panel.GetVisualDescendants().OfType<ListBoxItem>(),
+            i => Assert.NotEqual(highlight.Background, i.Background));
+
+        window.MouseUp(CenterOf(window, panel, target), MouseButton.Left, RawInputModifiers.Alt);
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+        Assert.False(highlight.IsVisible, "放開之後落點框要收掉");
+    }
+
     [AvaloniaFact]
     public void Alt拖曳到自己身上不做事()
     {

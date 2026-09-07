@@ -35,6 +35,10 @@
         <!-- 空白處拖出來的框選範圍 -->
         <Border x:Name="Marquee" IsVisible="False" BorderThickness="1" CornerRadius="2"
                 BorderBrush="{x:Static app:AppTheme.AccentBrush}" Background="#302A9DF4" />
+        <!-- 落點是「整列」時的框（放進群組／把效果放到這一層）。
+             不去改 ListBoxItem.Background：那個屬性在 Animations.axaml 有 160ms 的漸變，
+             掃過一串列時每一列都在慢慢褪色，看起來就是「一堆圖層同時變色」。 -->
+        <Border x:Name="DropRowHighlight" IsVisible="False" CornerRadius="3" BorderThickness="2" />
         <Border x:Name="DropIndicator" Height="3" Background="{x:Static app:AppTheme.AccentBrush}" CornerRadius="1.5" IsVisible="False" />
       </Canvas>
     </Panel>

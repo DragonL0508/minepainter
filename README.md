@@ -84,7 +84,7 @@ release.bat 1.8.2           推標籤，GitHub Actions 跑測試、建置、出 
 - **動畫時長只從 `Controls/Motion.cs` 拿**：Quick 100ms（退場、按壓）、Base 160ms（進場、狀態）、Move 200ms（FLIP、指示器滑動）、Emphasis 240ms（toast）；進場 CubicEaseOut、退場 CubicEaseIn。不要寫死毫秒數。
 - **滾輪往上＝數值變小**（與拉條方向一致）；**拉條雙擊＝回預設值**；**彈出層一律置頂**。
 - **選單子清單點開後滑鼠移出不自動關**；按鈕下拉用 `ClickSubmenuMenuFlyout`。
-- **圖層面板的拖曳手勢**：直接拖＝搬圖層；**按住 Alt 拖＝把那一層的效果複製到落點圖層（疊加），再加 Shift＝取代**（Alt 在這個 App 一律是「複製」，同畫布上的 Alt 拖曳複製）。來源永遠保留自己的效果，複本拿新的 `Id`（兩層之後各改各的）。Alt 按下時要把 PointerPressed 吃掉、不讓 `ListBox` 動到選取 —— 不然 Alt+Shift 會被當成連選，把落點那一列也拖進來而失效。拖曳中角標與紫色高亮就是「按下去會發生什麼」的唯一真相，判斷用畫面上最後顯示的狀態，不是放開滑鼠那一刻的按鍵。守門：`LayersPanelEffectDragTests`、`EffectCopyBetweenLayersTests`。
+- **圖層面板的拖曳手勢**：直接拖＝搬圖層；**按住 Alt 拖＝把那一層的效果複製到落點圖層（疊加），再加 Shift＝取代**（Alt 在這個 App 一律是「複製」，同畫布上的 Alt 拖曳複製）。來源永遠保留自己的效果，複本拿新的 `Id`（兩層之後各改各的）。Alt 按下時要把 PointerPressed 吃掉、不讓 `ListBox` 動到選取 —— 不然 Alt+Shift 會被當成連選，把落點那一列也拖進來而失效。落點框走 `DragOverlay` 上的覆疊 Border，**不要去改 `ListBoxItem.Background`** —— 那個屬性在 `Animations.axaml` 有 160ms 漸變，掃過一串列會留下一整排還在褪色的殘影（2026-09-07 回報「一堆圖層都會變成紫色」）。拖曳中角標與落點框就是「放開會發生什麼」的唯一真相，判斷用畫面上最後顯示的狀態，不是放開滑鼠那一刻的按鍵。守門：`LayersPanelEffectDragTests`、`EffectCopyBetweenLayersTests`。
 - **文字精簡繁中**：選單、toast、對話框都是一句話講完，技術詞（remove.bg、API Key）保留原文。
 - **使用者設定都在 `Services/AppSettings`**，改完 `Save()`；不要各自存檔。
 - **回饋用 toast（`Toasts.Show`）**，不用 MessageBox；會擋住流程的才開對話框。
