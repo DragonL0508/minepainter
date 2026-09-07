@@ -88,8 +88,11 @@ public sealed class AppSettings
     /// <summary>去背邊緣收縮（負）／擴張（正）px。</summary>
     public int RemoveBgShift { get; set; }
 
-    /// <summary>去背後硬邊切出：沒有半透明毛邊、邊緣去背景色汙染（預設開）。</summary>
-    public bool RemoveBgHardEdge { get; set; } = true;
+    /// <summary>
+    /// 去背後硬邊切出：沒有半透明毛邊、邊緣去背景色汙染（預設關；預設照 remove.bg 的結果原樣）。
+    /// 欄位名從 RemoveBgHardEdge 換掉，是為了讓舊設定檔裡存的 true 失效、大家都回到新的預設；舊鍵讀檔時會被忽略。
+    /// </summary>
+    public bool RemoveBgHardEdgeCut { get; set; }
 
     /// <summary>主視窗啟動時最大化（預設是）。</summary>
     public bool WindowMaximized { get; set; } = true;

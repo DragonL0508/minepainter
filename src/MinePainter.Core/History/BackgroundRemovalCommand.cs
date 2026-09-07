@@ -27,10 +27,12 @@ public sealed record BackgroundRemovalOptions
     /// <summary>邊緣收縮（負）／擴張（正）px。</summary>
     public int Shift { get; init; }
     /// <summary>
-    /// 硬邊切出（預設開）：遮罩切成二值、清碎片補洞、輪廓磨圓，邊緣只留一像素寬的抗鋸齒，
+    /// 硬邊切出（預設關）：遮罩切成二值、清碎片補洞、輪廓磨圓，邊緣只留一像素寬的抗鋸齒，
     /// 邊上被背景汙染的顏色換成內部的顏色 —— 結果沒有半透明的毛邊（見 <see cref="HardEdgeCut"/>）。
+    /// 預設關：remove.bg 回全解析度時它的 PNG 就是網站上看到的結果，軟邊、髮絲都是它算好的；
+    /// 硬邊會把這些以 0.5 二值化後重畫成 1px 邊，跟網站比起來反而「邊緣不乾淨」（使用者 2026-09-07 回報）。
     /// </summary>
-    public bool HardEdge { get; init; } = true;
+    public bool HardEdge { get; init; }
     /// <summary>
     /// 只處理選取範圍（doc 座標；null = 整個圖層）。
     /// 有給時只把選取範圍內的像素送進模型（範圍外對模型是黑），模型的解析度全用在使用者圈出的物件上；
@@ -183,7 +185,7 @@ public static class BackgroundRemovalCommand
                 }
                 else if (serverSource != null)
                 {
-                    sourceAfter = sourceBefore.WithRegionPixels(hiResRegion, Multiply(sourceBase, sourceMask), ct);
+                    sourceAfter = sourceBefore.WithRegionPixels(hiResRegion, ServerWithAlpha(serverSource, sourceMask), ct);
                 }
                 else
                 {
@@ -212,7 +214,7 @@ public static class BackgroundRemovalCommand
             }
             else if (serverPixels != null)
             {
-                layerPixels = Multiply(basePixels, mask);
+                layerPixels = ServerWithAlpha(serverPixels, mask);
             }
             ct.ThrowIfCancellationRequested();
 
@@ -342,7 +344,9 @@ public static class BackgroundRemovalCommand
         var scale = Math.Max(1, (int)MathF.Ceiling(Math.Max(width, height) / 1024f));
         var radius = Math.Max(options.RefineRadius, 6 * scale);
         var mask = refine ? GuidedFilter.Refine(model, pixels, width, height, radius, ct: ct) : (byte[])model.Clone();
-        if (options.SolidCore)
+        // 內部填實是給「機率圖」用的（本機演算、或預覽解析度放大後經引導濾波漏進內部紋理的）；
+        // remove.bg 回全解析度時內部本來就是實的，填實只會把它的軟邊以 0.5 二值化再推向 0／1，白白丟掉髮絲
+        if (options.SolidCore && serverPixels == null)
             mask = BackgroundRemover.SolidifyCore(mask, model, width, height, radius);
         BackgroundRemover.ApplyContrast(mask, options.Contrast);
         mask = BackgroundRemover.Shift(mask, width, height, shift);
@@ -350,6 +354,28 @@ public static class BackgroundRemovalCommand
             for (var i = 0; i < mask.Length; i++)
                 if (coverage[i] != 255) mask[i] = (byte)(mask[i] * coverage[i] / 255);
         return (mask, serverPixels);
+    }
+
+    /// <summary>
+    /// 伺服器的結果配上最後的遮罩：遮罩沒被動過（對比 0、收縮 0、沒有選取）時就是伺服器回的 PNG 原樣，
+    /// 跟 remove.bg 網站上看到的一模一樣。之前是「原圖 alpha × 遮罩」再套伺服器顏色，原圖本身半透明時 alpha 會乘兩次。
+    /// </summary>
+    internal static uint[] ServerWithAlpha(uint[] server, byte[] mask)
+    {
+        var output = new uint[server.Length];
+        for (var i = 0; i < output.Length; i++)
+        {
+            var s = server[i];
+            var sa = s >> 24;
+            var m = mask[i];
+            if (sa == 0 || m == 0) continue;
+            if (m == sa) { output[i] = s; continue; }
+            var r = Math.Min(255u, ((s >> 16) & 0xFF) * 255 / sa);
+            var g = Math.Min(255u, ((s >> 8) & 0xFF) * 255 / sa);
+            var b = Math.Min(255u, (s & 0xFF) * 255 / sa);
+            output[i] = ((uint)m << 24) | ((r * m / 255) << 16) | ((g * m / 255) << 8) | (b * m / 255);
+        }
+        return output;
     }
 
     /// <summary>
@@ -380,13 +406,6 @@ public static class BackgroundRemovalCommand
     }
 
     /// <summary>premul 像素逐一乘上遮罩，回傳新陣列。</summary>
-    private static uint[] Multiply(uint[] pixels, byte[] mask)
-    {
-        var output = new uint[pixels.Length];
-        for (var i = 0; i < output.Length; i++) output[i] = Scale(pixels[i], mask[i]);
-        return output;
-    }
-
     private static unsafe (uint[] Pixels, int Width, int Height) Downscale(uint[] pixels, int width, int height, float factor)
     {
         var w = Math.Max(1, (int)MathF.Round(width * factor));

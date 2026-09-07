@@ -69,8 +69,9 @@ public sealed class BackgroundRemovalSettingsPage : SettingsPage
                 new Separator { Margin = new Thickness(0, 6) },
 
                 SettingsUi.Section("遮罩後處理"),
-                SettingsUi.Toggle("硬邊切出", "不留半透明毛邊，邊緣的背景色也一起清掉", settings.RemoveBgHardEdge, v => settings.RemoveBgHardEdge = v),
-                SettingsUi.Toggle("內部填實", null, settings.RemoveBgSolidCore, v => settings.RemoveBgSolidCore = v),
+                SettingsUi.Toggle("硬邊切出", "關閉時照 remove.bg 的結果原樣（跟網站一樣）；開啟會重切成一像素硬邊、丟掉軟邊與髮絲",
+                    settings.RemoveBgHardEdgeCut, v => settings.RemoveBgHardEdgeCut = v),
+                SettingsUi.Toggle("內部填實", "只用在預覽解析度放大的遮罩；全解析度的 remove.bg 結果不會動", settings.RemoveBgSolidCore, v => settings.RemoveBgSolidCore = v),
                 Row("遮罩對比", contrast),
                 Row("邊緣收縮", shift),
             },

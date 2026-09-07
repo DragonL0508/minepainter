@@ -99,6 +99,32 @@ public class RemoveBgColorTests : IDisposable
     }
 
     [Fact]
+    public void 預設_全解析度結果照伺服器原樣_軟邊一格不差()
+    {
+        // 使用者 2026-09-07：「app 內 AI 去背跟直接在 remove.bg 看的還是有差距，邊緣比較常不乾淨」——
+        // 之前預設硬邊切出＋內部填實，把伺服器算好的軟邊二值化重畫；現在預設什麼都不動，結果就是它的 PNG
+        RemoveBgClient.HandlerFactory = () => new FakeServer(png => GreenCircle(png));
+        var (session, layer) = GrayDocument();
+        using (session)
+        {
+            Assert.True(BackgroundRemovalCommand.Run(session, layer, new BackgroundRemovalOptions
+            {
+                RemoveBg = new RemoveBgOptions("k"),   // 其餘全用預設
+            }));
+            Assert.Equal(0xFF00FF00u, PixelAt(layer, 128, 128));
+            // 圓周上伺服器給的是線性軟邊：d = 60 → alpha = 0.5·255 ≈ 127；d = 60.5 → ≈ 64
+            for (var x = 128 + 58; x <= 128 + 62; x++)
+            {
+                var d = x - 128f;
+                var expected = d <= 59 ? 255 : d >= 61 ? 0 : (int)((61 - d) / 2 * 255);
+                var p = PixelAt(layer, x, 128);
+                Assert.InRange((int)(p >> 24), expected - 2, expected + 2);
+                Assert.Equal(p >> 24, (p >> 8) & 0xFF);   // 顏色是伺服器的綠（premul 後 G = alpha）
+            }
+        }
+    }
+
+    [Fact]
     public void 硬邊切出_也用伺服器顏色_不再拿內部平均色蓋邊緣()
     {
         RemoveBgClient.HandlerFactory = () => new FakeServer(png => GreenCircle(png));

@@ -2422,7 +2422,7 @@ public partial class MainWindow : Window
             SolidCore = settings.RemoveBgSolidCore,
             Contrast = settings.RemoveBgContrast,
             Shift = settings.RemoveBgShift,
-            HardEdge = settings.RemoveBgHardEdge,
+            HardEdge = settings.RemoveBgHardEdgeCut,
             Selection = session.Selection is { IsEmpty: false } sel ? sel : null,
         };
         session.SelectedElement = null; // 平面化後物件不存在，把手框不能還指著它
