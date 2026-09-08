@@ -11,6 +11,8 @@ dist/
 *.suo
 *.swp
 TestResults/
+# Avalonia 建置服務在受限帳號下寫入專案內的暫存紀錄
+**/AvaloniaUI/BuildServices/
 
 # OS
 Thumbs.db

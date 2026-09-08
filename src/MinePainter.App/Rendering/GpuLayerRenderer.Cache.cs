@@ -7,7 +7,7 @@ namespace MinePainter.App.Rendering;
 public sealed unsafe partial class GpuLayerRenderer
 {
     /// <summary>此 viewport 保留的 tile／LOD 像素預算；不含 Skia 自己的貼圖與 mipmap 開銷。</summary>
-    public long ImageCacheBudgetBytes { get; set; } = 128L * 1024 * 1024;
+    public long ImageCacheBudgetBytes { get; set; } = Core.Compositing.Compositor.DefaultBudgetBytes;
 
     /// <summary>幀末保留的 tile／LOD 像素位元組數；繪製中的工作集可暫時超過預算。</summary>
     public long CachedImageBytes { get; private set; }
