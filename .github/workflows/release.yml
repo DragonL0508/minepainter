@@ -64,6 +64,18 @@ jobs:
             "- **MinePainter-$ver-win-x64.zip** —— 自包含版，解壓縮就能跑，對方電腦不必裝任何東西。"
             "- **MinePainter-$ver-framework-dependent.zip** —— 小顆版，需要先裝 [.NET 8 桌面執行階段](https://dotnet.microsoft.com/download/dotnet/8.0)。"
           ) -join "`n"
+          $title = "MinePainter $ver"
+          $versionNotes = "docs/releases/$tag.md"
+          if (Test-Path -LiteralPath $versionNotes) {
+            $lines = @(Get-Content -LiteralPath $versionNotes -Encoding utf8)
+            if ($lines.Count -gt 0 -and $lines[0].StartsWith('# ')) {
+              $title = $lines[0].Substring(2).Trim()
+              $body = ($lines | Select-Object -Skip 1) -join "`n"
+            } else {
+              $body = $lines -join "`n"
+            }
+            $notes = $body.Trim() + "`n`n" + $notes
+          }
           Set-Content -Path release-notes.md -Value $notes -Encoding utf8
 
           # 同一版重跑時先砍掉舊的 Release（標籤留著），免得附件重複
@@ -72,4 +84,4 @@ jobs:
           $global:LASTEXITCODE = 0
 
           $assets = (Get-ChildItem dist/*.zip).FullName
-          gh release create $tag $assets --title "MinePainter $ver" --notes-file release-notes.md --target $env:GITHUB_SHA
+          gh release create $tag $assets --title $title --notes-file release-notes.md --target $env:GITHUB_SHA
