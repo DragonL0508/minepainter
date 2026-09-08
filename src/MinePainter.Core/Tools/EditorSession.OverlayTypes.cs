@@ -28,6 +28,9 @@ public sealed partial class EditorSession
         public RasterLayer? Layer { get; init; }
 
         public Guid? ElementId { get; init; }
+        internal VectorElement? Element { get; init; }
+        internal LayerEffect[] Effects { get; init; } = [];
+        internal bool TranslationOnly { get; init; }
 
         /// <summary>殘影該出現的位置（落地＝新位置，取消＝原位置）。</summary>
         public SKRect Rect { get; } = rect;
@@ -52,7 +55,8 @@ public sealed partial class EditorSession
     /// 每個 pointer-move 都重算就是「怎麼拖都跟不上」。代價是手勢中的效果跟著整張圖轉／縮
     /// （陰影角度、外框粗細會暫時失真），放開重算一次就校正回來 —— PS 的變形預覽也是這樣。
     /// </summary>
-    public sealed class ElementDragOverlay(RasterLayer layer, Guid elementId, SKImage? image, SKRectI bounds)
+    public sealed class ElementDragOverlay(RasterLayer layer, Guid elementId, SKImage? image, SKRectI bounds,
+        SKRect? initialRect = null)
     {
         public RasterLayer Layer { get; } = layer;
         public Guid ElementId { get; } = elementId;
@@ -66,13 +70,15 @@ public sealed partial class EditorSession
 
         /// <summary>物件原本的（含效果外擴的）外框，doc 座標。</summary>
         public SKRectI Bounds { get; } = bounds;
+        public SKRect InitialRect { get; } = initialRect ?? bounds;
+        internal LayerEffect[] Effects { get; } = layer.Effects.ToArray();
 
         // 目前的目標框、角度與旋轉軸心（render thread 讀、UI thread 寫；float 讀寫是原子的，
         // 中間狀態最多讓某一幀的框差一點點，下一幀就對上了）
-        private volatile float _left = bounds.Left;
-        private volatile float _top = bounds.Top;
-        private volatile float _width = bounds.Width;
-        private volatile float _height = bounds.Height;
+        private volatile float _left = initialRect?.Left ?? bounds.Left;
+        private volatile float _top = initialRect?.Top ?? bounds.Top;
+        private volatile float _width = initialRect?.Width ?? bounds.Width;
+        private volatile float _height = initialRect?.Height ?? bounds.Height;
         private volatile float _rotation;
         private volatile float _pivotX = bounds.MidX;
         private volatile float _pivotY = bounds.MidY;
@@ -111,13 +117,14 @@ public sealed partial class EditorSession
         public SKRect MapFrame(SKRect f)
         {
             var cur = CurrentRect;
-            var sx = Bounds.Width > 0 ? cur.Width / Bounds.Width : 1f;
-            var sy = Bounds.Height > 0 ? cur.Height / Bounds.Height : 1f;
+            var bounds = InitialRect;
+            var sx = bounds.Width > 0 ? cur.Width / bounds.Width : 1f;
+            var sy = bounds.Height > 0 ? cur.Height / bounds.Height : 1f;
             return new SKRect(
-                cur.Left + (f.Left - Bounds.Left) * sx,
-                cur.Top + (f.Top - Bounds.Top) * sy,
-                cur.Left + (f.Right - Bounds.Left) * sx,
-                cur.Top + (f.Bottom - Bounds.Top) * sy);
+                cur.Left + (f.Left - bounds.Left) * sx,
+                cur.Top + (f.Top - bounds.Top) * sy,
+                cur.Left + (f.Right - bounds.Left) * sx,
+                cur.Top + (f.Bottom - bounds.Top) * sy);
         }
     }
 

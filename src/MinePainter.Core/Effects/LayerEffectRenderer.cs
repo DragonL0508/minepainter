@@ -128,6 +128,13 @@ public static class LayerEffectRenderer
         var cache = layer.FxCache;
         if (!cache.Rendered || docRect.IsEmpty) return;
 
+        // 純文字層的傾斜等效果可能把像素移到原框以外；藏起唯一文字時，整份輸出都屬於它。
+        if (layer is RasterLayer { Elements.Count: 1 } textLayer && textLayer.Surface.Tiles.Count == 0)
+        {
+            cache.ClearTiles();
+            return;
+        }
+
         var margin = TotalMargin(layer);
         var off = layer.EffectOffset;
         var rect = new SKRectI(docRect.Left - off.X, docRect.Top - off.Y,
@@ -510,7 +517,11 @@ public static class LayerEffectRenderer
             // 使用者調的中心與半徑是對著畫布看的（選點器的圈畫在畫布縮圖上、破壞性套用也是以畫布為範圍），
             // 所以範圍就是畫布本身，不能拿內容框去聯集 —— 內容框是 tile 對齊的保守值，
             // 128×128 的圖會變成 256×256 的範圍，圓心就從畫布中央跑到右下角去了。
-            if (canvasDependent) region = canvasInLayer;
+            // 拖曳把唯一文字藏起來後，這些效果對透明輸入仍是透明；不必為傾斜配置整張 4K
+            // 畫布再跑外框／陰影／光暈。會自行產生像素的效果仍保留原本的畫布計算路徑。
+            var emptyStaysEmpty = content.IsEmpty && effects.All(e => e.Effect is
+                ObjectGradientEffect or ObjectOutlineEffect or ObjectShadowEffect or ObjectGlowEffect or SkewEffect);
+            if (canvasDependent && !emptyStaysEmpty) region = canvasInLayer;
             cache.LastClipped = !content.IsEmpty && region != content;
 
             if (region.IsEmpty)
@@ -670,6 +681,13 @@ public static class LayerEffectRenderer
         cache.InFlight--;
         Monitor.PulseAll(doc.SyncRoot);
         if (layer.Document != doc) return;
+        // 計算期間來源又變了（快速藏起／移動／放開）：舊工作不能把已清除的文字寫回畫面。
+        // 放棄整份結果並重新領取完整來源，避免只補新髒區而漏掉本次尚未發布的區域。
+        if (cache.HasPending)
+        {
+            cache.MarkAllDirty();
+            return;
+        }
         var write = job.Write;
         var compute = job.Compute;
         var cw = compute.Width;

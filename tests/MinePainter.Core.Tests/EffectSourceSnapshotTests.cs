@@ -10,6 +10,45 @@ namespace MinePainter.Core.Tests;
 
 public class EffectSourceSnapshotTests
 {
+    [Fact]
+    public async Task EffectSource_DoesNotPublishResultInvalidatedWhileRendering()
+    {
+        using var doc = ImageCodec.CreateBlankDocument(64, 64, SKColors.Transparent);
+        var layer = (RasterLayer)doc.ActiveLayer!;
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        var element = new ProbeElement(canvas =>
+        {
+            entered.Set();
+            if (!release.Wait(TimeSpan.FromSeconds(10))) throw new TimeoutException();
+            canvas.Clear(SKColors.Red);
+        });
+        layer.AddElement(element);
+        layer.SetEffects([LayerEffect.Create(new GaussianBlurEffect { Radius = 0 })]);
+        var stalePublished = false;
+        void Published(LayerNode node)
+        {
+            if (!ReferenceEquals(node, layer)) return;
+            lock (doc.SyncRoot)
+                stalePublished |= LayerEffectRenderer.ReadPixels(layer.FxCache.Surface, doc.Bounds).Any(p => p != 0);
+        }
+        LayerEffectRenderer.LayerRendered += Published;
+        var work = Task.Run(() => LayerEffectRenderer.RenderLayerNow(doc, layer));
+        try
+        {
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
+            lock (doc.SyncRoot) layer.HiddenElementId = element.Id;
+        }
+        finally
+        {
+            release.Set();
+            try { await work; }
+            finally { LayerEffectRenderer.LayerRendered -= Published; }
+        }
+        Assert.False(stalePublished, "已藏起文字的過期工作被發布，會在拖曳中重新閃現");
+        Assert.True(layer.FxCache.UpToDate);
+    }
+
     private sealed record ProbeElement(Action<SKCanvas> Draw) : VectorElement
     {
         public override SKRectI Bounds => new(0, 0, 64, 64);

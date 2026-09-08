@@ -71,6 +71,16 @@ dotnet publish src/MinePainter.App -c Release -r win-x64 --self-contained true -
 
 ## 接續工程的邊界
 
+### 實際 4K 文件的效果文字交接（perf.3）
+
+以使用者提供的本機文件唯讀載入重現：單一文字含漸層、兩層外框、陰影、光暈與傾斜。原始按下耗時 706–960 ms；傾斜使用畫布範圍的效果快取被拖曳路徑拒絕，改用文字小框重算，造成延遲與輸出裁切。另有小數位移使整數框不相等、失去殘影重用，以及背景舊工作寫回已隱藏文字的問題。
+
+修正使用最新完整效果輸出（只裁透明 tile），依物件實例與效果清單驗證殘影，保留浮點座標；不接手過期快取、不疊畫同物件舊殘影，過期背景結果重新排程。已知保持透明的文字效果堆疊，在來源為空時不計算整張畫布。
+
+本機原文件按下約 14 ms，緊接連續拖曳約 0.03–0.71 ms；實際 RTX 4060 GPU 按下前後像素最大差為 0/255。基準涵蓋背景 worker 啟停與各 20 次連續拖曳；GPU 幀時間包含提交與 glFinish，不包含 Avalonia 視窗呈現，仍存在首幀上傳與背景負載的尾端延遲，不代表所有場景固定幀率。快照保留當下效果輸出；原本已被畫布裁掉的內容仍需落地重算。原文件不加入版本控制、不寫回。
+
+命令：`dotnet run --project tools/PerfBench -c Release -- --drag <本機.mpp路徑>`。925 項測試通過（798 Core + 127 App）；包括快照像素一致、小數連拖、效果變更失效、背景過期發布。輸出 `dist/MinePainter-perf-render-pipeline-3/MinePainter.App.exe`，版本 `1.8.11-perf.3`，沿用隔離更新設定。
+
 ### 4K 文字拖曳追查（perf.2）
 
 新增 `dotnet run --project tools/PerfBench -c Release -- --drag`：3840×2160 文件與 GPU surface、180px 中英雙行文字、12px 外框與 24px 模糊陰影，透過實際 MoveTool 事件測一般移動和既有變形狀態，分別啟停背景 worker。每組 180 次移動，回報按下、移動、GPU 提交加 glFinish 的 median／p95／max；不包含 Avalonia 事件派送、面板更新與視窗呈現延遲。

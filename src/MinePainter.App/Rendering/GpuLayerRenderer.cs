@@ -182,8 +182,10 @@ public sealed unsafe partial class GpuLayerRenderer : IDisposable
         var rotation = overlay.Rotation;
         var pivot = overlay.Pivot;      // 物件真正的旋轉軸心，不是這張圖的中心
         var image = overlay.Image!;
-        var transformed = rotation != 0 || image.Width != overlay.Bounds.Width ||
-                          rect.Width != overlay.Bounds.Width || rect.Height != overlay.Bounds.Height;
+        var initial = overlay.InitialRect;
+        var transformed = rotation != 0 || Math.Abs(image.Width - initial.Width) > .001f ||
+                          Math.Abs(rect.Width - initial.Width) > .001f || Math.Abs(rect.Height - initial.Height) > .001f ||
+                          rect.Left != MathF.Floor(rect.Left) || rect.Top != MathF.Floor(rect.Top);
         using var paint = new SKPaint
         {
             FilterQuality = transformed ? SKFilterQuality.Low : SKFilterQuality.None,

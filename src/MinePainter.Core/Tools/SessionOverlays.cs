@@ -35,6 +35,11 @@ internal sealed class SessionOverlays(EditorSession session)
     /// <summary>UI thread 每幀呼叫：合成器追上了就把殘影／圖層覆疊收掉。</summary>
     public void CollectOverlayGhost()
     {
+        lock (Document.SyncRoot) CollectOverlayGhostLocked();
+    }
+
+    private void CollectOverlayGhostLocked()
+    {
         var ghost = _ghost;
         // 合成器「畫完了」不等於「畫對了」：效果堆疊還在背景重算時，合成結果裡的物件是沒有效果的，
         // 這時收掉殘影，畫面就會閃一下（外框／陰影消失再出現）——放開的瞬間閃爍就是這個。
@@ -94,20 +99,43 @@ internal sealed class SessionOverlays(EditorSession session)
         // 上一趟手勢剛落地、效果還在背景重算（那扇窗大約 0.2–0.3 秒）：這時再按下去，
         // 效果快取不是最新的，本來就得整個物件重算一遍 —— 使用者感受到的就是「頭幾次不順、
         // 多做幾次才變順」。而剛落地的那張殘影，畫的正好就是這個物件現在的樣子，直接接手來用。
-        if (_ghost is { Rotation: 0f } ghost && ghost.ElementId == element.Id &&
-            ReferenceEquals(ghost.Layer, layer) && SKRectI.Round(ghost.Rect) == bounds)
+        if (_ghost is { Rotation: 0f, TranslationOnly: true } ghost &&
+            ReferenceEquals(ghost.Element, element) && ReferenceEquals(ghost.Layer, layer) &&
+            ghost.Effects.SequenceEqual(layer.Effects))
         {
             _ghost = null; // 影像的擁有權轉給覆疊
-            _elementOverlay = new ElementDragOverlay(layer, element.Id, ghost.Image, bounds);
+            _elementOverlay = new ElementDragOverlay(layer, element.Id, ghost.Image,
+                SKRectI.Ceiling(ghost.Rect), ghost.Rect);
             layer.HiddenElementId = element.Id;
             OverlayReusedCache = true;
             return;
         }
 
+        // 同一物件的舊殘影不能與新快照同時上屏（例如中途改了效果，已不能重用）。
+        if (_ghost is { } previous && previous.ElementId == element.Id && ReferenceEquals(previous.Layer, layer))
+        {
+            _ghost = null;
+            Compositor.Retire(previous.Image);
+        }
+
         SKImage? image = null;
+        // 位置相關效果（例如傾斜）的輸出可能超出原文字框。單一純文字層的完整效果快取
+        // 就是目前畫面的真相；不能再裁回文字框，也不能換個範圍重算而改變效果基準。
+        if (withEffects && layer.FxCache.UpToDate && layer.Elements.Count == 1 &&
+            layer.Surface.Tiles.Count == 0 && layer.Effects.Any(e => e.Enabled && !e.Effect.IsPositionIndependent))
+        {
+            var cachedRegion = SKRectI.Intersect(layer.FxCache.LastRegion, layer.FxCache.Surface.ContentBounds);
+            var cachedBounds = cachedRegion;
+            cachedBounds.Offset(layer.Offset.X, layer.Offset.Y);
+            if (!cachedBounds.IsEmpty && OverlayScale(cachedBounds) >= 1f)
+            {
+                bounds = cachedBounds;
+                image = ImageFrom(LayerEffectRenderer.ReadPixels(layer.FxCache.Surface, cachedRegion), bounds);
+            }
+        }
         var scale = OverlayScale(bounds);
-        OverlayReusedCache = false;
-        if (withEffects && scale >= 1f)
+        OverlayReusedCache = image != null;
+        if (image == null && withEffects && scale >= 1f)
         {
             // 帶效果拖曳：物件單獨跑一遍這層的效果堆疊（外框／陰影／漸層跟著走）。
             // 快取剛好蓋得到就直接裁一塊（省下重跑一遍）。
@@ -180,7 +208,7 @@ internal sealed class SessionOverlays(EditorSession session)
     /// </summary>
     private static uint[]? TryReadEffectCache(RasterLayer layer, Vectors.VectorElement element, SKRectI docRect)
     {
-        if (!layer.FxCache.Rendered || layer.Elements.Count != 1) return null;
+        if (!layer.FxCache.UpToDate || layer.Elements.Count != 1 || layer.Surface.Tiles.Count != 0) return null;
 
 
         var layerRect = new SKRectI(
@@ -205,8 +233,9 @@ internal sealed class SessionOverlays(EditorSession session)
     {
         var overlay = _elementOverlay;
         if (overlay == null) return;
-        overlay.SetTarget(SKRect.Create(overlay.Bounds.Left + dx, overlay.Bounds.Top + dy,
-            overlay.Bounds.Width, overlay.Bounds.Height), 0f);
+        var initial = overlay.InitialRect;
+        overlay.SetTarget(SKRect.Create(initial.Left + dx, initial.Top + dy,
+            initial.Width, initial.Height), 0f);
         RefreshSelectionHandles();
     }
 
@@ -232,7 +261,7 @@ internal sealed class SessionOverlays(EditorSession session)
         if (overlay == null || oldFrame.Width <= 0 || oldFrame.Height <= 0) return;
         var sx = newFrame.Width / oldFrame.Width;
         var sy = newFrame.Height / oldFrame.Height;
-        var b = overlay.Bounds;
+        var b = overlay.InitialRect;
         var pivot = overlay.Pivot;
         overlay.SetTarget(new SKRect(
             newFrame.Left + (b.Left - oldFrame.Left) * sx,
@@ -271,6 +300,10 @@ internal sealed class SessionOverlays(EditorSession session)
         {
             Layer = overlay.Layer,
             ElementId = overlay.ElementId,
+            Element = overlay.Layer.FindElement(overlay.ElementId),
+            Effects = overlay.Effects,
+            TranslationOnly = Math.Abs(final.Width - overlay.InitialRect.Width) < .001f &&
+                              Math.Abs(final.Height - overlay.InitialRect.Height) < .001f,
         };
         if (old != null) Compositor.Retire(old.Image);
     }

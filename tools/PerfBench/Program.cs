@@ -12,7 +12,8 @@ using SkiaSharp;
 Console.WriteLine($"Runtime: {RuntimeInformation.FrameworkDescription}; OS: {RuntimeInformation.OSDescription}; CPUs: {Environment.ProcessorCount}");
 if (args.Contains("--drag"))
 {
-    DragBench.Run();
+    if (args.Length > 1) FileDragBench.Run(args[1]);
+    else DragBench.Run();
     return;
 }
 if (args.Contains("--gpu"))
