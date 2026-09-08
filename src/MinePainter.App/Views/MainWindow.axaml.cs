@@ -507,7 +507,8 @@ public partial class MainWindow : Window
 
     /// <summary>
     /// Show() 之前能先做掉的重活，趁啟動畫面還在時呼叫，主視窗才不會在啟動畫面退場後又空白半秒：
-    /// 載入初始文件（建 session、接上各面板，實測 160ms+）、把主視窗與四個浮動面板的模板套用與排版先跑一遍
+    /// 建立空白文件、把主視窗與浮動面板的模板套用與排版先跑一遍。
+    /// 外部傳入的文件可能觸發解析度對話框，必須等主視窗顯示後才開啟。
     /// （實測 260ms+）。畫布視口的 fit 本來就延到第一幀，面板位置要等視窗真的擺好才算，所以那些留在 Opened。
     /// </summary>
     public void PrepareBeforeShow()
@@ -525,7 +526,7 @@ public partial class MainWindow : Window
         }
 
         if (_initialFile != null && File.Exists(_initialFile))
-            OpenFile(_initialFile);
+            Services.WindowStartup.WhenShown(this, () => OpenFile(_initialFile));
         else
             SetDocument(ImageCodec.CreateBlankDocument(1920, 1080, SKColors.White));
     }
