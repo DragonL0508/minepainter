@@ -1,3 +1,4 @@
+using System.Buffers;
 using SkiaSharp;
 
 namespace MinePainter.Core.AI;
@@ -112,37 +113,46 @@ public static class BackgroundRemover
     public static byte[] Shift(byte[] mask, int w, int h, int shift)
     {
         if (shift == 0) return mask;
-        var r = Math.Abs(shift);
+        var r = (int)Math.Min(Math.Abs((long)shift), Math.Max(w, h));
         var dilate = shift > 0;
         var tmp = new byte[mask.Length];
         var outp = new byte[mask.Length];
-        Parallel.For(0, h, y =>
+        // 單調佇列：每個像素最多進出各一次，成本不再隨半徑增加。
+        // clamp 的重複邊界不影響極值，視窗只需保留實際存在的像素。
+        Parallel.For(0, h, () => ArrayPool<int>.Shared.Rent(w), (y, _, queue) =>
         {
-            for (var x = 0; x < w; x++)
-            {
-                int v = dilate ? 0 : 255;
-                for (var k = -r; k <= r; k++)
-                {
-                    var m = mask[y * w + Math.Clamp(x + k, 0, w - 1)];
-                    v = dilate ? Math.Max(v, m) : Math.Min(v, m);
-                }
-                tmp[y * w + x] = (byte)v;
-            }
-        });
-        Parallel.For(0, h, y =>
+            ExtremumLine(mask, tmp, y * w, 1, w, Math.Min(r, w - 1), dilate, queue);
+            return queue;
+        }, queue => ArrayPool<int>.Shared.Return(queue));
+        Parallel.For(0, w, () => ArrayPool<int>.Shared.Rent(h), (x, _, queue) =>
         {
-            for (var x = 0; x < w; x++)
-            {
-                int v = dilate ? 0 : 255;
-                for (var k = -r; k <= r; k++)
-                {
-                    var m = tmp[Math.Clamp(y + k, 0, h - 1) * w + x];
-                    v = dilate ? Math.Max(v, m) : Math.Min(v, m);
-                }
-                outp[y * w + x] = (byte)v;
-            }
-        });
+            ExtremumLine(tmp, outp, x, w, h, Math.Min(r, h - 1), dilate, queue);
+            return queue;
+        }, queue => ArrayPool<int>.Shared.Return(queue));
         return outp;
+    }
+
+    private static void ExtremumLine(byte[] src, byte[] dst, int start, int stride,
+        int length, int radius, bool maximum, int[] queue)
+    {
+        int head = 0, tail = 0, next = 0;
+        for (var i = 0; i < length; i++)
+        {
+            while (head < tail && queue[head] < i - radius) head++;
+            var right = Math.Min(length - 1, i + radius);
+            for (; next <= right; next++)
+            {
+                var value = src[start + next * stride];
+                while (head < tail)
+                {
+                    var last = src[start + queue[tail - 1] * stride];
+                    if (maximum ? last > value : last < value) break;
+                    tail--;
+                }
+                queue[tail++] = next;
+            }
+            dst[start + i * stride] = src[start + queue[head] * stride];
+        }
     }
 }
 
