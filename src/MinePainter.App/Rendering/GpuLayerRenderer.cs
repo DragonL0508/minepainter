@@ -22,7 +22,7 @@ namespace MinePainter.App.Rendering;
 /// 呼叫端改畫合成器的 tile）。目前沒有這樣的狀態 —— 進行中的筆劃、浮動內容、拖曳與變形手勢、
 /// 落地殘影、調整圖層都已經接手 —— 但退路留著，之後加新東西時才有地方站。
 /// </summary>
-public sealed unsafe class GpuLayerRenderer : IDisposable
+public sealed unsafe partial class GpuLayerRenderer : IDisposable
 {
     /// <summary>每一格 tile 的 GPU 貼圖（key＝tile 索引；靠 Tile.Version 判斷要不要重建）。</summary>
     private sealed class LayerImages : IDisposable
@@ -208,7 +208,10 @@ public sealed unsafe class GpuLayerRenderer : IDisposable
     }
 
     private void DrawGroup(SKCanvas canvas, EditorSession session, GroupLayer group, SKRectI visibleDoc)
-        => DrawRange(canvas, session, group.Children, group.Children.Count, visibleDoc);
+    {
+        if (TryDrawAdjustmentPipeline(canvas, session, group, visibleDoc)) return;
+        DrawRange(canvas, session, group.Children, group.Children.Count, visibleDoc);
+    }
 
     /// <summary>
     /// 畫這個群組的前 <paramref name="count"/ > 個子層。
