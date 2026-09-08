@@ -27,14 +27,14 @@ public sealed unsafe partial class GpuLayerRenderer : IDisposable
     /// <summary>每一格 tile 的 GPU 貼圖（key＝tile 索引；靠 Tile.Version 判斷要不要重建）。</summary>
     private sealed class LayerImages : IDisposable
     {
-        public readonly Dictionary<TileIndex, (long Version, SKImage Image)> Tiles = new();
+        public readonly Dictionary<TileIndex, (long Version, SKImage Image, long Used)> Tiles = new();
 
         /// <summary>縮小檢視時改貼的降取樣貼圖（key＝階數＋區塊座標；見 <see cref="LodLevelFor"/>）。</summary>
         public readonly Dictionary<(int Level, int X, int Y), LodImage> Lods = new();
 
         public void Dispose()
         {
-            foreach (var (_, image) in Tiles.Values) image.Dispose();
+            foreach (var (_, image, _) in Tiles.Values) image.Dispose();
             Tiles.Clear();
             foreach (var lod in Lods.Values) lod.Image.Dispose();
             Lods.Clear();
@@ -58,16 +58,6 @@ public sealed unsafe partial class GpuLayerRenderer : IDisposable
     /// </summary>
     public const int MaxLodLevel = 3;
 
-    /// <summary>
-    /// 每個圖層的 LOD 貼圖張數上限。一張 256KB；一個區塊在螢幕上恆為 128～256px
-    /// （選階的必然結果，見 <see cref="LodLevelFor"/>），所以一個 4K 視窗的可見範圍
-    /// 也在這個數以內 —— 上限只是「別無限長大」的保險，正常情況碰不到。
-    /// </summary>
-    private const int MaxLodImages = 256;
-
-    /// <summary>連續幾幀沒用到就丟掉：一放大或平移離開，那些區塊立刻失去意義，沒必要佔著 GPU 記憶體。</summary>
-    private const int LodKeepFrames = 3;
-
     private readonly Dictionary<Guid, LayerImages> _images = new();
     private readonly RotatedTextCache _rotatedText = new();
     private readonly Dictionary<Guid, (Core.Adjustments.IAdjustment Adjustment, SKColorFilter Filter)> _adjustments = new();
@@ -80,7 +70,6 @@ public sealed unsafe partial class GpuLayerRenderer : IDisposable
 
     private long _frame;
     private readonly List<(SKImage Image, float X, float Y)> _lodBatch = new();
-    private readonly List<(int Level, int X, int Y)> _lodEvict = new();
 
     /// <summary>診斷：上一幀畫了幾格。</summary>
     public int LastTiles { get; private set; }
@@ -138,12 +127,14 @@ public sealed unsafe partial class GpuLayerRenderer : IDisposable
         LastTiles = 0;
         LastLodTiles = 0;
         LastCachedTextDraws = 0;
+        LastSourceCopies = 0;
+        LastLodBuilds = 0;
         _frame++;
         _lodLevel = LodLevelFor(viewScale);
-        _gpuContext = gpuContext;
+        SetGpuContext(gpuContext);
         _docBounds = new SKRectI(0, 0, session.Document.Width, session.Document.Height);
         DrawGroup(canvas, session, session.Document.Root, visibleDoc);
-        SweepLods();
+        SweepImageCaches(session);
         return true;
     }
 
@@ -522,14 +513,10 @@ public sealed unsafe partial class GpuLayerRenderer : IDisposable
             }
             else
             {
-                var image = BuildLod(surface, level, bx, by);
+                var image = BuildLod(cache, surface, level, bx, by);
                 if (image == null) return false; // 建不起來 → 整份退回逐格（此時一筆都還沒畫）
                 if (lod != null) { lod.Image.Dispose(); cache.Lods.Remove(key); }
-                if (!StoreLod(cache, key, new LodImage { Version = version, Image = image, Used = _frame }))
-                {
-                    image.Dispose();
-                    return false;
-                }
+                cache.Lods[key] = new LodImage { Version = version, Image = image, Used = _frame };
             }
             _lodBatch.Add((cache.Lods[key].Image, bx * blockPx + offset.X, by * blockPx + offset.Y));
         }
@@ -567,7 +554,7 @@ public sealed unsafe partial class GpuLayerRenderer : IDisposable
     /// 把一塊區域的來源格以 1/2^L 畫進離屏 surface 再 Snapshot 成貼圖。
     /// 拿不到 GPU context 就用 raster surface —— 慢一點，但畫面照樣正確。
     /// </summary>
-    private SKImage? BuildLod(TileSurface surface, int level, int blockX, int blockY)
+    private SKImage? BuildLod(LayerImages cache, TileSurface surface, int level, int blockX, int blockY)
     {
         var span = 1 << level;
         var info = new SKImageInfo(Tile.Size, Tile.Size, SKColorType.Bgra8888, SKAlphaType.Premul);
@@ -584,60 +571,17 @@ public sealed unsafe partial class GpuLayerRenderer : IDisposable
         for (var ty = 0; ty < span; ty++)
         for (var tx = 0; tx < span; tx++)
         {
-            var tile = surface.GetTileForRead(new TileIndex(blockX * span + tx, blockY * span + ty));
+            var idx = new TileIndex(blockX * span + tx, blockY * span + ty);
+            var tile = surface.GetTileForRead(idx);
             if (tile == null) continue;
-            using var pixmap = tile.AsPixmap();
-            // 複製一份：tile 的記憶體會被繼續改寫（這張是一次性的，畫完就丟）
-            using var image = SKImage.FromPixelCopy(pixmap);
+            // 沿用全解析度快取：一格變動只複製一格，未變的來源保留 Skia 貼圖身分。
+            var image = ImageFor(cache, idx, tile);
             if (image == null) return null;
             c.DrawImage(image, tx * Tile.Size, ty * Tile.Size, paint);
         }
         c.Flush();
+        LastLodBuilds++;
         return target.Snapshot();
-    }
-
-    /// <summary>
-    /// 存進快取；滿了就讓最久沒用到的那張出局。回傳 false＝擠不出位子（正常情況碰不到，見
-    /// <see cref="MaxLodImages"/>），呼叫端請退回逐格 —— **這一幀已經用到的那幾張絕不能動**，
-    /// 它們的貼圖此刻正排在待畫清單裡。
-    /// </summary>
-    private bool StoreLod(LayerImages cache, (int Level, int X, int Y) key, LodImage lod)
-    {
-        if (cache.Lods.Count >= MaxLodImages)
-        {
-            var oldest = key;
-            var oldestUsed = _frame; // 這一幀用過的（Used == _frame）不列入候選
-            foreach (var (k, v) in cache.Lods)
-            {
-                if (v.Used >= oldestUsed) continue;
-                oldestUsed = v.Used;
-                oldest = k;
-            }
-            if (oldestUsed >= _frame) return false;
-            cache.Lods[oldest].Image.Dispose();
-            cache.Lods.Remove(oldest);
-        }
-        cache.Lods[key] = lod;
-        return true;
-    }
-
-    /// <summary>這一幀沒用到、而且已經連續 <see cref="LodKeepFrames"/> 幀沒用到的 LOD 貼圖就收掉。</summary>
-    private void SweepLods()
-    {
-        foreach (var cache in _images.Values)
-        {
-            if (cache.Lods.Count == 0) continue;
-            _lodEvict.Clear();
-            foreach (var (key, lod) in cache.Lods)
-            {
-                if (_frame - lod.Used > LodKeepFrames) _lodEvict.Add(key);
-            }
-            foreach (var key in _lodEvict)
-            {
-                cache.Lods[key].Image.Dispose();
-                cache.Lods.Remove(key);
-            }
-        }
     }
 
     private LayerImages GroupImages(GroupLayer group) => Images(group.Id);
@@ -651,11 +595,15 @@ public sealed unsafe partial class GpuLayerRenderer : IDisposable
     }
 
     /// <summary>這一格的貼圖；內容版本變了就重建（Skia 會沿用同一個 SKImage 的貼圖）。</summary>
-    private static SKImage? ImageFor(LayerImages cache, TileIndex idx, Tile tile)
+    private SKImage? ImageFor(LayerImages cache, TileIndex idx, Tile tile)
     {
         if (cache.Tiles.TryGetValue(idx, out var entry))
         {
-            if (entry.Version == tile.Version) return entry.Image;
+            if (entry.Version == tile.Version)
+            {
+                cache.Tiles[idx] = (entry.Version, entry.Image, _frame);
+                return entry.Image;
+            }
             entry.Image.Dispose();
             cache.Tiles.Remove(idx);
         }
@@ -663,7 +611,8 @@ public sealed unsafe partial class GpuLayerRenderer : IDisposable
         // 複製一份：tile 的記憶體會被繼續改寫，貼圖不能指著它
         var image = SKImage.FromPixelCopy(pixmap);
         if (image == null) return null;
-        cache.Tiles[idx] = (tile.Version, image);
+        cache.Tiles[idx] = (tile.Version, image, _frame);
+        LastSourceCopies++;
         return image;
     }
 
@@ -671,6 +620,7 @@ public sealed unsafe partial class GpuLayerRenderer : IDisposable
     {
         foreach (var cache in _images.Values) cache.Dispose();
         _images.Clear();
+        CachedImageBytes = 0;
         foreach (var (_, filter) in _adjustments.Values) filter.Dispose();
         _adjustments.Clear();
         _rotatedText.Dispose();

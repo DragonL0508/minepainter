@@ -34,6 +34,7 @@ public class AdjustmentPipelineTests
             group.Add(new AdjustmentLayer(new BrightnessContrastAdjustment(0.03f, -0.04f))
             { Opacity = i % 2 == 0 ? 0.4f : 0.7f });
         var session = new EditorSession(doc);
+        using var compositor = session.Compositor;
         using var renderer = new GpuLayerRenderer();
         using var target = SKSurface.Create(new SKImageInfo(64, 64, SKColorType.Bgra8888, SKAlphaType.Premul));
         lock (doc.SyncRoot)
@@ -44,7 +45,6 @@ public class AdjustmentPipelineTests
         using var a = SKBitmap.FromImage(actual);
         using var b = SKBitmap.FromImage(expected);
         Assert.Equal(b.Bytes, a.Bytes);
-        session.Compositor.Dispose();
     }
 
     [Fact]
@@ -53,6 +53,7 @@ public class AdjustmentPipelineTests
         using var doc = ImageCodec.CreateBlankDocument(64, 64, SKColors.Red);
         doc.Root.Add(new AdjustmentLayer(new BrightnessContrastAdjustment()) { Opacity = 0.5f });
         var session = new EditorSession(doc);
+        using var compositor = session.Compositor;
         using var renderer = new GpuLayerRenderer();
         using var target = SKSurface.Create(new SKImageInfo(160, 160, SKColorType.Bgra8888, SKAlphaType.Premul));
         target.Canvas.Clear(SKColors.Blue);
@@ -68,6 +69,5 @@ public class AdjustmentPipelineTests
         Assert.Equal(SKColors.Red, bitmap.GetPixel(30, 30));
         Assert.Equal(SKColors.Blue, bitmap.GetPixel(19, 30));
         Assert.Equal(SKColors.Blue, bitmap.GetPixel(95, 30));
-        session.Compositor.Dispose();
     }
 }
