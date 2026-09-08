@@ -179,6 +179,7 @@ public sealed record TextElement : VectorElement
 
     // Bounds 每格 tile 都會被問（合成器、效果快取、命中）；量測著墨要跑排版，同一個（immutable）實例只算一次
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<TextElement, StrongBox<SKRectI>> BoundsCache = new();
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<TextElement, StrongBox<SKRect>> FrameBoundsCache = new();
 
     private sealed class StrongBox<T>(T value) { public T Value = value; }
 
@@ -191,9 +192,14 @@ public sealed record TextElement : VectorElement
     {
         get
         {
-            var ink = MeasureInkBounds();
-            var doc = MapLocalToDoc(ink ?? LocalBounds);
-            return HasDeform ? Deform!.MapBounds(doc) : doc;
+            // 拖曳的吸附與把手每次都會讀取。以 immutable 實例為鍵，with 複製後自然重新量測；
+            // 不把快取放進 record 欄位，避免位置、字型改變後沿用複製來的舊框。
+            return FrameBoundsCache.GetValue(this, static text =>
+            {
+                var ink = text.MeasureInkBounds();
+                var doc = text.MapLocalToDoc(ink ?? text.LocalBounds);
+                return new StrongBox<SKRect>(text.HasDeform ? text.Deform!.MapBounds(doc) : doc);
+            }).Value;
         }
     }
 

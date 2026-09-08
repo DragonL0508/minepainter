@@ -71,6 +71,14 @@ dotnet publish src/MinePainter.App -c Release -r win-x64 --self-contained true -
 
 ## 接續工程的邊界
 
+### 4K 文字拖曳追查（perf.2）
+
+新增 `dotnet run --project tools/PerfBench -c Release -- --drag`：3840×2160 文件與 GPU surface、180px 中英雙行文字、12px 外框與 24px 模糊陰影，透過實際 MoveTool 事件測一般移動和既有變形狀態，分別啟停背景 worker。每組 180 次移動，回報按下、移動、GPU 提交加 glFinish 的 median／p95／max；不包含 Avalonia 事件派送、面板更新與視窗呈現延遲。
+
+修正 immutable TextElement.FrameBounds 重複排版：弱參照快取依實例區分，修改位置、字級、內容與角度會重新量測。相同 RTX 4060 上一般移動的處理 median 從 0.117–0.190 ms 降至 0.015–0.023 ms。GPU 幀約 1–3 ms，既有變形加背景 worker 出現約 20 ms 的尾端延遲；尚未重現使用者文件的持續卡頓，不能宣稱已解決該回報。需用原始 .mpp 與操作路徑繼續定位。
+
+perf.2 輸出至 `dist/MinePainter-perf-render-pipeline-2/MinePainter.App.exe`，沿用上面的隔離更新設定。全套測試 794 Core + 127 App 通過。
+
 CPU 合成批次與主要 GPU 圖層繪製仍共用文件鎖；本批只移出效果來源的重操作。完整 RenderSnapshot 尚未建立。
 
 一般圖層效果仍以 CPU 為準，自訂混合與 LUT 仍可能使文件退回 CPU。尚未實作 GPU LUT／距離場、效果節點中間結果快取、按需 CPU 合成與區塊式檔案格式。後續應以 4K／8K 真實專案、長筆劃、圖層拖曳、效果滑桿的 p95／p99 延遲與記憶體峰值，決定下一批工作優先序。

@@ -10,6 +10,11 @@ using SkiaSharp;
 
 // 可重跑的 CPU／raster 基準，不啟動視窗、不發送輸入、不把提交時間冒充 GPU 執行時間。
 Console.WriteLine($"Runtime: {RuntimeInformation.FrameworkDescription}; OS: {RuntimeInformation.OSDescription}; CPUs: {Environment.ProcessorCount}");
+if (args.Contains("--drag"))
+{
+    DragBench.Run();
+    return;
+}
 if (args.Contains("--gpu"))
 {
     GpuBench.Run();
