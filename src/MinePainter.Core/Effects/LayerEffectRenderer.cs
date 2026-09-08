@@ -185,7 +185,8 @@ public static class LayerEffectRenderer
         public required SKRectI Compute;  // 這次算的範圍（圖層座標）
         public required SKRectI Write;    // 寫回的範圍（圖層座標；Compute 以外的部分清成透明）
         public required bool Full;        // 整層重算（寫回前先清空快取）
-        public required uint[] Pixels;    // Compute 範圍的基底像素
+        public required uint[]? Pixels;   // 群組／獨立預覽的基底像素
+        public RasterEffectSource? RasterSource; // 點陣圖層在鎖外才複製與點陣化
         public required List<LayerEffect> Effects;
         public required List<byte[]?> Masks; // 每個效果在 Compute 範圍內的遮罩（null = 整層）
         public required SKSizeI DocSize;
@@ -549,28 +550,31 @@ public static class LayerEffectRenderer
                 if (compute.Width <= 0 || compute.Height <= 0) compute = SKRectI.Empty;
             }
 
-            cache.DirtyAll = false;
-            cache.Dirty = SKRectI.Empty;
-            cache.LastRegion = region;
-            cache.InFlight++;
-
             var masks = new List<byte[]?>(effects.Count);
             foreach (var e in effects)
                 masks.Add(e.Mask == null || compute.IsEmpty ? null : ReadMask(e.Mask, compute, layer.EffectOffset));
 
-            return new Job
+            var job = new Job
             {
                 Layer = layer,
                 Region = region,
                 Compute = compute,
                 Write = write,
                 Full = full,
-                Pixels = compute.IsEmpty ? [] : ReadSourceLocked(layer, compute, groupReader),
+                Pixels = compute.IsEmpty ? [] : layer is RasterLayer ? null : ReadSourceLocked(layer, compute, groupReader),
+                RasterSource = !compute.IsEmpty && layer is RasterLayer raster
+                    ? RasterEffectSource.Capture(raster, compute) : null,
                 Effects = effects,
                 Masks = masks,
                 DocSize = new SKSizeI(doc.Width, doc.Height),
             ContentRotation = ContentRotationOf(layer),
         };
+        // 來源取得成功才領走髒區；來源配置失敗時也不能留下永遠無人完成的 InFlight。
+        cache.DirtyAll = false;
+        cache.Dirty = SKRectI.Empty;
+        cache.LastRegion = region;
+        cache.InFlight++;
+        return job;
     }
 
     /// <summary>
@@ -610,7 +614,12 @@ public static class LayerEffectRenderer
     {
         var w = job.Compute.Width;
         var h = job.Compute.Height;
-        var current = job.Pixels;
+        uint[] current;
+        using (job.RasterSource)
+        {
+            ct.ThrowIfCancellationRequested();
+            current = job.RasterSource?.Read(ct) ?? job.Pixels!;
+        }
         if (job.Compute.IsEmpty) return current;
         for (var i = 0; i < job.Effects.Count; i++)
         {

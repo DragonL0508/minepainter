@@ -21,7 +21,9 @@ public sealed class EffectSession : IEffectPreviewTarget, IDisposable
     private readonly SKRectI _regionDoc;
     private readonly SKRectI _regionLayer;
     private readonly byte[]? _selectionMask; // Region 大小；null = 無選取（全 255）
-    private readonly Dictionary<int, (SKRectI Rect, uint[] Pixels)> _srcCache = new();
+    private readonly object _sourceGate = new();
+    private SKRectI _sourceRect;
+    private uint[]? _sourcePixels;
     private long[]? _histogram;
     private bool _disposed;
 
@@ -84,17 +86,21 @@ public sealed class EffectSession : IEffectPreviewTarget, IDisposable
             srcDoc = SKRectI.Intersect(srcDoc, doc.Bounds);
         }
 
-        (SKRectI Rect, uint[] Pixels) src;
-        lock (_srcCache)
+        uint[] pixels;
+        lock (_sourceGate)
         {
-            if (!_srcCache.TryGetValue(margin, out src) || src.Rect != srcDoc)
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            // 全圖預覽在任何半徑下都讀同一範圍，按 margin 存會累積數百份相同原圖。
+            // 選取範圍變大時只保留最新來源；已交出的 context 自己持有陣列，仍可安全算完。
+            if (_sourcePixels == null || _sourceRect != srcDoc)
             {
-                src = (srcDoc, ReadSource(srcDoc));
-                _srcCache[margin] = src;
+                _sourcePixels = ReadSource(srcDoc);
+                _sourceRect = srcDoc;
             }
+            pixels = _sourcePixels;
         }
 
-        return new EffectContext(_regionDoc, srcDoc, src.Pixels, new SKSizeI(doc.Width, doc.Height))
+        return new EffectContext(_regionDoc, srcDoc, pixels, new SKSizeI(doc.Width, doc.Height))
         {
             PrimaryColor = _session.Foreground,
             SecondaryColor = SKColors.White,
@@ -276,8 +282,12 @@ public sealed class EffectSession : IEffectPreviewTarget, IDisposable
 
     public void Dispose()
     {
-        if (_disposed) return;
-        _disposed = true;
-        _before.Dispose();
+        lock (_sourceGate)
+        {
+            if (_disposed) return;
+            _disposed = true;
+            _sourcePixels = null;
+            _before.Dispose();
+        }
     }
 }
