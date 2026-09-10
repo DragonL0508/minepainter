@@ -167,18 +167,35 @@ internal static class PsdAdjustmentWriter
         var bitmap = 0;
         foreach (var channel in channels.Keys) bitmap |= 1 << channel;
         w.I32(bitmap);
-        foreach (var (_, points) in channels)
+        var normalized = new List<(int Channel, List<(float X, float Y)> Points)>();
+        foreach (var (channel, points) in channels)
         {
-            var sorted = points.OrderBy(p => p.X).ToList();
+            var sorted = points.OrderBy(p => p.X).Take(19).ToList(); // PS 一條曲線最多 19 個點
             if (sorted.Count < 2) sorted = CurvesAdjustment.Identity.ToList();
-            w.I16(Math.Min(sorted.Count, 19));   // PS 一條曲線最多 19 個點
-            foreach (var (x, y) in sorted.Take(19))
+            normalized.Add((channel, sorted));
+            WritePoints(w, sorted);
+        }
+        // 「Crv 」延伸段：Photoshop CS 之後自己寫的檔案一定有，同一份曲線再寫一次
+        // （版本 4、曲線數、每條：通道＋點數＋點）。2026-09-10 少了它 Photoshop 2026 判整份不相容。
+        w.Ascii("Crv ");
+        w.I16(4);
+        w.I32(normalized.Count);
+        foreach (var (channel, sorted) in normalized)
+        {
+            w.I16(channel);
+            WritePoints(w, sorted);
+        }
+        return w.ToArray();
+
+        static void WritePoints(PsdByteWriter w, List<(float X, float Y)> sorted)
+        {
+            w.I16(sorted.Count);
+            foreach (var (x, y) in sorted)
             {
                 w.I16((int)Math.Round(Math.Clamp(y, 0, 1) * 255));
                 w.I16((int)Math.Round(Math.Clamp(x, 0, 1) * 255));
             }
         }
-        return w.ToArray();
     }
 
     /// <summary>sRGB → CIE Lab（D65），<see cref="PsdAdjustmentLayer"/> 讀相片濾鏡時的反向。</summary>

@@ -274,6 +274,64 @@ public class PsdSaveTests
         Assert.True(Pixel((RasterLayer)loaded.Root.Children[1], 130, 40).Red > 200);
     }
 
+    /// <summary>
+    /// 2026-09-10 使用者回報：匯出的 .psd 在 Photoshop 2026 開啟顯示「與此版本不相容」。
+    /// 兩個原因：附加資訊區塊的長度寫奇數（補位元組沒算進去，Photoshop 照長度跳就對不上下一個簽名）、
+    /// 曲線區塊少了 Photoshop 自己一定會寫的「Crv 」延伸段。這裡直接掃寫出的位元組。
+    /// </summary>
+    [Fact]
+    public void 附加資訊區塊長度一律偶數_曲線帶Crv延伸段_羽化遮色片照Photoshop版式()
+    {
+        using var doc = new Document(40, 40);
+        doc.Root.Add(FilledLayer(doc, "底", new SKRectI(0, 0, 40, 40), SKColors.Gray));
+        var masked = FilledLayer(doc, "遮", new SKRectI(0, 0, 40, 40), SKColors.Red);
+        masked.Mask = new LayerMask(new SKRectI(5, 5, 8, 7), [0, 128, 255, 255, 128, 0], 255) { Feather = 2.5f, Density = .5f };
+        doc.Root.Add(masked);
+        doc.Root.Add(new AdjustmentLayer(new CurvesAdjustment
+        {
+            Mode = CurvesAdjustment.ModeLuminosity,
+            Curves = [[(0f, 0f), (0.5f, 0.7f), (1f, 1f)]],
+        }) { Name = "曲線" });
+        var text = new RasterLayer { Name = "字" };
+        text.AddElement(new Core.Vectors.TextElement { Text = "odd", FontFamily = "Arial", FontSize = 13, Position = new SKPoint(2, 20) });
+        doc.Root.Add(text);
+
+        var stream = new MemoryStream();
+        PsdFormat.Save(doc, stream, null, out _);
+        var bytes = stream.ToArray();
+
+        var blocks = 0;
+        var sawCrv = false;
+        for (var i = 0; i + 12 <= bytes.Length; i++)
+        {
+            if (bytes[i] != (byte)'8' || bytes[i + 1] != (byte)'B' || bytes[i + 2] != (byte)'I' || bytes[i + 3] != (byte)'M') continue;
+            var key = System.Text.Encoding.ASCII.GetString(bytes, i + 4, 4);
+            if (key is not ("luni" or "lsct" or "lfx2" or "TySh" or "curv" or "brst" or "lyid" or "shmd" or "lnsr")) continue;
+            var length = System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(bytes.AsSpan(i + 8));
+            if (length > (uint)bytes.Length) continue;
+            blocks++;
+            Assert.True(length % 2 == 0, $"區塊 {key} 長度 {length} 是奇數：Photoshop 會把下一個區塊讀壞");
+            if (key == "curv")
+            {
+                var payload = bytes.AsSpan(i + 12, (int)length);
+                sawCrv = payload.IndexOf("Crv "u8) >= 0;
+            }
+        }
+        Assert.True(blocks >= 4, "沒掃到區塊，測試本身壞了");
+        Assert.True(sawCrv, "曲線區塊少了「Crv 」延伸段（Photoshop 2026 會判整份不相容）");
+
+        // 羽化遮色片：長度 28（Photoshop 實檔的寫法：參數旗標 3＋濃度＋羽化 double），讀回參數不變
+        var maskHeader = new byte[] { 0, 0, 0, 28, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 7, 0, 0, 0, 8, 255, 16, 3 };
+        Assert.True(bytes.AsSpan().IndexOf(maskHeader) >= 0, "羽化遮色片的遮色片資料應是 Photoshop 的 28 位元組版式");
+        stream.Position = 0;
+        using var loaded = PsdFormat.Load(stream, out _);
+        var restored = loaded.Root.Children[1].Mask;
+        Assert.NotNull(restored);
+        Assert.Equal(2.5f, restored.Feather);
+        Assert.Equal(.5f, restored.Density, 2);
+        Assert.Equal(new SKRectI(5, 5, 8, 7), restored.Bounds);
+    }
+
     [Fact]
     public void 調整圖層_寫成Photoshop調整圖層_讀回參數一致()
     {

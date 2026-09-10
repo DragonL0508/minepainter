@@ -454,6 +454,9 @@ public static partial class PsdFormat
             var extra = new PsdByteWriter();
             if (layer.Mask is { } mask)
             {
+                // 遮色片資料：20＝矩形＋預設值＋旗標＋2 位元組補位。帶濃度／羽化參數時照 Photoshop 自己寫的樣子：
+                // 旗標 bit4、參數旗標 3（濃度 1 位元組＋羽化 double），共 28（實檔對照：羽化 99.7 的圖層遮色片是
+                // 0x1c＝28，參數之後直接補到偶數，沒有「真實」遮色片那三項）。
                 var parameters = mask.Feather != 0 || mask.Density != 1;
                 extra.U32(parameters ? 28 : 20);
                 extra.I32(mask.Bounds.Top); extra.I32(mask.Bounds.Left);
@@ -462,7 +465,7 @@ public static partial class PsdFormat
                 extra.U8((mask.Enabled ? 0 : 2) | (mask.Inverted ? 4 : 0) | (parameters ? 16 : 0));
                 if (parameters)
                 {
-                    extra.U8(3); // user mask density + feather; no real (-3) mask header
+                    extra.U8(3); // bit0 使用者遮色片濃度、bit1 使用者遮色片羽化
                     extra.U8((byte)Math.Clamp(Math.Round(mask.Density * 255), 0, 255));
                     extra.F64(Math.Max(0, mask.Feather));
                 }
@@ -507,14 +510,19 @@ public static partial class PsdFormat
         foreach (var data in channelData) info.Bytes(data);
     }
 
-    /// <summary>附加資訊區塊；長度補到偶數（Photoshop 的寫法，讀取端照樣跳得過）。</summary>
+    /// <summary>
+    /// 附加資訊區塊；長度欄位寫的是補到偶數之後的長度（Photoshop 自己就是這樣寫）。
+    /// 2026-09-10：以前長度寫奇數、補位元組不算在內，Photoshop 2026 照長度跳到補位元組上、
+    /// 下一個區塊的簽名就對不上，整份檔案被判「與此版本不相容」（psd-tools 同樣讀壞）。
+    /// </summary>
     private static void WriteBlock(PsdByteWriter extra, string key, byte[] payload)
     {
         extra.Ascii("8BIM");
         extra.Ascii(key);
-        extra.U32(payload.Length);
+        var padded = payload.Length + payload.Length % 2;
+        extra.U32(padded);
         extra.Bytes(payload);
-        if (payload.Length % 2 != 0) extra.U8(0);
+        if (padded != payload.Length) extra.U8(0);
     }
 
     /// <summary>PackBits：先是每一列的壓縮後長度，接著才是資料。空範圍只有 2 位元組的「原始」標記。</summary>
