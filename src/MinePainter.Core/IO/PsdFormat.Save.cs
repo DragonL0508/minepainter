@@ -85,6 +85,8 @@ public static partial class PsdFormat
         public bool Clipped;
         public string Name = "";
         public int SectionType;
+        public LayerMask? Mask;
+        public int RestrictedChannels;
         public readonly List<(string Key, byte[] Data)> Blocks = [];
 
         /// <summary>直通 alpha 的 BGRA → R／G／B／A 四個通道。</summary>
@@ -159,6 +161,7 @@ public static partial class PsdFormat
             var record = Properties(group);
             record.SectionType = 1;
             record.SetEmpty();
+            if (group.IsPassThrough && group.BlendMode == BlendMode.Normal) record.BlendKey = "pass";
             if (style.ToLfx2() is { } lfx2) record.Blocks.Add(("lfx2", lfx2));
             output.Add(record);
             step();
@@ -249,13 +252,20 @@ public static partial class PsdFormat
             notes.Add($"圖層「{record.Name}」{reason}，已轉成像素。");
         }
 
-        private static OutLayer Properties(LayerNode node) => new()
+        private static OutLayer Properties(LayerNode node)
         {
-            Name = string.IsNullOrEmpty(node.Name) ? (node is GroupLayer ? "群組" : "圖層") : node.Name,
-            Hidden = !node.IsVisible,
-            Opacity = (byte)Math.Clamp(Math.Round(node.Opacity * 255), 0, 255),
-            BlendKey = BlendKeyOf(node.BlendMode),
-        };
+            var record = new OutLayer
+            {
+                Name = string.IsNullOrEmpty(node.Name) ? (node is GroupLayer ? "群組" : "圖層") : node.Name,
+                Hidden = !node.IsVisible,
+                Opacity = (byte)Math.Clamp(Math.Round(node.Opacity * 255), 0, 255),
+                BlendKey = BlendKeyOf(node.BlendMode),
+                RestrictedChannels = node.RestrictedChannels,
+                Mask = node.Mask,
+            };
+            if (node.Mask is { } mask) record.Channels.Add((-2, mask.Alpha));
+            return record;
+        }
 
         /// <summary>
         /// 文字圖層的點陣快照：Photoshop 自己會照 TySh 重排，這份給不認得文字的程式（與縮圖）看。
@@ -427,7 +437,8 @@ public static partial class PsdFormat
             info.U16(layer.Channels.Count);
             foreach (var (id, samples) in layer.Channels)
             {
-                var encoded = EncodeChannel(samples, layer.Rect.Width, layer.Rect.Height, psb);
+                var channelRect = id == -2 && layer.Mask != null ? layer.Mask.Bounds : layer.Rect;
+                var encoded = EncodeChannel(samples, channelRect.Width, channelRect.Height, psb);
                 info.I16(id);
                 info.LengthField(encoded.Length, psb);
                 channelData.Add(encoded);
@@ -441,7 +452,23 @@ public static partial class PsdFormat
             info.U8(0);
 
             var extra = new PsdByteWriter();
-            extra.U32(0);   // 遮色片：沒有
+            if (layer.Mask is { } mask)
+            {
+                var parameters = mask.Feather != 0 || mask.Density != 1;
+                extra.U32(parameters ? 28 : 20);
+                extra.I32(mask.Bounds.Top); extra.I32(mask.Bounds.Left);
+                extra.I32(mask.Bounds.Bottom); extra.I32(mask.Bounds.Right);
+                extra.U8(mask.DefaultValue);
+                extra.U8((mask.Enabled ? 0 : 2) | (mask.Inverted ? 4 : 0) | (parameters ? 16 : 0));
+                if (parameters)
+                {
+                    extra.U8(3); // user mask density + feather; no real (-3) mask header
+                    extra.U8((byte)Math.Clamp(Math.Round(mask.Density * 255), 0, 255));
+                    extra.F64(Math.Max(0, mask.Feather));
+                }
+                else extra.U16(0);
+            }
+            else extra.U32(0);
             extra.U32(0);   // 混合範圍：沒有
 
             // Pascal 名稱（系統字碼頁，這裡只能保證 Latin1；真正的名稱在 luni）
@@ -455,6 +482,13 @@ public static partial class PsdFormat
             luni.U32(layer.Name.Length);
             luni.Bytes(Encoding.BigEndianUnicode.GetBytes(layer.Name));
             WriteBlock(extra, "luni", luni.ToArray());
+            if (layer.RestrictedChannels != 0)
+            {
+                var restrictions = new PsdByteWriter();
+                for (var c = 0; c < 3; c++)
+                    if ((layer.RestrictedChannels & (1 << c)) != 0) restrictions.I32(c);
+                WriteBlock(extra, "brst", restrictions.ToArray());
+            }
 
             if (layer.SectionType != 0)
             {

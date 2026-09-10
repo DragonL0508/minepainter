@@ -178,6 +178,7 @@ public partial class MainWindow : Window
             ShowPanels();
             RefreshRecentFilesMenu();
             StartPerfLabelTimer();
+            StartFramePerfLog();
             Canvas.Focus();
             // 字型下拉的字重列舉／GlyphTypeface 探測預熱（一秒後、閒置時做），切字型才不會第一次碰到就卡
             Avalonia.Threading.DispatcherTimer.RunOnce(Services.FontCatalog.WarmUp, TimeSpan.FromSeconds(1));

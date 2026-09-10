@@ -34,41 +34,52 @@ public static class CustomBlend
         if (target.Width <= 0 || target.Height <= 0) return;
 
         var info = new SKImageInfo(target.Width, target.Height, SKColorType.Bgra8888, SKAlphaType.Premul);
-        var backdrop = new uint[target.Width * target.Height];
-        var source = new uint[target.Width * target.Height];
-        unsafe
+        // 一格 256KB 的緩衝從池子借：每格 new 兩塊會直接進 LOH，拖曳中每秒幾十格就是一秒一次 gen2 GC
+        var count = target.Width * target.Height;
+        var pool = System.Buffers.ArrayPool<uint>.Shared;
+        var backdrop = pool.Rent(count);
+        var source = pool.Rent(count);
+        try
         {
-            fixed (uint* bp = backdrop)
-            fixed (uint* sp = source)
+            unsafe
             {
-                using var snapshot = surface.Snapshot();
-                if (!snapshot.ReadPixels(info, (IntPtr)bp, target.Width * 4, target.Left, target.Top)) return;
-                if (!src.ReadPixels(info, (IntPtr)sp, target.Width * 4, target.Left - x, target.Top - y)) return;
+                fixed (uint* bp = backdrop)
+                fixed (uint* sp = source)
+                {
+                    using var snapshot = surface.Snapshot();
+                    if (!snapshot.ReadPixels(info, (IntPtr)bp, target.Width * 4, target.Left, target.Top)) return;
+                    if (!src.ReadPixels(info, (IntPtr)sp, target.Width * 4, target.Left - x, target.Top - y)) return;
+                }
             }
-        }
 
-        var alphaScale = (int)MathF.Round(Math.Clamp(opacity, 0f, 1f) * 255);
-        for (var i = 0; i < backdrop.Length; i++)
-        {
-            var s = source[i];
-            if (s == 0) continue;
-            if (alphaScale < 255) s = LayerPixelSource.ScalePremul(s, (byte)alphaScale);
-            backdrop[i] = Blend(s, backdrop[i], mode);
-        }
-
-        unsafe
-        {
-            fixed (uint* bp = backdrop)
+            var alphaScale = (int)MathF.Round(Math.Clamp(opacity, 0f, 1f) * 255);
+            for (var i = 0; i < count; i++)
             {
-                using var result = SKImage.FromPixelCopy(info, (IntPtr)bp, target.Width * 4);
-                using var paint = new SKPaint { BlendMode = SKBlendMode.Src };
-                canvas.Save();
-                canvas.ResetMatrix();
-                canvas.DrawImage(result, target.Left, target.Top, paint);
-                canvas.Restore();
+                var s = source[i];
+                if (s == 0) continue;
+                if (alphaScale < 255) s = LayerPixelSource.ScalePremul(s, (byte)alphaScale);
+                backdrop[i] = Blend(s, backdrop[i], mode);
             }
+
+            unsafe
+            {
+                fixed (uint* bp = backdrop)
+                {
+                    using var result = SKImage.FromPixelCopy(info, (IntPtr)bp, target.Width * 4);
+                    using var paint = new SKPaint { BlendMode = SKBlendMode.Src };
+                    canvas.Save();
+                    canvas.ResetMatrix();
+                    canvas.DrawImage(result, target.Left, target.Top, paint);
+                    canvas.Restore();
+                }
+            }
+            canvas.Flush();
         }
-        canvas.Flush();
+        finally
+        {
+            pool.Return(source);
+            pool.Return(backdrop);
+        }
     }
 
     /// <summary>單一像素：<paramref name="src"/> 以 <paramref name="mode"/> 疊在 <paramref name="dst"/> 上（兩者皆 premul BGRA）。</summary>

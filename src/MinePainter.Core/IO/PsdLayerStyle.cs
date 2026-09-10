@@ -26,7 +26,7 @@ internal sealed class PsdLayerStyle
     public sealed record Bevel(int Style, bool Up, float Size, int Depth, float Soften, float LightAngle, float Altitude,
         SKColor Highlight, int HighlightOpacity, SKColor ShadowColor, int ShadowOpacity);
     public sealed record Overlay(SKColor Color, int Opacity);
-    public sealed record GradientOverlay(GradientStops Stops, float Angle, bool Radial, int Opacity);
+    public sealed record GradientOverlay(GradientStops Stops, float Angle, bool Radial, int Opacity, string BlendMode = "Nrml");
 
     public List<Stroke> Strokes { get; } = [];
     public Shadow? DropShadow { get; private set; }
@@ -178,7 +178,8 @@ internal sealed class PsdLayerStyle
         var stops = ReadStops(grad, fx.Bool("Rvrs") == true);
         if (stops == null) return null;
         return new GradientOverlay(stops, ToOurAngle(fx.Number("Angl") ?? 90),
-            fx.Enum("Type") == "Rdl", (int)Math.Clamp(Math.Round(fx.Number("Opct") ?? 100), 0, 100));
+            fx.Enum("Type")?.TrimEnd() == "Rdl", (int)Math.Clamp(Math.Round(fx.Number("Opct") ?? 100), 0, 100),
+            fx.Enum("Md  ")?.TrimEnd() ?? "Nrml");
     }
 
     /// <summary>Photoshop 漸層：色節點位置 0..4096；透明度節點另存（Trns），這裡只取顏色。</summary>

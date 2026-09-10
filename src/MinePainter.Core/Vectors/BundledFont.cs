@@ -43,8 +43,8 @@ public static class BundledFont
             : null;
 
     /// <summary>
-    /// 解析某個家族＋字重的字面：**系統裝了就用系統的**（才有 Bold／Black 等各種字重），
-    /// 系統沒有這支才退回內嵌的那份。
+    /// 解析某個家族＋字重的字面：比較系統與個人字型，選擇最接近的字重／斜體；
+    /// 兩邊都沒有這個家族才退回內嵌的那份。
     ///
     /// 不能反過來先問內嵌字型 —— 內嵌的只有 Regular 一個字重，家族名一撞就把整個家族接走，
     /// 選 Bold／Black 也還是畫 Regular（使用者 2026-09-04 回報「只有 Noto Sans TC 選不了字重」）。
@@ -53,16 +53,24 @@ public static class BundledFont
     /// </summary>
     public static SKTypeface? Resolve(string family, SKFontStyle style)
     {
-        // 程式跑著時才裝的字型：系統的字型管理器看不到，只有我們自己從檔案載入的那份（ExtraFonts）認得
-        if (ExtraFonts.Resolve(family, style) is { } extra) return extra;
+        // 個人目錄可能只有 Regular、系統卻有同家族的 Bold；兩邊一起比對，避免較差的字面遮住較佳者。
+        var extra = ExtraFonts.Resolve(family, style);
         var system = SKTypeface.FromFamilyName(family, style);
         if (system != null &&
             string.Equals(system.FamilyName, family, StringComparison.OrdinalIgnoreCase))
         {
+            static int Distance(SKTypeface face, SKFontStyle requested) =>
+                Math.Abs(face.FontWeight - requested.Weight)
+                + (face.FontStyle.Slant == requested.Slant ? 0 : 1000);
+            if (extra != null && Distance(extra, style) <= Distance(system, style))
+            {
+                system.Dispose();
+                return extra; // ExtraFonts 持有的共用字面不可 Dispose
+            }
             return system;
         }
         system?.Dispose();
-        return ForFamily(family);
+        return extra ?? ForFamily(family);
     }
 
     /// <summary>保底字面含這個碼位就給它，否則 null。</summary>

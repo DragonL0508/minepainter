@@ -133,10 +133,31 @@ public sealed unsafe partial class GpuLayerRenderer : IDisposable
         _lodLevel = LodLevelFor(viewScale);
         SetGpuContext(gpuContext);
         _docBounds = new SKRectI(0, 0, session.Document.Width, session.Document.Height);
-        DrawGroup(canvas, session, session.Document.Root, visibleDoc);
+        try
+        {
+            if (NeedsPsdComposite(session.Document.Root))
+            {
+                if (!TryDrawPsdComposite(canvas, session, visibleDoc)) return false;
+            }
+            else DrawGroup(canvas, session, session.Document.Root, visibleDoc);
+        }
+        catch (Exception ex)
+        {
+            // render thread 上炸掉會讓 Avalonia 整個停止重繪（畫面凍住、沒有任何錯誤）；
+            // 這裡接住、記下來，退回合成器的 tile 路徑，畫面至少還在動
+            LastError = ex.ToString();
+            DrawFailed?.Invoke(ex);
+            return false;
+        }
         SweepImageCaches(session);
         return true;
     }
+
+    /// <summary>GPU 路徑上一次炸掉的例外（診斷用；null＝沒炸過）。</summary>
+    public string? LastError { get; private set; }
+
+    /// <summary>GPU 路徑炸掉時發出（App 記 error.log）。render thread 上發出。</summary>
+    public static event Action<Exception>? DrawFailed;
 
     /// <summary>這條路徑還沒接手的狀態：有任何一個就整份退回原本的合成器。</summary>
     private static bool CanHandle(EditorSession session)
@@ -145,9 +166,9 @@ public sealed unsafe partial class GpuLayerRenderer : IDisposable
         // 而覆疊本來就只在「上面沒有看得見的東西」時才成立），這裡照常畫圖層樹即可 ——
         // 被變形的那層此刻沒有像素（手勢開始時已經拆下來），畫出來也是空的。
 
-        // Skia 沒有的混合模式（Photoshop 專有）要逐像素算，GPU 這條路畫不出來：整份退回 CPU 合成器。
-        // 逐像素的調整（3D LUT）同理：色彩濾鏡表達不了。
-        return !HasCustomBlend(session.Document.Root) && !HasPixelAdjustment(session.Document.Root);
+        // 逐像素的調整（3D LUT）：色彩濾鏡表達不了，整份退回 CPU 合成器。
+        // Skia 沒有的混合模式以前也退回，現在由 PSD 合成路徑用 runtime shader 算（見 GpuLayerRenderer.Psd）。
+        return !HasPixelAdjustment(session.Document.Root);
     }
 
     private static bool HasPixelAdjustment(GroupLayer group)
@@ -157,17 +178,6 @@ public sealed unsafe partial class GpuLayerRenderer : IDisposable
             if (!child.IsVisible) continue;
             if (child is AdjustmentLayer { Adjustment.RequiresPixelPath: true }) return true;
             if (child is GroupLayer nested && HasPixelAdjustment(nested)) return true;
-        }
-        return false;
-    }
-
-    private static bool HasCustomBlend(GroupLayer group)
-    {
-        foreach (var child in group.Children)
-        {
-            if (!child.IsVisible) continue;
-            if (Core.Compositing.CustomBlend.IsCustom(child.BlendMode)) return true;
-            if (child is GroupLayer nested && HasCustomBlend(nested)) return true;
         }
         return false;
     }
@@ -278,7 +288,7 @@ public sealed unsafe partial class GpuLayerRenderer : IDisposable
             return;
         }
 
-        var isolate = group.Opacity < 1f || group.BlendMode != BlendMode.Normal;
+        var isolate = !group.IsPassThrough || group.Opacity < 1f || group.BlendMode != BlendMode.Normal;
         if (isolate)
         {
             using var paint = LayerPaint(group, null);
@@ -288,7 +298,8 @@ public sealed unsafe partial class GpuLayerRenderer : IDisposable
         if (isolate) canvas.Restore();
     }
 
-    private void DrawRaster(SKCanvas canvas, EditorSession session, RasterLayer raster, SKRectI visibleDoc)
+    /// <param name="plain">畫成「不透明度 1、一般混合」的隔離內容（自訂混合模式的來源；疊上去的那一步另外做）。</param>
+    private void DrawRaster(SKCanvas canvas, EditorSession session, RasterLayer raster, SKRectI visibleDoc, bool plain = false)
     {
         // 效果一律拿 CPU 算好的那份（DisplaySurface）——「畫面看到的」與「匯出得到的」是同一份。
         // 曾經試過把效果翻成 Skia 濾鏡交給 GPU 算，但 Skia 的 dilate 是方形核心，
@@ -302,11 +313,11 @@ public sealed unsafe partial class GpuLayerRenderer : IDisposable
         var floatingHere = floating != null && floating.LayerId == raster.Id;
 
         // 橡皮擦的 DstOut 一定要在隔離層裡擦，否則會擦穿到下方圖層
-        var isolate = raster.Opacity < 1f || raster.BlendMode != BlendMode.Normal ||
+        var isolate = (!plain && (raster.Opacity < 1f || raster.BlendMode != BlendMode.Normal)) ||
                       (strokeHere && stroke.IsEraser);
         if (isolate)
         {
-            using var paint = LayerPaint(raster, null);
+            using var paint = plain ? new SKPaint() : LayerPaint(raster, null);
             canvas.SaveLayer(paint);
         }
 
@@ -318,7 +329,7 @@ public sealed unsafe partial class GpuLayerRenderer : IDisposable
         }
         else
         {
-            DrawTiles(canvas, raster, source, visibleDoc, isolate ? 1f : raster.Opacity);
+            DrawTiles(canvas, raster, source, visibleDoc, isolate || plain ? 1f : raster.Opacity);
         }
         if (strokeHere) DrawStroke(canvas, stroke);
         if (floatingHere) floating!.DrawInto(canvas, preview: true);
@@ -626,6 +637,9 @@ public sealed unsafe partial class GpuLayerRenderer : IDisposable
         foreach (var (_, filter) in _adjustments.Values) filter.Dispose();
         _adjustments.Clear();
         _rotatedText.Dispose();
+        DisposePsdResources();
+        _psdCompositeEffect?.Dispose();
+        _psdBlendEffect?.Dispose();
     }
 }
 

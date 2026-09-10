@@ -385,6 +385,8 @@ public static class LayerCommands
             IsVisible = source.IsVisible,
             Opacity = source.Opacity,
             BlendMode = source.BlendMode, // Pinta 這裡漏了，別跟著漏
+            RestrictedChannels = source.RestrictedChannels,
+            Mask = source.Mask,
             Offset = source.Offset,
         };
 
@@ -436,6 +438,8 @@ public static class LayerCommands
             Offset = source.Offset,
             Opacity = source.Opacity,
             BlendMode = source.BlendMode,
+            RestrictedChannels = source.RestrictedChannels,
+            Mask = source.Mask,
         };
         lock (doc.SyncRoot)
         {

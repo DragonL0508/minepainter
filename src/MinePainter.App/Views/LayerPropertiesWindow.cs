@@ -53,6 +53,14 @@ public sealed class LayerPropertiesWindow : Window
     private float _opacityDragStart = -1;
     private IAdjustment? _adjDragStart;
     private bool _closing;
+    private readonly CheckBox _passThrough = new() { Content = "群組直通混合", Name = "PassThrough" };
+    private readonly CheckBox[] _channels = [new() { Content = "R" }, new() { Content = "G" }, new() { Content = "B" }];
+    private readonly CheckBox _maskEnabled = new() { Content = "啟用遮色片", Name = "MaskEnabled" };
+    private readonly CheckBox _maskInverted = new() { Content = "反轉", Name = "MaskInverted" };
+    private readonly BarSlider _maskDensity = new() { Label = "遮色片濃度", Minimum = 0, Maximum = 100, DefaultValue = 100, Suffix = "%", Name = "MaskDensity" };
+    private readonly BarSlider _maskFeather = new() { Label = "羽化", Minimum = 0, Maximum = 1000, DefaultValue = 0, Suffix = "px", Decimals = 1, Name = "MaskFeather" };
+    private readonly StackPanel _maskControls = new() { Spacing = 4 };
+    private LayerMask? _maskDragStart;
 
     /// <summary>圖層屬性變更後發出（讓 MainWindow 刷新 undo 選單等）。</summary>
     public event Action? StateChanged;
@@ -156,6 +164,7 @@ public sealed class LayerPropertiesWindow : Window
         if (node is not AdjustmentLayer && !_presetMode)
             body.Children.Add(LabeledRow("混合", _blendCombo));
         if (!_presetMode) body.Children.Add(_opacityBar);
+        if (!_presetMode) body.Children.Add(BuildAdvancedProperties());
 
         if (node is AdjustmentLayer)
         {
@@ -203,6 +212,7 @@ public sealed class LayerPropertiesWindow : Window
 
     protected override void OnClosing(WindowClosingEventArgs e)
     {
+        CommitMaskDrag();
         base.OnClosing(e);
 
         // 同 PanelWindow：只有使用者自己關這扇窗時才播退場，
@@ -254,6 +264,17 @@ public sealed class LayerPropertiesWindow : Window
         _opacityBar.Value = _node.Opacity * 100;
         var idx = Array.FindIndex(BlendItems, x => x.Mode == _node.BlendMode);
         _blendCombo.SelectedIndex = Math.Max(0, idx);
+        _passThrough.IsChecked = _node is GroupLayer { IsPassThrough: true };
+        for (var channel = 0; channel < 3; channel++)
+            _channels[channel].IsChecked = (_node.RestrictedChannels & (1 << channel)) == 0;
+        _maskControls.IsVisible = _node.Mask != null;
+        if (_node.Mask is { } mask && _maskDragStart == null)
+        {
+            _maskEnabled.IsChecked = mask.Enabled;
+            _maskInverted.IsChecked = mask.Inverted;
+            _maskDensity.Value = mask.Density * 100;
+            _maskFeather.Value = mask.Feather;
+        }
         _suppress = false;
 
         _preview.Source = Rendering.LayerThumbnail.Render(_session.Document, _node, 176, 132);
@@ -264,6 +285,31 @@ public sealed class LayerPropertiesWindow : Window
 
     private void WireEvents()
     {
+        var propertyNode = _node;
+        _passThrough.IsCheckedChanged += (_, _) =>
+        {
+            if (_suppress || _node is not GroupLayer group) return;
+            ChangeAdvancedProperty("群組直通混合", group.IsPassThrough, _passThrough.IsChecked == true,
+                value => group.IsPassThrough = value);
+        };
+        for (var i = 0; i < _channels.Length; i++)
+        {
+            var channel = i;
+            _channels[i].IsCheckedChanged += (_, _) =>
+            {
+                if (_suppress) return;
+                var bit = 1 << channel;
+                var updated = _channels[channel].IsChecked == true
+                    ? _node.RestrictedChannels & ~bit : _node.RestrictedChannels | bit;
+                ChangeAdvancedProperty("混合色版", _node.RestrictedChannels, updated, value => propertyNode.RestrictedChannels = value);
+            };
+        }
+        _maskEnabled.IsCheckedChanged += (_, _) => ChangeMaskToggle(mask => mask with { Enabled = _maskEnabled.IsChecked == true });
+        _maskInverted.IsCheckedChanged += (_, _) => ChangeMaskToggle(mask => mask with { Inverted = _maskInverted.IsChecked == true });
+        _maskDensity.ValueChanged += value => PreviewMask(mask => mask with { Density = (float)(value / 100) });
+        _maskFeather.ValueChanged += value => PreviewMask(mask => mask with { Feather = (float)value });
+        _maskDensity.DragCompleted += _ => CommitMaskDrag();
+        _maskFeather.DragCompleted += _ => CommitMaskDrag();
         _nameBox.LostFocus += (_, _) => CommitName();
         _nameBox.KeyDown += (_, e) =>
         {
@@ -316,6 +362,66 @@ public sealed class LayerPropertiesWindow : Window
         if (string.IsNullOrEmpty(name) || name == _node.Name) return;
         LayerCommands.Rename(_session.Document, _session.History, _node, name);
         StateChanged?.Invoke();
+    }
+
+    private Control BuildAdvancedProperties()
+    {
+        var panel = new StackPanel { Spacing = 4 };
+        if (_node is GroupLayer) panel.Children.Add(_passThrough);
+        var channels = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12 };
+        channels.Children.Add(new TextBlock { Text = "混合色版", VerticalAlignment = VerticalAlignment.Center, FontSize = 12 });
+        foreach (var channel in _channels) channels.Children.Add(channel);
+        panel.Children.Add(channels);
+        _maskControls.Children.Add(new StackPanel
+        {
+            Orientation = Orientation.Horizontal, Spacing = 12, Children = { _maskEnabled, _maskInverted },
+        });
+        _maskControls.Children.Add(_maskDensity);
+        _maskControls.Children.Add(_maskFeather);
+        panel.Children.Add(_maskControls);
+        return new Expander { Header = "進階混合與遮色片", Content = panel, HorizontalAlignment = HorizontalAlignment.Stretch };
+    }
+
+    private void ChangeAdvancedProperty<T>(string label, T before, T after, Action<T> apply)
+    {
+        if (EqualityComparer<T>.Default.Equals(before, after)) return;
+        var doc = _session.Document;
+        var node = _node;
+        lock (doc.SyncRoot) { apply(after); node.InvalidateAll(); }
+        _session.History.Push(new ActionHistoryEntry(label, doc.Bounds,
+            undo: _ => { apply(before); node.InvalidateAll(); },
+            redo: _ => { apply(after); node.InvalidateAll(); }));
+        StateChanged?.Invoke();
+    }
+
+    private void ChangeMaskToggle(Func<LayerMask, LayerMask> update)
+    {
+        if (_suppress || _node.Mask == null) return;
+        CommitMaskDrag();
+        var before = _node.Mask;
+        var node = _node;
+        ChangeAdvancedProperty("遮色片設定", before, update(before), value => node.Mask = value);
+    }
+
+    private void PreviewMask(Func<LayerMask, LayerMask> update)
+    {
+        if (_suppress || _node.Mask == null) return;
+        _maskDragStart ??= _node.Mask;
+        lock (_session.Document.SyncRoot)
+        {
+            _node.Mask = update(_node.Mask);
+            _node.InvalidateAll();
+        }
+    }
+
+    private void CommitMaskDrag()
+    {
+        if (_maskDragStart is not { } before) return;
+        _maskDragStart = null;
+        var after = _node.Mask;
+        if (after == null || before.Density == after.Density && before.Feather == after.Feather) return;
+        var node = _node;
+        ChangeAdvancedProperty("遮色片設定", before, after, value => node.Mask = value);
     }
 
     // ---- 調整圖層參數 ----

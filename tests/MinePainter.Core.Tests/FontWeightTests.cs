@@ -7,6 +7,7 @@ namespace MinePainter.Core.Tests;
 /// <summary>
 /// 字重解析：系統裝了那支家族就用系統的（才有 Bold／Black），沒有才退回內嵌的保底字型。
 /// </summary>
+[Collection("Font registration")]
 public class FontWeightTests
 {
     /// <summary>系統裡同時有 Regular 與 Bold 的家族；找不到就回 null（該機器上不測）。</summary>
@@ -51,6 +52,41 @@ public class FontWeightTests
     }
 
     [Fact]
+    public void Resolve_ExtraRegularDoesNotHideSystemBold_AndKeepsExtraAlive()
+    {
+        if (MultiWeightFamily() is not { } family) return;
+        using var regularStyle = new SKFontStyle(400, 5, SKFontStyleSlant.Upright);
+        using var boldStyle = new SKFontStyle(700, 5, SKFontStyleSlant.Upright);
+        using var regular = SKTypeface.FromFamilyName(family, regularStyle);
+        using var systemBold = SKTypeface.FromFamilyName(family, boldStyle);
+        using var stream = regular.OpenStream();
+        if (stream == null) return;
+        using var data = SKData.Create(stream);
+        var path = Path.Combine(Path.GetTempPath(), $"minepainter-font-{Guid.NewGuid():N}.ttf");
+        try
+        {
+            File.WriteAllBytes(path, data.ToArray());
+            Assert.True(ExtraFonts.Register(path));
+            var extra = ExtraFonts.Resolve(family, regularStyle);
+            Assert.NotNull(extra);
+            // Font collections may also contain the bold face; this case still proves exact selection.
+            var selected = BundledFont.Resolve(family, boldStyle);
+            Assert.NotNull(selected);
+            Assert.Equal(systemBold.FontWeight, selected.FontWeight);
+            if (!ExtraFonts.Owns(selected)) selected.Dispose();
+            var shared = BundledFont.Resolve(family, regularStyle);
+            Assert.NotNull(shared);
+            Assert.Same(extra, shared);
+            Assert.True(shared.ContainsGlyph('A')); // returning it must not dispose the shared handle
+        }
+        finally
+        {
+            ExtraFonts.Clear();
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void TextElement_RendersDifferentWeights()
     {
         if (MultiWeightFamily() is not { } family) return;
@@ -66,3 +102,6 @@ public class FontWeightTests
             $"字重沒有作用：Regular {regular.FrameBounds.Width} vs 900 {black.FrameBounds.Width}");
     }
 }
+
+[CollectionDefinition("Font registration", DisableParallelization = true)]
+public sealed class FontRegistrationCollection;

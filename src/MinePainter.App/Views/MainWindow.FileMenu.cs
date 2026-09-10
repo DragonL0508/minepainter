@@ -137,11 +137,13 @@ public partial class MainWindow
     /// </summary>
     private async Task<Core.Documents.Document> AskFastModeOnOpen(Core.Documents.Document doc, string what = "這份專案")
     {
+        // MINEPAINTER_DEBUG_OPEN_MODE=full／fast：離螢幕驗證時沒有人能按對話框，直接替使用者選
+        var debugMode = Environment.GetEnvironmentVariable("MINEPAINTER_DEBUG_OPEN_MODE");
         if (doc.IsFastMode)
         {
             var dialog = FastModeOpenDialog.ForFastProject(doc.Width, doc.Height, doc.OutputWidth, doc.OutputHeight);
-            await dialog.ShowDialog(this);
-            if (dialog.Result == FastModeOpenDialog.Choice.Fast) return doc;
+            if (debugMode is not ("full" or "fast")) await dialog.ShowDialog(this);
+            if (dialog.Result == FastModeOpenDialog.Choice.Fast || debugMode == "fast") return doc;
 
             var width = doc.OutputWidth;
             var height = doc.OutputHeight;
@@ -154,8 +156,9 @@ public partial class MainWindow
 
         var (proxyW, proxyH) = Core.Documents.FastMode.ProxySize(doc.Width, doc.Height);
         var ask = FastModeOpenDialog.ForLargeDocument(what, doc.Width, doc.Height, proxyW, proxyH);
-        await ask.ShowDialog(this);
-        if (ask.Result != FastModeOpenDialog.Choice.Fast) return doc;
+        if (debugMode == "full") return doc;
+        if (debugMode != "fast") await ask.ShowDialog(this);
+        if (ask.Result != FastModeOpenDialog.Choice.Fast && debugMode != "fast") return doc;
 
         var outW = doc.Width;
         var outH = doc.Height;

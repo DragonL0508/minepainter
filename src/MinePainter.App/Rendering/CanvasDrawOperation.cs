@@ -109,6 +109,8 @@ public sealed class CanvasDrawOperation : ICustomDrawOperation
 
         var drawn = 0;
         var pending = 0;
+        var frameClock = System.Diagnostics.Stopwatch.StartNew();
+        double lockWaitMs = 0;
 
         canvas.Save();
         canvas.ClipRect(SKRect.Create(0, 0, (float)Bounds.Width, (float)Bounds.Height));
@@ -160,8 +162,10 @@ public sealed class CanvasDrawOperation : ICustomDrawOperation
         if (docR > docL && docB > docT)
         {
             var visible = new SKRectI((int)docL, (int)docT, (int)Math.Ceiling(docR), (int)Math.Ceiling(docB));
+            var lockStart = frameClock.Elapsed.TotalMilliseconds;
             lock (_session.Document.SyncRoot)
             {
+                lockWaitMs = frameClock.Elapsed.TotalMilliseconds - lockStart;
                 gpuDrew = _gpuRenderer.TryDraw(canvas, _session, visible, deviceScale, lease.GrContext);
             }
         }
@@ -237,6 +241,7 @@ public sealed class CanvasDrawOperation : ICustomDrawOperation
         canvas.Restore();                       // 最外層 clip
 
         _stats.PendingTiles = pending;
+        _stats.RecordFrameCost(lockWaitMs, frameClock.Elapsed.TotalMilliseconds, gpuDrew);
     }
 
     /// <summary>

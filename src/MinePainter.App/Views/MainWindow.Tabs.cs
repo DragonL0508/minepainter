@@ -44,6 +44,7 @@ public partial class MainWindow
         public TextBlock TabLabel = null!;
         public Image Thumb = null!;
         public int ThumbChangeVersion = -1; // 上次畫縮圖時的 ChangeVersion（-1 = 還沒畫過）
+        public int ThumbSeenVersion = -1;   // 上次檢查時看到的 ChangeVersion（連續兩次相同＝變更停下來了）
     }
 
     private readonly List<DocumentTabView> _tabs = new();
@@ -342,14 +343,26 @@ public partial class MainWindow
     }
 
     /// <summary>重畫分頁縮圖（有變更才畫；ChangeVersion 沒動就直接跳過）。</summary>
-    private void RefreshTabThumbnail(DocumentTabView tab)
+    private void RefreshTabThumbnail(DocumentTabView tab, bool settledOnly = false)
     {
         var version = tab.Document.ChangeVersion;
         if (version == tab.ThumbChangeVersion) return;
+        // 拖曳／筆劃進行中每半秒重畫一次整份文件的縮圖（50 層的 PSD 要 25ms，在 UI 執行緒上）
+        // 只會讓手勢一頓一頓；等變更停下來（連續兩次檢查版本沒動）再畫
+        if (settledOnly && version != tab.ThumbSeenVersion)
+        {
+            tab.ThumbSeenVersion = version;
+            return;
+        }
         tab.ThumbChangeVersion = version;
         var doc = tab.Document.Session.Document;
+        var clock = System.Diagnostics.Stopwatch.StartNew();
         tab.Thumb.Source = Rendering.LayerThumbnail.Render(doc, doc.Root, 46, 34);
+        DebugThumbMaxMs = Math.Max(DebugThumbMaxMs, clock.Elapsed.TotalMilliseconds);
     }
+
+    /// <summary>診斷（MINEPAINTER_DEBUG_PERF_FRAMES）：分頁縮圖單次重畫最久的毫秒數。</summary>
+    internal double DebugThumbMaxMs;
 
     private void UpdateViewportStatus()
     {
@@ -380,7 +393,7 @@ public partial class MainWindow
                 : frames >= 10 ? $"{stats.Fps:F0} fps" : "閒置";
 
             // 順便讓作用中分頁的縮圖跟上編輯（ChangeVersion 沒變就是免費檢查）
-            if (_activeTab is { } tab) RefreshTabThumbnail(tab);
+            if (_activeTab is { } tab) RefreshTabThumbnail(tab, settledOnly: true);
             EnsurePanelsVisible(); // 開關亮著的面板一定看得到（自我修復）
         };
         timer.Start();

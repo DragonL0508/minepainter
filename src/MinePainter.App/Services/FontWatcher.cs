@@ -22,11 +22,30 @@ public static class FontWatcher
     {
         if (_started) return;
         _started = true;
+        var registered = false;
+        var retryLater = false;
+        var systemDirectory = Environment.GetFolderPath(Environment.SpecialFolder.Fonts);
         foreach (var dir in FontDirectories())
         {
             try
             {
-                foreach (var file in Directory.EnumerateFiles(dir)) Known.Add(file);   // 啟動時就有的：系統自己認得
+                foreach (var file in Directory.EnumerateFiles(dir))
+                {
+                    // 個人目錄裡已存在的字型未必已登記至 DirectWrite，仍需直接載入。
+                    // 系統目錄不重複載入，避免啟動時掃描整套 Windows 字型。
+                    if (string.Equals(dir, systemDirectory, StringComparison.OrdinalIgnoreCase)
+                        || !Extensions.Contains(Path.GetExtension(file), StringComparer.OrdinalIgnoreCase))
+                    {
+                        Known.Add(file);
+                        continue;
+                    }
+                    if (IsReadable(file) && ExtraFonts.Register(file))
+                    {
+                        Known.Add(file);
+                        registered = true;
+                    }
+                    else retryLater = true;
+                }
                 var watcher = new FileSystemWatcher(dir)
                 {
                     NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.Size,
@@ -43,6 +62,8 @@ public static class FontWatcher
                 // 資料夾不存在或沒權限：這個目錄就不看
             }
         }
+        if (registered) FontCatalog.Invalidate();
+        if (retryLater) Schedule();
     }
 
     private static IEnumerable<string> FontDirectories()

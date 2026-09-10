@@ -55,11 +55,10 @@ public static class FontCatalog
         // 程式跑著時新裝的字型：系統的字型管理器看不到它，字重從我們自己載入的字面列
         foreach (var (name, weight) in Core.Vectors.ExtraFonts.Styles(family))
             options.Add(new FontStyleOption(name, weight));
-        if (options.Count > 0) return options.ToArray();
         try
         {
             using var set = SKFontManager.Default.GetFontStyles(family);
-            var seen = new HashSet<int>();
+            var seen = options.Select(option => option.Weight).ToHashSet();
             for (var i = 0; i < set.Count; i++)
             {
                 var style = set[i];

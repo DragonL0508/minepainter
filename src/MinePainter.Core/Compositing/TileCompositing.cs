@@ -7,7 +7,7 @@ using SkiaSharp;
 namespace MinePainter.Core.Compositing;
 
 /// <summary>同步圖層像素合成；呼叫端持有文件鎖，排程與影像回收由 Compositor 管理。</summary>
-internal static class TileCompositing
+internal static partial class TileCompositing
 {
     internal static unsafe uint[] ReadGroupPixelsLocked(GroupLayer group, SKRectI docRect,
         StrokeBuffer? strokeBuffer, Selections.FloatingSelection? floating,
@@ -87,13 +87,24 @@ internal static class TileCompositing
 
     /// <summary>把群組內容合成到 surface（canvas 原點 = tileRect 左上）。回傳是否畫了東西。</summary>
     internal static bool CompositeGroup(GroupLayer group, SKSurface surface, SKRectI tileRect,
-        StrokeBuffer? strokeBuffer, Selections.FloatingSelection? floating, (Guid? Id, bool IncludesElements) detachedLayer)
+        StrokeBuffer? strokeBuffer, Selections.FloatingSelection? floating, (Guid? Id, bool IncludesElements) detachedLayer,
+        bool hasBackdrop = false)
     {
         var canvas = surface.Canvas;
-        var drew = false;
+        var drew = hasBackdrop;
         foreach (var child in group.Children)
         {
             if (!child.IsVisible || child.Opacity <= 0) continue;
+
+            // 限制通道／遮色片：要先留一份「畫之前」的像素，畫完再套回去（見 RestoreChannels）。
+            // 遮色片整格 0 的子層在這格根本不用畫；整格 255 又沒限制通道的就當沒有遮色片。
+            var childMask = child is GroupLayer ? null : child.Mask;
+            var childCoverage = childMask == null ? MaskCoverage.Full : ClassifyMask(childMask, tileRect);
+            if (childCoverage == MaskCoverage.Empty) continue;
+            var needsBackdrop = child.RestrictedChannels != 0 || childCoverage == MaskCoverage.Partial;
+            var channelBackdrop = needsBackdrop ? ReadCompositePixels(surface) : null;
+            try
+            {
 
             switch (child)
             {
@@ -213,6 +224,11 @@ internal static class TileCompositing
 
                 case GroupLayer nested:
                 {
+                    if (nested.IsPassThrough || nested.Mask != null)
+                    {
+                        drew |= CompositeMaskedGroup(nested, surface, tileRect, strokeBuffer, floating, detachedLayer, drew);
+                        break;
+                    }
                     // isolated composite：先拿群組內容的快取 tile，再以群組 opacity/blend 疊上。
                     // 群組有效果堆疊且已算好時，拿的是「整組套過效果」的那份（外框／陰影包住整組，
                     // 而不是每個子層各一份）；還沒算好就先畫原本的內容，不要讓整組消失。
@@ -241,6 +257,12 @@ internal static class TileCompositing
                     }
                     break;
                 }
+            }
+            if (channelBackdrop != null) RestoreChannels(surface, channelBackdrop, child.RestrictedChannels, childMask, tileRect);
+            }
+            finally
+            {
+                channelBackdrop?.Release();
             }
         }
         return drew;

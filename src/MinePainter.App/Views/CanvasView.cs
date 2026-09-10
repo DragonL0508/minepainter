@@ -527,6 +527,9 @@ public sealed class CanvasView : Control
     /// </summary>
     private readonly Rendering.GpuLayerRenderer _gpuRenderer = new();
 
+    /// <summary>診斷用：GPU 圖層樹路徑的上一幀統計（MINEPAINTER_DEBUG_PERF_FRAMES）。</summary>
+    public Rendering.GpuLayerRenderer GpuRenderer => _gpuRenderer;
+
     private readonly Core.Tools.HandleDragController _handles = new();
     private readonly Core.Tools.ElementDragHelper _elementRotate = new(); // 右鍵旋轉文字物件
     private bool _handleDragging;

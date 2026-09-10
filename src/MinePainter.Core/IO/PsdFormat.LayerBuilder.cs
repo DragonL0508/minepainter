@@ -51,9 +51,11 @@ public static partial class PsdFormat
                             var finished = stack.Pop();
                             opened.Remove(finished);
                             ApplyProperties(finished, record, notes, isGroup: true);
+                            finished.IsPassThrough = record.BlendKey == "pass";
                             Current().Add(finished);
 
                             var groupPlane = planes.Pop();
+                            if (finished.Mask != null) groupPlane.ApplyMask(finished.Mask);
                             if (finished.IsVisible) planes.Peek().Accumulate(groupPlane, finished.Opacity);
                             clipBase = new ClipBase(null, SKRectI.Empty, groupPlane, finished.IsVisible);
                             break;
@@ -114,6 +116,8 @@ public static partial class PsdFormat
             node.IsVisible = !record.Hidden;
             node.Opacity = record.Opacity / 255f * (record.FillOpacity / 255f);
             node.BlendMode = MapBlendMode(record.BlendKey, node.Name, isGroup, notes);
+            node.RestrictedChannels = record.RestrictedChannels;
+            node.Mask = BuildMask(record);
         }
 
         /// <summary>
@@ -137,8 +141,6 @@ public static partial class PsdFormat
                 }
                 var layer = new AdjustmentLayer(adjustment);
                 ApplyProperties(layer, record, notes, isGroup: false);
-                if (record.HasMask && record.Channels.Any(c => c.Id == -2 && c.Samples != null))
-                    notes.Add($"調整圖層「{name}」的遮色片沒有對應，會影響整張。");
                 if (record.Clipped)
                     notes.Add($"「{name}」剪裁到下一層的調整改成影響下方所有圖層。");
                 return layer;
@@ -178,13 +180,14 @@ public static partial class PsdFormat
 
             // 填色圖層的形狀就是它的遮色片（沒遮色片＝整張）；向量遮色片（形狀圖層）這裡讀不到
             record.Rect = canvas;
-            if (record.HasMask) ApplyMask(bgra, record);
+
             if (blocks.ContainsKey("vmsk") || blocks.ContainsKey("vsms"))
                 notes.Add($"「{name}」的向量遮色片沒有對應，填色會蓋滿整張。");
 
             var raster = new RasterLayer();
             ApplyProperties(raster, record, notes, isGroup: false);
             if (!IsFullyTransparent(bgra)) CopyUnpremultiplied(raster, bgra, canvas, colorSpace);
+            if (record.HasMask) ApplyMask(bgra, record);
             fillBgra = bgra;
             return raster;
         }
@@ -270,6 +273,16 @@ public static partial class PsdFormat
                     Over(i, other._alpha[i] * scale / 255);
             }
 
+            public void ApplyMask(LayerMask mask)
+            {
+                for (var y = 0; y < _height; y++)
+                for (var x = 0; x < _width; x++)
+                {
+                    var i = y * _width + x;
+                    _alpha[i] = (byte)((_alpha[i] * mask.At(x, y) + 127) / 255);
+                }
+            }
+
             private void Over(int index, int a)
             {
                 if (a == 0) return;
@@ -303,7 +316,7 @@ public static partial class PsdFormat
                 }
 
                 bgra = ComposeBgra(record, header, palette);
-                if (record.HasMask) ApplyMask(bgra, record);
+
                 if (record.Clipped)
                 {
                     if (clipBase != null) ApplyClip(bgra, record.Rect, clipBase);
@@ -313,12 +326,26 @@ public static partial class PsdFormat
                 // 圖層樣式一律掛成效果堆疊（文字圖層也是），在圖層屬性的效果面板就能改
                 var style = ParseStyle(record, header, layer.Name, notes);
                 if (style is { IsEmpty: false }) layer.SetEffects(style.ToLayerEffects());
+                // With no fill, a lone gradient overlay is the complete layer.
+                // Preserve its opacity/blend independently of the invisible fill.
+                if (record.FillOpacity == 0 && style?.Gradient is { } gradient && layer.Effects.Count == 1)
+                {
+                    layer.Opacity = record.Opacity / 255f * gradient.Opacity / 100f;
+                    layer.BlendMode = gradient.BlendMode switch
+                    {
+                        "Mltp" => BlendMode.Multiply,
+                        "Scrn" => BlendMode.Screen,
+                        "Ovrl" => BlendMode.Overlay,
+                        _ => BlendMode.Normal,
+                    };
+                }
                 if (style is { Unsupported.Count: > 0 })
                     notes.Add($"「{layer.Name}」的圖層樣式裡，{string.Join("、", style.Unsupported.Distinct())}沒有對應，已略過。");
 
                 if (record.TextData != null && BuildText(record, layer.Name, notes, header.Dpi) is { Count: > 0 } texts)
                 {
                     // 文字圖層不變式：有物件就沒有像素。點陣快照只留給剪裁／群組 alpha 當底用
+                    if (record.HasMask) ApplyMask(bgra, record);
                     if (texts.Count == 1)
                     {
                         layer.AddElement(texts[0]);
@@ -326,7 +353,7 @@ public static partial class PsdFormat
                     }
 
                     // 多段樣式：群組沿用圖層的名字、可見性；每段一層，效果與不透明度各帶一份（與「分離文字」同構）
-                    var group = new GroupLayer { Name = layer.Name, IsVisible = layer.IsVisible };
+                    var group = new GroupLayer { Name = layer.Name, IsVisible = layer.IsVisible, Mask = layer.Mask, RestrictedChannels = layer.RestrictedChannels };
                     foreach (var text in texts)
                     {
                         var piece = new RasterLayer
@@ -345,6 +372,7 @@ public static partial class PsdFormat
                 }
 
                 if (!IsFullyTransparent(bgra)) CopyUnpremultiplied(layer, bgra, record.Rect, header.ColorSpace);
+                if (record.HasMask) ApplyMask(bgra, record);
                 return layer;
             }
             catch
@@ -423,35 +451,28 @@ public static partial class PsdFormat
             return bgra;
         }
 
-        /// <summary>
-        /// 使用者遮色片烙進 alpha。我們沒有「圖層遮色片」這個物件，烙進去畫面一樣，
-        /// 只是使用者之後不能再單獨編輯遮色片。旗標：bit 1 停用、bit 2 反相、bit 0 位置相對於圖層。
-        /// </summary>
+        private static LayerMask? BuildMask(LayerRecord record)
+        {
+            if (!record.HasMask) return null;
+            var bounds = record.MaskRect;
+            // PSD mask rectangles are stored in document coordinates.
+            var alpha = record.Channels.FirstOrDefault(c => c.Id == -2)?.Samples
+                ?? Enumerable.Repeat(record.MaskDefault, checked(Math.Max(0, bounds.Width) * Math.Max(0, bounds.Height))).ToArray();
+            return new LayerMask(bounds, alpha, record.MaskDefault) {
+                Enabled = (record.MaskFlags & 2) == 0, Inverted = (record.MaskFlags & 4) != 0,
+                Density = record.MaskDensity, Feather = record.MaskFeather };
+        }
+
+        // Coverage for clipping-base bookkeeping only; native pixels stay unmasked.
         private static void ApplyMask(byte[] bgra, LayerRecord record)
         {
-            if ((record.MaskFlags & 0x02) != 0) return;
-            var mask = record.Channels.FirstOrDefault(c => c.Id == -2)?.Samples;
-            var invert = (record.MaskFlags & 0x04) != 0;
-            var maskRect = record.MaskRect;
-            if ((record.MaskFlags & 0x01) != 0)
-                maskRect.Offset(record.Rect.Left, record.Rect.Top);
-
-            var width = record.Rect.Width;
-            var height = record.Rect.Height;
-            for (var y = 0; y < height; y++)
+            var mask = BuildMask(record)?.Rendered;
+            if (mask == null) return;
+            for (var y = 0; y < record.Rect.Height; y++)
+            for (var x = 0; x < record.Rect.Width; x++)
             {
-                var docY = record.Rect.Top + y;
-                for (var x = 0; x < width; x++)
-                {
-                    var docX = record.Rect.Left + x;
-                    int coverage = record.MaskDefault;
-                    if (mask != null && maskRect.Contains(docX, docY))
-                        coverage = mask[(docY - maskRect.Top) * maskRect.Width + (docX - maskRect.Left)];
-                    if (invert) coverage = 255 - coverage;
-
-                    var i = (y * width + x) * 4 + 3;
-                    bgra[i] = (byte)((bgra[i] * coverage + 127) / 255);
-                }
+                var i = (y * record.Rect.Width + x) * 4 + 3;
+                bgra[i] = (byte)((bgra[i] * mask.At(record.Rect.Left + x, record.Rect.Top + y) + 127) / 255);
             }
         }
 
@@ -555,7 +576,7 @@ public static partial class PsdFormat
             switch (key)
             {
                 case "norm": return BlendMode.Normal;
-                case "pass": return BlendMode.Normal;   // 群組直通：我們的群組一律先合成再疊，多數情況看起來一樣
+                case "pass": return BlendMode.Normal;   // GroupLayer.IsPassThrough controls backdrop access.
                 case "mul ": return BlendMode.Multiply;
                 case "scrn": return BlendMode.Screen;
                 case "over": return BlendMode.Overlay;

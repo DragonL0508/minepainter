@@ -250,6 +250,7 @@ public static partial class PsdFormat
         public string BlendKey = "norm";
         public byte Opacity = 255;
         public byte FillOpacity = 255;
+        public int RestrictedChannels;
         public bool Clipped;
         public bool Hidden;
         public string Name = "";
@@ -257,6 +258,8 @@ public static partial class PsdFormat
         public SKRectI MaskRect;
         public byte MaskDefault = 255;
         public byte MaskFlags;
+        public float MaskDensity = 1;
+        public float MaskFeather;
         public int SectionType;     // lsct：0 一般、1／2 群組本體、3 群組底部界線
         public bool IsAdjustmentOrFill;
         public readonly Dictionary<string, byte[]> ParameterBlocks = [];   // 調整／填色圖層的參數區塊（key → 原始位元組）
@@ -383,6 +386,15 @@ public static partial class PsdFormat
             record.MaskDefault = reader.Byte();
             record.MaskFlags = reader.Byte();
             record.HasMask = true;
+            if ((record.MaskFlags & 16) != 0 && reader.Position < maskStart + maskLength)
+            {
+                var parameters = reader.Byte();
+                if ((parameters & 1) != 0) record.MaskDensity = reader.Byte() / 255f;
+                if ((parameters & 2) != 0) record.MaskFeather = (float)BitConverter.Int64BitsToDouble(reader.Int64());
+                if ((parameters & 4) != 0) reader.Byte();
+                if ((parameters & 8) != 0) reader.Int64();
+                if (reader.Position > maskStart + maskLength) throw new InvalidDataException("Truncated mask parameters.");
+            }
             reader.Position = maskStart + maskLength;
         }
         else
@@ -436,10 +448,18 @@ public static partial class PsdFormat
                 break;
             case "lsct":
                 if (length >= 4) record.SectionType = (int)reader.UInt32();
-                // 群組自己的混合模式（有 12 位元組以上時）通常是 pass 直通，圖層記錄本身那個 key 才是可用的
+                if (length >= 12 && ReadBlockSignature(reader))
+                    record.BlendKey = Encoding.ASCII.GetString(reader.Bytes(4));
                 break;
             case "iOpa":
                 if (length >= 1) record.FillOpacity = reader.Byte();
+                break;
+            case "brst":
+                for (var i = 0L; i + 4 <= length; i += 4)
+                {
+                    var channel = reader.Int32();
+                    if (channel is >= 0 and <= 2) record.RestrictedChannels |= 1 << channel;
+                }
                 break;
             case "TySh":
                 record.TextData = reader.Bytes(length);

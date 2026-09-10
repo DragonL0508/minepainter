@@ -338,7 +338,7 @@ public sealed class LayerPixelSource : IDisposable
     }
 
     /// <summary>premul 像素四通道乘上 m/255。</summary>
-    internal static uint ScalePremul(uint p, byte m)
+    public static uint ScalePremul(uint p, byte m)
     {
         if (m == 255) return p;
         if (m == 0) return 0;

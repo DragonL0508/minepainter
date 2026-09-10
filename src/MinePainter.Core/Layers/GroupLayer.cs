@@ -1,12 +1,12 @@
-﻿using MinePainter.Core.Compositing;
+using MinePainter.Core.Compositing;
 using MinePainter.Core.Documents;
 using SkiaSharp;
 
 namespace MinePainter.Core.Layers;
 
 /// <summary>
-/// 圖層群組：一律 isolated composite（先合成到透明底，再以群組 opacity/blend 疊到下方）。
-/// 調整圖層的作用範圍以群組為界。持有 tile 級合成快取。
+/// 圖層群組：預設先合成到透明底；PSD 直通群組可使用外部背景。
+/// 隔離群組持有 tile 級合成快取；遮色片作用在整組合成結果。
 /// </summary>
 public sealed class GroupLayer : LayerNode, IDisposable
 {
@@ -14,6 +14,8 @@ public sealed class GroupLayer : LayerNode, IDisposable
 
     /// <summary>由下而上排序（index 0 = 最底層）。</summary>
     public IReadOnlyList<LayerNode> Children => _children;
+
+    public bool IsPassThrough { get; set; }
 
     /// <summary>此群組內容（未套群組 opacity/blend）的合成快取；compositor 專用。</summary>
     internal GroupCache Cache { get; } = new();

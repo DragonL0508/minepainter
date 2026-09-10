@@ -103,7 +103,7 @@ public class PsdAdjustmentLayerTests
     }
 
     [Fact]
-    public void Load_UnsupportedAdjustmentIsSkippedWithNote_AndMaskWarns()
+    public void Load_UnsupportedAdjustmentIsSkippedWithNote_AndMaskIsPreserved()
     {
         var gradientMap = new PsdFormatTests.PsdWriter.Layer("gm", SKRectI.Empty);
         gradientMap.Blocks["grdm"] = [0, 1, 0, 0];
@@ -122,7 +122,10 @@ public class PsdAdjustmentLayerTests
         Assert.Equal(2, doc.Root.Children.Count);   // 漸層對應略過
         Assert.IsType<AdjustmentLayer>(doc.Root.Children[1]);
         Assert.Contains(warnings, w => w.Contains("漸層對應") && w.Contains("略過"));
-        Assert.Contains(warnings, w => w.Contains("遮色片") && w.Contains("thr"));
+        Assert.NotNull(doc.Root.Children[1].Mask);
+        Assert.Equal(255, doc.Root.Children[1].Mask!.At(1, 1));
+        Assert.Equal(0, doc.Root.Children[1].Mask!.At(6, 6));
+        Assert.DoesNotContain(warnings, w => w.Contains("遮色片") && w.Contains("thr"));
     }
 
     [Fact]
@@ -157,7 +160,9 @@ public class PsdAdjustmentLayerTests
         var left = BackgroundRemovalCommandReadPixel(solidLayer, 1, 4);
         var right = BackgroundRemovalCommandReadPixel(solidLayer, 6, 4);
         Assert.Equal(new SKColor(0, 128, 255, 255), left);
-        Assert.Equal(SKColors.Empty, right);   // 遮色片外透明
+        Assert.Equal(new SKColor(0, 128, 255, 255), right); // Original pixels remain editable.
+        Assert.NotNull(solidLayer.Mask);
+        Assert.Equal(0, solidLayer.Mask.At(6, 4));
 
         var gradientLayer = Assert.IsType<RasterLayer>(doc.Root.Children[1]);
         var leftEdge = BackgroundRemovalCommandReadPixel(gradientLayer, 0, 4);

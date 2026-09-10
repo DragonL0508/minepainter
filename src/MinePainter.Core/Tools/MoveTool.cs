@@ -65,6 +65,7 @@ public sealed class MoveTool : ITool
     private readonly List<RasterLayer> _moveLayers = new();
     private readonly List<SKPointI> _startOffsets = new();
     private readonly List<VectorElement[]> _startElements = new();
+    private IReadOnlyList<(LayerNode Layer, LayerMask Mask)> _startMasks = [];
     private SKPointI _lastMoveDelta;
     private bool _movingGroup;
     private bool _layerDetachTried;
@@ -234,6 +235,7 @@ public sealed class MoveTool : ITool
 
         lock (doc.SyncRoot)
         {
+            _startMasks = SnapshotMasks(doc.ActiveLayer);
             foreach (var l in _moveLayers)
             {
                 _startOffsets.Add(l.Offset);
@@ -268,6 +270,26 @@ public sealed class MoveTool : ITool
                 case GroupLayer g: CollectRasterLayers(g, into); break;
             }
         }
+    }
+
+    internal static IReadOnlyList<(LayerNode Layer, LayerMask Mask)> SnapshotMasks(LayerNode? root)
+    {
+        var result = new List<(LayerNode, LayerMask)>();
+        void Visit(LayerNode node)
+        {
+            if (node.Mask is { } mask) result.Add((node, mask));
+            if (node is GroupLayer group)
+                foreach (var child in group.Children) Visit(child);
+        }
+        if (root != null) Visit(root);
+        return result;
+    }
+
+    internal static bool HasMaskInAncestry(LayerNode? layer)
+    {
+        for (var node = layer; node != null; node = node.Parent)
+            if (node.Mask != null) return true;
+        return false;
     }
 
     public void OnPointerMove(ToolPointerEvent e, EditorSession session)
@@ -332,7 +354,7 @@ public sealed class MoveTool : ITool
 
                 // 單層 session：第一次真的動了才拆下來走覆疊（純平移期間 render thread 直接畫，
                 // 一格都不重合成）；群組沒有快路徑，但純平移也只改 Offset、不重取樣。
-                if (!_layerDetachTried && transform.SoleLayer is { } sole)
+                if (!_layerDetachTried && transform.SoleLayer is { } sole && !HasMaskInAncestry(sole))
                 {
                     _layerDetachTried = true;
                     session.BeginLayerDrag(sole);
@@ -363,7 +385,7 @@ public sealed class MoveTool : ITool
                 // 第一次真的動了才把圖層從合成結果拆下來 —— 只是點一下的話不必付這個代價。
                 // 拆下來之後拖曳期間一格都不用重合成（見 EditorSession.BeginLayerDrag）。
                 // 群組（多圖層）沒有覆疊快路徑，直接走合成器（層序正確優先）。
-                if (_layer != null && !_layerDetachTried)
+                if (_layer != null && !HasMaskInAncestry(_layer) && !_layerDetachTried)
                 {
                     _layerDetachTried = true;
                     session.BeginLayerDrag(_layer);
@@ -418,6 +440,12 @@ public sealed class MoveTool : ITool
                         }
                     }
                 }
+                lock (doc.SyncRoot)
+                    foreach (var (node, mask) in _startMasks)
+                    {
+                        node.Mask = mask.Translated(delta.X, delta.Y);
+                        node.InvalidateComposite(doc.Bounds);
+                    }
                 session.RefreshSelectionHandles(); // 圖層內容框跟著 offset 走（內容快取沒失效，O(1)）
                 break;
             }
@@ -494,6 +522,7 @@ public sealed class MoveTool : ITool
                 var layers = _moveLayers.ToArray();
                 var oldOffsets = _startOffsets.ToArray();
                 var oldElements = _startElements.ToArray();
+                var masks = _startMasks.Select(p => (p.Layer, Old: p.Mask, New: p.Layer.Mask)).ToArray();
                 var newOffsets = layers.Select(l => l.Offset).ToArray();
                 var delta = _lastMoveDelta;
                 var label = _movingGroup ? "移動群組" : "移動圖層";
@@ -512,6 +541,11 @@ public sealed class MoveTool : ITool
                 session.History.Push(new ActionHistoryEntry(label, session.Document.Bounds,
                     undo: _ =>
                     {
+                        foreach (var (node, oldMask, _) in masks)
+                        {
+                            node.Mask = oldMask;
+                            node.InvalidateComposite(session.Document.Bounds);
+                        }
                         if (!ReferenceEquals(newSelection, oldSelection)) session.ApplySelection(oldSelection);
                         for (var i = 0; i < layers.Length; i++)
                         {
@@ -526,6 +560,11 @@ public sealed class MoveTool : ITool
                     },
                     redo: _ =>
                     {
+                        foreach (var (node, _, newMask) in masks)
+                        {
+                            node.Mask = newMask;
+                            node.InvalidateComposite(session.Document.Bounds);
+                        }
                         if (!ReferenceEquals(newSelection, oldSelection)) session.ApplySelection(newSelection);
                         for (var i = 0; i < layers.Length; i++)
                         {
@@ -548,6 +587,7 @@ public sealed class MoveTool : ITool
         _moveLayers.Clear();
         _startOffsets.Clear();
         _startElements.Clear();
+        _startMasks = [];
     }
 
     /// <summary>
@@ -659,6 +699,8 @@ public sealed class MoveTool : ITool
 
         var oldOffsets = layers.Select(l => l.Offset).ToArray();
         var newOffsets = oldOffsets.Select(o => new SKPointI(o.X + dx, o.Y + dy)).ToArray();
+        var masks = SnapshotMasks(doc.ActiveLayer)
+            .Select(p => (p.Layer, Old: p.Mask, New: p.Mask.Translated(dx, dy))).ToArray();
         VectorElement[][] oldElements;
         lock (doc.SyncRoot)
         {
@@ -671,6 +713,12 @@ public sealed class MoveTool : ITool
 
         void Apply(SKPointI[] offsets, bool moved)
         {
+            lock (doc.SyncRoot)
+                foreach (var (node, oldMask, newMask) in masks)
+                {
+                    node.Mask = moved ? newMask : oldMask;
+                    node.InvalidateComposite(doc.Bounds);
+                }
             for (var i = 0; i < layers.Count; i++)
             {
                 var layer = layers[i];

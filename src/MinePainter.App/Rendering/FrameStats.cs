@@ -31,6 +31,29 @@ public sealed class FrameStats
         return v * 1000;
     }
 
+    // ---- 幀內成本（MINEPAINTER_DEBUG_PERF_FRAMES 用；render thread 寫、UI 執行緒每秒讀一次）----
+    private double _lockWaitMs, _drawMs, _maxLockWaitMs, _maxDrawMs;
+    private int _gpuFrames, _tileFrames;
+
+    /// <summary>畫布 draw op 記一幀：等文件鎖花的毫秒、整幀畫完的毫秒、走的是 GPU 圖層樹還是合成器 tile。</summary>
+    public void RecordFrameCost(double lockWaitMs, double drawMs, bool gpu)
+    {
+        _lockWaitMs += lockWaitMs;
+        _drawMs += drawMs;
+        if (lockWaitMs > _maxLockWaitMs) _maxLockWaitMs = lockWaitMs;
+        if (drawMs > _maxDrawMs) _maxDrawMs = drawMs;
+        if (gpu) _gpuFrames++; else _tileFrames++;
+    }
+
+    /// <summary>取走自上次讀取以來的幀內成本統計並歸零。</summary>
+    public (double LockWaitMs, double MaxLockWaitMs, double DrawMs, double MaxDrawMs, int GpuFrames, int TileFrames) TakeFrameCost()
+    {
+        var r = (_lockWaitMs, _maxLockWaitMs, _drawMs, _maxDrawMs, _gpuFrames, _tileFrames);
+        _lockWaitMs = _drawMs = _maxLockWaitMs = _maxDrawMs = 0;
+        _gpuFrames = _tileFrames = 0;
+        return r;
+    }
+
     public void OnFrame()
     {
         FrameIndex++;

@@ -74,6 +74,7 @@ release.bat 1.8.2           推標籤，GitHub Actions 跑測試、建置、出 
 6. **整份文件縮放的規則只有一份：`ScaleRules`。** 調整影像大小、快速模式輸出、開檔轉模式都走它（像素從原圖重畫、效果的像素長度參數與遮罩跟著縮、文字重新排版）。兩條路結果要一樣。
 7. **效果快取是圖層座標，與畫布無關。** 平移圖層不重算效果：位置變了用 `InvalidateComposite`，內容變了才 `Invalidate`。 筆劃拖曳中筆劃還在 `StrokeBuffer`、圖層像素沒動，也只能 `InvalidateComposite`（`Invalidate` 會讓效果堆疊每動一下滑鼠重算一次，合成器又等它算完才合成，效果多就一頓一頓；守門：`BrushEffectCacheTests`）。效果的輸出會延伸 `SourceMargin`，任何「重算範圍」都要含 margin。守門：`EffectCacheInvalidationTests`。
    位置相關的效果（`IsPositionIndependent = false`：暈影、聚焦、像素化…）以**畫布**為範圍、永遠整層重算 —— 圓心與半對角線看的是範圍，只算髒區或拿內容框當範圍都會讓圓跑掉（顯示切換後聚焦變深就是這樣來的）。
+   **Photoshop 語意（遮色片、限制通道、直通群組、Skia 沒有的混合模式）兩條路各有快速路徑，語意只有一份。** CPU 合成器（`GroupCompositing`）與 GPU 路徑（`GpuLayerRenderer.Psd`）都先把遮色片分成「整片 255／整片 0／部分」：整片 255 當沒有遮色片、整片 0 的子層直接不畫，只有「部分」才逐像素內插（整列一次取覆蓋值，不要逐像素呼叫 `LayerMask.At` —— 2026-09-10 一格 26 萬次虛擬呼叫讓 50 層的 PSD 只剩 20 fps）。GPU 那邊整個可見範圍畫進池子裡重用的離屏 surface，需要「畫之前」就 Snapshot，快照一律幀末才釋放（SkiaSharp 對沒變的 surface 會回同一個 `SKImage`，內層先 Dispose 會害到外層）；遮色片貼圖按 `LayerMask.Rendered` 實例快取、只含畫布內那段，不能每幀重傳（羽化 1000 的群組遮色片是 52 MB）。自訂混合模式在 GPU 用 runtime shader（`PsdBlendShader`）算，公式與 `CustomBlend` 同一份；render thread 上炸掉一律接住退回 tile 路徑（Avalonia 會整個停止重繪、沒有任何錯誤）。守門：`MaskCompositingFastPathTests`、`PsdPreviewFallbackTests`（GPU 路徑的軟體退路要跟合成器對得上）。
    **效果算爆了不能悄悄略過。** renderer 會跳過那一條讓其餘照算，但一定透過 `LayerEffectRenderer.EffectFailed` 回報（App 記 `error.log` ＋ toast），同一條只報一次、算成功後才重置。守門：`EffectFailureReportTests`。
 8. **「內容範圍」不能只信 em box，要含實際著墨。** 字面超出行高的字型、重音、外框都會超出排版框（`TextElement.Bounds` = 排版框 ∪ 著墨框）。
 9. **效果、調整、物件都是不可變 record。** 改參數用 `with`；參數描述在 `ParamDef`／`SliderParam`，像素長度的參數標 `Geometric = true`（縮放時才會跟著縮）。
@@ -121,7 +122,7 @@ release.bat 1.8.2           推標籤，GitHub Actions 跑測試、建置、出 
 ### 除錯鉤子
 
 環境變數 `MINEPAINTER_DEBUG_*` 只在開發用，程式碼裡要註明用途：
-`PERF`／`PERF_CYCLE`／`PERF_BENCH`（效能記錄）、`OFFSCREEN`（離螢幕啟動供截圖）、`EFFECT`（直接開某個效果／模式）、`OVERLAY`、`HIDECANVAS`、`MENU_CYCLE`、`TEXTFX`、`TEXTBENCH`、`FONTCACHE`、`STREAMFONT`、`NOFALLBACK`、`NOTOUI`、`NOANIM`、`SPLASH_HOLD`、`PRESETS`／`PRESETS_DIR`／`PRESETS_DROP`／`PRESETS_EDIT`。
+`PERF`／`PERF_CYCLE`／`PERF_BENCH`（效能記錄）、`PERF_FRAMES=<檔案>`（每秒記畫布幀成本：fps、等文件鎖、整幀毫秒、GPU／tile 路徑、合成器格數；搭配 `PERF_STRESS=zoom|drag` 用視口與移動工具 API 連續施壓，不注入輸入）、`OPEN_MODE=full|fast`（開大檔時替使用者選解析度模式，離螢幕驗證沒人能按對話框）、`OFFSCREEN`（離螢幕啟動供截圖）、`EFFECT`（直接開某個效果／模式）、`OVERLAY`、`HIDECANVAS`、`MENU_CYCLE`、`TEXTFX`、`TEXTBENCH`、`FONTCACHE`、`STREAMFONT`、`NOFALLBACK`、`NOTOUI`、`NOANIM`、`SPLASH_HOLD`、`PRESETS`／`PRESETS_DIR`／`PRESETS_DROP`／`PRESETS_EDIT`。
 離螢幕驗證程序的單一實例名字含 `|debug`，不會接走使用者正在用的實例。
 
 ### 流程

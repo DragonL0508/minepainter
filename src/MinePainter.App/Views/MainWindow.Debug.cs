@@ -198,6 +198,101 @@ public partial class MainWindow
         RefreshUiState();
     }
 
+    /// <summary>
+    /// MINEPAINTER_DEBUG_PERF_FRAMES=&lt;檔案&gt;：每秒把畫布幀的成本寫進去 —— fps、等文件鎖的毫秒、整幀毫秒、
+    /// 走 GPU 圖層樹還是合成器 tile、合成器這一秒算了幾格／花了多久、還有幾格在排隊。
+    /// 搭配 MINEPAINTER_DEBUG_PERF_STRESS=zoom（視口來回縮放，畫面連續重繪）、=drag（用移動工具 API 來回拖
+    /// 作用中圖層，讓合成器一直重算）；都不注入輸入，走的是工具與視口的公開 API。
+    /// </summary>
+    private void StartFramePerfLog()
+    {
+        if (Environment.GetEnvironmentVariable("MINEPAINTER_DEBUG_PERF_FRAMES") is not { Length: > 0 } file) return;
+        var lastFrame = Canvas.Stats.FrameIndex;
+        long lastTiles = 0;
+        var lastRender = TimeSpan.Zero;
+        var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+        timer.Tick += (_, _) =>
+        {
+            var stats = Canvas.Stats;
+            var frames = stats.FrameIndex - lastFrame;
+            lastFrame = stats.FrameIndex;
+            var cost = stats.TakeFrameCost();
+            var session = Canvas.Session;
+            var comp = session?.Compositor;
+            var tiles = comp?.TilesRendered ?? 0;
+            var render = comp?.RenderTime ?? TimeSpan.Zero;
+            var line = $"{DateTime.Now:HH:mm:ss} doc={(session == null ? "none:" + Title : session.Document.Width + "x" + session.Document.Height)} vis={IsVisible}/{Canvas.IsVisible}/{Canvas.Bounds.Width:F0}x{Canvas.Bounds.Height:F0} fps={stats.Fps:F0} frames={frames} tickGap={Canvas.TakeMaxTickGapMs():F0}ms " +
+                       $"lockWait={cost.LockWaitMs:F0}ms(max {cost.MaxLockWaitMs:F0}) draw={cost.DrawMs:F0}ms(max {cost.MaxDrawMs:F0}) " +
+                       $"gpuFrames={cost.GpuFrames} tileFrames={cost.TileFrames} pending={stats.PendingTiles} " +
+                       $"compTiles={tiles - lastTiles} compMs={(render - lastRender).TotalMilliseconds:F0} dirty={comp?.DirtyCount ?? 0} " +
+                       $"gpuTiles={Canvas.GpuRenderer.LastTiles} lod={Canvas.GpuRenderer.LastLodTiles} copies={Canvas.GpuRenderer.LastSourceCopies} " +
+                       $"lodBuilds={Canvas.GpuRenderer.LastLodBuilds} snaps={Canvas.GpuRenderer.LastBackdropSnapshots} maskUp={Canvas.GpuRenderer.LastMaskUploads} " +
+                       $"stressMax={_stressMaxMs:F0}ms thumb={DebugThumbMaxMs:F0}ms gc={GC.CollectionCount(0) - _gc0}/{GC.CollectionCount(2) - _gc2} compLock={comp?.TakeMaxBatchLockMs() ?? 0:F0}ms zoom={Canvas.ZoomPercent:F0}%" + Environment.NewLine;
+            _stressMaxMs = 0;
+            DebugThumbMaxMs = 0;
+            _gc0 = GC.CollectionCount(0);
+            _gc2 = GC.CollectionCount(2);
+            lastTiles = tiles;
+            lastRender = render;
+            if (Canvas.GpuRenderer.LastError is { } error) line += "  GPU ERROR: " + error + Environment.NewLine;
+            File.AppendAllText(file, line);
+        };
+        timer.Start();
+
+        var stress = Environment.GetEnvironmentVariable("MINEPAINTER_DEBUG_PERF_STRESS");
+        if (stress == "zoom")
+        {
+            var zoomIn = true;
+            var cycle = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1500) };
+            cycle.Tick += (_, _) =>
+            {
+                Canvas.ZoomBy(zoomIn ? 1.6 : 1 / 1.6);
+                zoomIn = !zoomIn;
+            };
+            cycle.Start();
+        }
+        else if (stress == "drag")
+        {
+            // 用移動工具 API 拖作用中圖層：每 16ms 挪 3px、走 40 步再放開，往回再來一趟
+            // 每一幀挪一步（不用計時器：Windows 的計時器解析度只有 15.6ms，會把節奏卡在 40 步／秒，
+            // 量不到畫面真正撐得住的幀率）
+            var step = 0;
+            var dir = 1;
+            Canvas.FrameTick += () =>
+            {
+                var tickClock = System.Diagnostics.Stopwatch.StartNew();
+                try { DragStep(); }
+                finally { _stressMaxMs = Math.Max(_stressMaxMs, tickClock.Elapsed.TotalMilliseconds); }
+            };
+            void DragStep()
+            {
+                if (Canvas.Session is not { } session || session.Document.ActiveLayer is not Core.Layers.RasterLayer layer) return;
+                var bounds = layer.ContentBounds;
+                var origin = new SKPoint(bounds.MidX, bounds.MidY);
+                var ev = (float x, float y) => new ToolPointerEvent(new SKPoint(x, y), 1f, ToolModifiers.None, 1);
+                if (step == 0)
+                {
+                    SelectTool("move");
+                    session.Move.OnPointerDown(ev(origin.X, origin.Y), session);
+                }
+                step++;
+                var offset = dir * step * 3f;
+                if (step < 40) session.Move.OnPointerMove(ev(origin.X + offset, origin.Y), session);
+                else
+                {
+                    session.Move.OnPointerUp(ev(origin.X + offset, origin.Y), session);
+                    step = 0;
+                    dir = -dir;
+                }
+                Canvas.RequestRedraw();
+                RefreshUiState();
+            }
+        }
+    }
+
+    private double _stressMaxMs;
+    private int _gc0, _gc2;
+
     // ---- 整窗 layout 計時（MINEPAINTER_DEBUG_PERF 用；根節點的 Measure/Arrange 就是整棵樹）----
     private static readonly bool PerfEnabled = Environment.GetEnvironmentVariable("MINEPAINTER_DEBUG_PERF") is { Length: > 0 };
     private double _measureMs, _arrangeMs, _measureMax;

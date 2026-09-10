@@ -118,7 +118,7 @@ public static class OutputRender
         {
             case GroupLayer group:
             {
-                var copy = new GroupLayer { Name = group.Name };
+                var copy = new GroupLayer { Name = group.Name, IsPassThrough = group.IsPassThrough };
                 CopyCommon(group, copy, sx, sy, clamp);
                 step();
                 foreach (var child in group.Children) copy.Add(CloneNode(ctx, child));
@@ -169,6 +169,8 @@ public static class OutputRender
         target.IsVisible = source.IsVisible;
         target.Opacity = source.Opacity;
         target.BlendMode = source.BlendMode;
+        target.RestrictedChannels = source.RestrictedChannels;
+        target.Mask = source.Mask?.Scale(sx, sy);
         if (source.HasEffects)
             target.SetEffects([.. source.Effects.Select(fx => ScaleRules.ScaleEffect(fx, sx, sy, clampEffects))]);
     }

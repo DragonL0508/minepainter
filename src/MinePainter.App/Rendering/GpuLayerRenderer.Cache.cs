@@ -35,6 +35,7 @@ public sealed unsafe partial class GpuLayerRenderer
             foreach (var cache in _images.Values) cache.Dispose();
             _images.Clear();
             CachedImageBytes = 0;
+            DisposePsdResources(); // 離屏 surface 與遮色片貼圖同樣綁定建立它的 context
             _contextHandle = handle;
         }
         _gpuContext = context;

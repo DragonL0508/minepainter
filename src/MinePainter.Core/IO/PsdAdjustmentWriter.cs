@@ -151,12 +151,14 @@ internal static class PsdAdjustmentWriter
     private static byte[] Curves(CurvesAdjustment c)
     {
         var w = new PsdByteWriter();
+        w.U8(0); // Point curves (not a sampled map).
         w.U16(1);
         var channels = new SortedDictionary<int, IReadOnlyList<(float X, float Y)>>();
-        if (c.Mode == CurvesAdjustment.ModeRgb)
+        if (c.Mode == CurvesAdjustment.ModeRgb || !c.MasterCurve.SequenceEqual(CurvesAdjustment.Identity))
         {
-            channels[0] = CurvesAdjustment.Identity;
-            for (var i = 0; i < 3; i++) channels[i + 1] = i < c.Curves.Count ? c.Curves[i] : CurvesAdjustment.Identity;
+            channels[0] = c.MasterCurve;
+            for (var i = 0; i < 3; i++) channels[i + 1] = c.Mode == CurvesAdjustment.ModeLuminosity
+                ? c.Curves[0] : i < c.Curves.Count ? c.Curves[i] : CurvesAdjustment.Identity;
         }
         else
         {

@@ -71,6 +71,7 @@ public sealed class TransformSession : IDisposable
 
     private readonly Document _doc;
     private readonly List<TransformItem> _items;
+    private readonly IReadOnlyList<(LayerNode Layer, LayerMask Mask)> _startMasks;
     private bool _disposed;
 
     // 續接（見 TransformResume）：原始像素 → 上一輪落地結果 的映射（doc 座標）。
@@ -373,6 +374,7 @@ public sealed class TransformSession : IDisposable
         _doc = doc;
         Target = target;
         _items = items;
+        _startMasks = MoveTool.SnapshotMasks(target);
         _elementPreviews = new TransformElementPreviews(doc, items);
         SourceRect = sourceRect;
         TargetRect = sourceRect;
@@ -538,7 +540,7 @@ public sealed class TransformSession : IDisposable
     /// </summary>
     public void BeginGesturePreview(bool live = false)
     {
-        if (_disposed || _gestureOverlay) return;
+        if (_disposed || _gestureOverlay || _startMasks.Count > 0 || MoveTool.HasMaskInAncestry(Target.Parent)) return;
 
         // 覆疊畫在所有圖層之上，所以舊路徑要求「這層上面沒有看得見的東西」，否則只好逐步蓋章
         // —— 那就是大圖旋轉時「手勢中完全沒有畫面、放開才跳出來」的來源。
@@ -772,6 +774,12 @@ public sealed class TransformSession : IDisposable
         // 重算一次 56 ms，拖曳時每動一步一次＝移動文字圖層一路卡到底（使用者回報）。
         // 網格模式例外：那裡的位移是套在網格上的，物件要照原本的路重算。
         var step = new SKPointI(delta.X - old.X, delta.Y - old.Y);
+        lock (_doc.SyncRoot)
+            foreach (var (node, _) in _startMasks)
+            {
+                node.Mask = node.Mask?.Translated(step.X, step.Y);
+                node.InvalidateComposite(_doc.Bounds);
+            }
         var lockstep = _quad == null && _warp == null;
 
         var m = Matrix;
@@ -817,6 +825,13 @@ public sealed class TransformSession : IDisposable
         _stampedWarp = _warp;
         var m = Matrix;
         var pm = PixelMatrix;
+        lock (_doc.SyncRoot)
+            foreach (var (node, mask) in _startMasks)
+            {
+                // 遮罩已在本 session 起點的文件座標；續接像素的前段矩陣不可重套。
+                node.Mask = mask.Transformed(m, _warp);
+                node.InvalidateComposite(_doc.Bounds);
+            }
         // 無損＝像素矩陣（含續接的前段）是整數平移：None 取樣、逐位元不變。
         // 續接時本輪就算是純平移，前段仍帶縮放/旋轉，得照常重取樣。彎曲一律重取樣。
         var lossless = _warp == null && IsIntegerTranslation(pm);
@@ -920,6 +935,12 @@ public sealed class TransformSession : IDisposable
     public void RestoreOriginal()
     {
         if (_disposed) return;
+        lock (_doc.SyncRoot)
+            foreach (var (node, mask) in _startMasks)
+            {
+                node.Mask = mask;
+                node.InvalidateComposite(_doc.Bounds);
+            }
         foreach (var item in _items)
         {
             var touchedPixels = _pixelsStamped;
@@ -972,6 +993,14 @@ public sealed class TransformSession : IDisposable
         Apply(preview: false);
 
         var entries = new List<IHistoryEntry>();
+        foreach (var (node, original) in _startMasks)
+        {
+            var current = node.Mask;
+            if (ReferenceEquals(original, current)) continue;
+            entries.Add(new ActionHistoryEntry(label, _doc.Bounds,
+                undo: _ => { node.Mask = original; node.InvalidateComposite(_doc.Bounds); },
+                redo: _ => { node.Mask = current; node.InvalidateComposite(_doc.Bounds); }));
+        }
         foreach (var item in _items)
         {
             var layer = item.Layer;

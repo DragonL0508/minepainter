@@ -506,6 +506,16 @@ public sealed class Compositor : IDisposable
     /// 批次內的執行緒一律不再取鎖（取了會等在自己這條 worker 手上的鎖，直接卡死）。
     /// GEGL 的做法也是同一個形狀：圖不變的期間逐 tile 分派執行緒。
     /// </summary>
+    private double _maxBatchLockMs;
+
+    /// <summary>診斷：自上次讀取以來，單一批次持有 Document.SyncRoot 最久的毫秒數（讀了就歸零）。UI 執行緒被合成器卡多久看這個。</summary>
+    public double TakeMaxBatchLockMs()
+    {
+        var v = _maxBatchLockMs;
+        _maxBatchLockMs = 0;
+        return v;
+    }
+
     private void RenderBatch(List<TileIndex> batch)
     {
         var start = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -528,15 +538,20 @@ public sealed class Compositor : IDisposable
             }
         }
         FinishBatch(batch);
-        Interlocked.Add(ref _renderTicks, System.Diagnostics.Stopwatch.GetTimestamp() - start);
+        var elapsed = System.Diagnostics.Stopwatch.GetTimestamp() - start;
+        var elapsedMs = elapsed * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+        if (elapsedMs > _maxBatchLockMs) _maxBatchLockMs = elapsedMs;
+        Interlocked.Add(ref _renderTicks, elapsed);
         TrimCache(); // 每批都看一眼（沒超出預算時只是比一個數字）
         Interlocked.Add(ref _tilesRendered, batch.Count);
     }
 
     /// <summary>
     /// 一批最多幾格。批次本身（一次取一次鎖）與平行無關，一直是開的。
+    /// 格數＝平行執行緒數：一批剛好一輪，鎖只握一格的時間（2026-09-10 之前是核心數 8 格、
+    /// 4 條執行緒跑兩輪，GPU 路徑拖曳中 UI 執行緒每批都要等 20ms 以上）。
     /// </summary>
-    private static readonly int BatchSize = Math.Clamp(Environment.ProcessorCount, 1, 8);
+    private static readonly int BatchSize = Math.Clamp(Environment.ProcessorCount / 2, 1, 4);
 
     /// <summary>批次內要不要分派到共用執行緒同時合成（見 <see cref="CompositeWorkers"/>）。</summary>
     public static bool ParallelComposite { get; set; } = true;

@@ -1,4 +1,4 @@
-﻿using System.IO.Compression;
+using System.IO.Compression;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using MinePainter.Core.Adjustments;
@@ -79,10 +79,19 @@ public static class MppFormat
         public bool Visible { get; set; } = true;
         public float Opacity { get; set; } = 1f;
         public string Blend { get; set; } = nameof(BlendMode.Normal);
+        public int RestrictedChannels { get; set; }
 
         // group
         public List<Node>? Children { get; set; }
-        public bool IsPassThrough { get; set; } // 預留欄位，目前恆為 false
+        public bool IsPassThrough { get; set; }
+        public string? GroupMaskEntry { get; set; }
+        public int[]? GroupMaskBounds { get; set; }
+        public byte GroupMaskDefault { get; set; }
+        // 保留舊群組遮罩 JSON 欄位名稱；所有圖層皆可使用。
+        public float GroupMaskFeather { get; set; }
+        public float GroupMaskDensity { get; set; } = 1;
+        public bool GroupMaskEnabled { get; set; } = true;
+        public bool GroupMaskInverted { get; set; }
 
         // raster（像素 + 物件同屬一個圖層）
         public int[]? PixelBounds { get; set; } // [l,t,r,b] 圖層座標
@@ -283,12 +292,30 @@ public static class MppFormat
             Visible = layer.IsVisible,
             Opacity = layer.Opacity,
             Blend = layer.BlendMode.ToString(),
+            RestrictedChannels = layer.RestrictedChannels,
         };
+
+        if (layer.Mask is { } mask)
+        {
+            var maskBounds = mask.Bounds;
+            node.GroupMaskBounds = [maskBounds.Left, maskBounds.Top, maskBounds.Right, maskBounds.Bottom];
+            node.GroupMaskDefault = mask.DefaultValue;
+            node.GroupMaskFeather = mask.Feather;
+            node.GroupMaskDensity = mask.Density;
+            node.GroupMaskEnabled = mask.Enabled;
+            node.GroupMaskInverted = mask.Inverted;
+            if (!maskBounds.IsEmpty)
+            {
+                node.GroupMaskEntry = $"layers/{layer.Id:N}.mask.png";
+                masks.Add((node.GroupMaskEntry, mask.Alpha, maskBounds));
+            }
+        }
 
         switch (layer)
         {
             case GroupLayer group:
                 node.Type = "group";
+                node.IsPassThrough = group.IsPassThrough;
                 node.Children = group.Children.Select(c => BuildNode(c, rasters, masks, sources)).ToList();
                 break;
 
@@ -539,15 +566,46 @@ public static class MppFormat
         layer.Name = node.Name;
         layer.IsVisible = node.Visible;
         layer.Opacity = node.Opacity;
+        layer.RestrictedChannels = node.RestrictedChannels & 7;
         layer.BlendMode = Enum.TryParse<BlendMode>(node.Blend, out var blend) ? blend : BlendMode.Normal;
+        layer.Mask = LoadLayerMask(node, zip);
         // 效果堆疊掛在 LayerNode：一般圖層與群組同一條路徑
         if (layer.CanHaveEffects && LoadEffects(node, zip) is { Count: > 0 } fx) layer.SetEffects(fx);
         return layer;
     }
 
+    private static LayerMask? LoadLayerMask(Node node, ZipArchive zip)
+    {
+        if (node.GroupMaskBounds is [var left, var top, var right, var bottom])
+        {
+            var bounds = new SKRectI(left, top, right, bottom);
+            if (bounds.Width < 0 || bounds.Height < 0) throw new InvalidDataException("Invalid layer mask dimensions.");
+            var alpha = bounds.IsEmpty ? [] : new byte[checked(bounds.Width * bounds.Height)];
+            if (!bounds.IsEmpty)
+            {
+                var entry = node.GroupMaskEntry == null ? null : zip.GetEntry(node.GroupMaskEntry);
+                if (entry == null) throw new InvalidDataException("Missing layer mask.");
+                using var stream = entry.Open();
+                using var bitmap = SKBitmap.Decode(stream);
+                if (bitmap == null || bitmap.Width != bounds.Width || bitmap.Height != bounds.Height)
+                    throw new InvalidDataException("Invalid layer mask dimensions.");
+                for (var y = 0; y < bounds.Height; y++)
+                for (var x = 0; x < bounds.Width; x++) alpha[y * bounds.Width + x] = bitmap.GetPixel(x, y).Alpha;
+            }
+            return new LayerMask(bounds, alpha, node.GroupMaskDefault)
+            {
+                Feather = node.GroupMaskFeather,
+                Density = node.GroupMaskDensity,
+                Enabled = node.GroupMaskEnabled,
+                Inverted = node.GroupMaskInverted,
+            };
+        }
+        return null;
+    }
+
     private static GroupLayer BuildGroup(Node node, ZipArchive zip)
     {
-        var group = new GroupLayer();
+        var group = new GroupLayer { IsPassThrough = node.IsPassThrough };
         foreach (var child in node.Children ?? [])
         {
             var layer = BuildLayer(child, zip);

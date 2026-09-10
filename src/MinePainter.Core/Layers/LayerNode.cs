@@ -18,6 +18,9 @@ public abstract class LayerNode
     public bool IsVisible { get; set; } = true;
     public float Opacity { get; set; } = 1f;
     public BlendMode BlendMode { get; set; } = BlendMode.Normal;
+    /// <summary>RGB channel bits excluded from blending (PSD brst).</summary>
+    public int RestrictedChannels { get; set; }
+    public LayerMask? Mask { get; set; }
 
     public GroupLayer? Parent { get; internal set; }
     public Document? Document { get; internal set; }

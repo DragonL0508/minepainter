@@ -101,14 +101,22 @@ internal static class PsdAdjustmentLayer
     /// </summary>
     private static CurvesAdjustment Curves(byte[] d)
     {
-        var bitmap = I32(d, 2);
-        var offset = 6;
+        // Photoshop prefixes the version with an is-map byte. Older MinePainter
+        // exports omitted it; keep reading that unambiguous legacy header.
+        var header = d.Length >= 2 && I16(d, 0) == 1 ? 0 : 1;
+        if (d.Length < header + 6 || (header == 1 && d[0] != 0) || I16(d, header) != 1)
+            throw new InvalidDataException("Unsupported curves header.");
+        var bitmap = I32(d, header + 2);
+        var offset = header + 6;
         var perChannel = new Dictionary<int, List<(float X, float Y)>>();
-        for (var channel = 0; channel < 32 && offset + 2 <= d.Length; channel++)
+        for (var channel = 0; channel < 32; channel++)
         {
             if ((bitmap & (1 << channel)) == 0) continue;
+            if (offset + 2 > d.Length) throw new InvalidDataException("Missing curves points.");
             var count = I16(d, offset);
             offset += 2;
+            if (count < 2 || count > 19 || offset + count * 4 > d.Length)
+                throw new InvalidDataException("Invalid curves point count.");
             var points = new List<(float, float)>(count);
             for (var i = 0; i < count && offset + 4 <= d.Length; i++)
             {
@@ -125,13 +133,15 @@ internal static class PsdAdjustmentLayer
         {
             return new CurvesAdjustment
             {
+                UseNaturalSpline = header == 1,
                 Mode = CurvesAdjustment.ModeLuminosity,
                 Curves = [perChannel.GetValueOrDefault(0) ?? CurvesAdjustment.Identity.ToList()],
             };
         }
         var composite = perChannel.GetValueOrDefault(0);
-        IReadOnlyList<(float X, float Y)> Channel(int c) => perChannel.GetValueOrDefault(c) ?? composite ?? CurvesAdjustment.Identity;
-        return new CurvesAdjustment { Mode = CurvesAdjustment.ModeRgb, Curves = [Channel(1), Channel(2), Channel(3)] };
+        IReadOnlyList<(float X, float Y)> Channel(int c) => perChannel.GetValueOrDefault(c) ?? CurvesAdjustment.Identity;
+        return new CurvesAdjustment { UseNaturalSpline = header == 1, Mode = CurvesAdjustment.ModeRgb, Curves = [Channel(1), Channel(2), Channel(3)],
+            MasterCurve = composite ?? CurvesAdjustment.Identity };
     }
 
     /// <summary>亮度／對比：舊格式兩個 int16（−100..100、−50..100）；有 CgEd 描述子（新演算法，−150..150）就以它為準。</summary>

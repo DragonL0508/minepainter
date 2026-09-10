@@ -128,7 +128,7 @@ public class PsdFormatTests
     }
 
     [Fact]
-    public void Load_BakesUserMaskIntoAlpha()
+    public void Load_PreservesUserMaskAndOriginalPixels()
     {
         // 遮色片只蓋右半（範圍外用預設 0 = 全遮），左半被遮成透明、右半照遮色片的 255 保留
         var file = PsdWriter.Build(4, 2,
@@ -149,8 +149,15 @@ public class PsdFormatTests
         using var doc = PsdFormat.Load(stream, out _);
 
         var layer = Assert.IsType<RasterLayer>(Assert.Single(doc.Root.Children));
-        Assert.Equal(SKColors.Empty, GetLayerPixel(layer, 0, 0));
-        Assert.Equal(SKColors.Empty, GetLayerPixel(layer, 1, 1));
+        Assert.Equal(new SKColor(200, 0, 0, 255), GetLayerPixel(layer, 0, 0));
+        Assert.Equal(new SKColor(200, 0, 0, 255), GetLayerPixel(layer, 1, 1));
+        Assert.NotNull(layer.Mask);
+        Assert.Equal(0, layer.Mask.At(0, 0));
+        Assert.Equal(255, layer.Mask.At(2, 0));
+        using var composite = MinePainter.Core.Compositing.Compositor.RenderComposite(doc);
+        using var pixels = SKBitmap.FromImage(composite);
+        Assert.Equal(SKColors.Empty, pixels.GetPixel(0, 0));
+        Assert.Equal(new SKColor(200, 0, 0, 255), pixels.GetPixel(2, 0));
         Assert.Equal(new SKColor(200, 0, 0, 255), GetLayerPixel(layer, 2, 0));
         Assert.Equal(new SKColor(200, 0, 0, 255), GetLayerPixel(layer, 3, 1));
     }
