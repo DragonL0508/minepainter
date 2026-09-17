@@ -35,7 +35,9 @@ public static class ObjectSelector
         // doc 座標 → 圖層座標
         var layerRect = new SKRectI(region.Left - layer.Offset.X, region.Top - layer.Offset.Y,
             region.Right - layer.Offset.X, region.Bottom - layer.Offset.Y);
-        var pixels = BackgroundRemovalCommand.ReadRegion(layer.Surface, layerRect);
+        // 找的是「畫面上看到的」物件：有效果堆疊就讀算好的那份（呼叫端先 RenderLayerNow），
+        // 不然套了變形效果的圖層會選到還沒變形的位置（2026-09-17 使用者回報）
+        var pixels = BackgroundRemovalCommand.ReadRegion(layer.DisplaySurface, layerRect);
 
         var coverage = new byte[w * h];
         var trimap = new byte[w * h];

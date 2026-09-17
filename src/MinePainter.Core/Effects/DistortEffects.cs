@@ -234,10 +234,18 @@ public sealed record FrostedGlassEffect : IEffect
     }
 }
 
-/// <summary>像素化：每格取平均色。</summary>
+/// <summary>
+/// 像素化（馬賽克）：每格取平均色。
+///
+/// 格子大小是**像素長度**（<see cref="SliderParam.Geometric"/>）：快速模式輸出成 4K 時要跟著放大，
+/// 不然代理畫布上 10px 的格子，輸出後還是 10px —— 在三倍大的圖上細到幾乎看不出馬賽克
+/// （2026-09-17 使用者回報「馬賽克在快速模式看到的跟實際輸出 4K 的圖片有落差」）。
+/// 放大倍率不一定是整數（720p → 1080p 是 1.5 倍），所以格子大小是浮點數：
+/// 第 i 格涵蓋 [⌊i·cell⌋, ⌊(i+1)·cell⌋)，格線在兩種解析度下落在畫布的同一個相對位置。
+/// </summary>
 public sealed record PixelateEffect : IEffect
 {
-    public int CellSize { get; init; } = 2; // 1..100
+    public float CellSize { get; init; } = 2f; // 1..100（介面上是整數；縮放後可以帶小數）
 
     public string Name => "像素化";
     public bool IsPositionIndependent => false;
@@ -247,29 +255,33 @@ public sealed record PixelateEffect : IEffect
     private static readonly ParamDef[] Params =
     [
         new SliderParam("cell", "格子大小", 1, 100, o => ((PixelateEffect)o).CellSize,
-            (o, v) => ((PixelateEffect)o) with { CellSize = (int)v }),
+            (o, v) => ((PixelateEffect)o) with { CellSize = (float)v }) { Geometric = true },
     ];
     public IReadOnlyList<ParamDef> Parameters => Params;
 
     public void Render(EffectContext ctx)
     {
-        var cell = Math.Max(1, CellSize);
-        if (cell == 1)
+        var cell = Math.Max(1f, CellSize);
+        if (cell <= 1f)
         {
             ctx.CopySrcToDst();
             return;
         }
-        var cellsX = (ctx.Width + cell - 1) / cell;
-        var cellsY = (ctx.Height + cell - 1) / cell;
+        var cellsX = (int)MathF.Ceiling(ctx.Width / cell);
+        var cellsY = (int)MathF.Ceiling(ctx.Height / cell);
         var options = new ParallelOptions { CancellationToken = ctx.Cancellation };
         Parallel.For(0, cellsY, options, cy =>
         {
+            var y0 = Math.Min(ctx.Height, (int)MathF.Floor(cy * cell));
+            var y1 = Math.Min(ctx.Height, (int)MathF.Floor((cy + 1) * cell));
+            if (cy == cellsY - 1) y1 = ctx.Height;
+            if (y1 <= y0) return;
             for (var cx = 0; cx < cellsX; cx++)
             {
-                var x0 = cx * cell;
-                var y0 = cy * cell;
-                var x1 = Math.Min(ctx.Width, x0 + cell);
-                var y1 = Math.Min(ctx.Height, y0 + cell);
+                var x0 = Math.Min(ctx.Width, (int)MathF.Floor(cx * cell));
+                var x1 = Math.Min(ctx.Width, (int)MathF.Floor((cx + 1) * cell));
+                if (cx == cellsX - 1) x1 = ctx.Width;
+                if (x1 <= x0) continue;
                 long sb = 0, sg = 0, sr = 0, sa = 0;
                 var n = 0;
                 for (var y = y0; y < y1; y++)

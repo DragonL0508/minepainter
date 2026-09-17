@@ -125,6 +125,10 @@ public sealed class RectangleSelectTool : ITool
     internal static void Apply(EditorSession session, SKPath path, ToolModifiers mods,
         SelectionMask? original, string label)
     {
+        // 物件選取讀的是算好的效果（見 ObjectSelector）：先確定它是最新的。要在鎖外 —— 它會等 worker 寫回
+        if (session.ObjectSelect && session.Document.ActiveLayer is RasterLayer { HasActiveEffects: true } fxLayer)
+            Effects.LayerEffectRenderer.RenderLayerNow(session.Document, fxLayer);
+
         SelectionMask incoming;
         lock (session.Document.SyncRoot)
         {
@@ -300,12 +304,15 @@ public sealed class MagicWandTool : ITool
         if (SelectionCommands.RefusePixelSelection(session)) return;
         if (session.Document.ActiveLayer is not RasterLayer layer) return;
 
+        // 選的是畫面上看到的樣子（含效果堆疊的變形／去色…），不是基底像素
+        if (layer.HasActiveEffects) Effects.LayerEffectRenderer.RenderLayerNow(session.Document, layer);
+
         SelectionMask incoming;
         lock (session.Document.SyncRoot)
         {
             incoming = FloodFiller.Fill(layer,
                 new SKPointI((int)e.DocPosition.X, (int)e.DocPosition.Y),
-                session.Tolerance, session.Document.Bounds);
+                session.Tolerance, session.Document.Bounds, rendered: true);
         }
         if (incoming.IsEmpty) return;
 

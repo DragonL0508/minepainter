@@ -86,6 +86,8 @@ release.bat 1.8.2           推標籤，GitHub Actions 跑測試、建置、出 
 15. **色彩：進出都對齊 sRGB，中間不做色彩管理。** 匯入時解碼目標指定 `SKColorSpace.CreateSrgb()`，帶 ICC 的檔案（P3 截圖、Adobe RGB 相片）由 codec 轉成 sRGB，不指定會照數值搬、整張偏淡；JPEG 匯出用 4:4:4（`SKJpegEncoderDownsample.Downsample444`），預設 4:2:0 會把紅字邊緣糊成粉紅。刻意不做的：合成與效果在 sRGB gamma 空間算（與 paint.net、Photoshop 預設一致，改成線性會讓所有既有文件變色）；顯示端不做螢幕設定檔管理（paint.net 也沒有）。`.psd` 的內嵌 ICC（影像資源 1039）也要套（Adobe RGB／P3 的檔案不轉會整張偏淡）；解析不了的設定檔當成沒有，不能讓匯入炸掉。16 位元 `.psd` 降成 8 位元走有序抖色（Bayer 8×8，同 Photoshop 轉 8 位元的預設），直接四捨五入會讓平滑漸層出色帶。守門：`ColorAccuracyTests`、`PsdColorTests`。
     **天花板是刻意的**：tile 是 8 位元 BGRA premul，不做 16 位元／FP32 管線、不做 CMYK、不做 HDR。輸出是 8 位元的 PNG／JPEG，換來的是小上四倍的記憶體與簡單的合成器。天花板以下該準的要準。
 16. **出血與安全框是輔助線，不是像素。** `Document.Print`（`Documents/PrintSpec`）只有兩個數字：出血、安全距離（公釐）。**畫布本身就是含出血的尺寸**，裁切線＝畫布往內縮一個出血、安全框＝再往內縮安全距離 —— 刻意不存「裁切尺寸」，存了就會有「規格與畫布對不上」的狀態要處理。輔助線只由 `CanvasDrawOperation` 畫在畫面上，**任何輸出路徑都不能有它**（守門：`PrintSpecTests.匯出不含輔助線`）。送印檢查（`Documents/PrintCheck`）對應印刷廠的兩條規則：出血環不能有透明像素、圖文不能超出安全框；「圖文」的判準是「內容沒蓋滿畫布的圖層」，滿版底圖本來就該延伸到出血，不該被警告。守門：`PrintSpecTests`、`PrintCheckTests`。
+17. **畫布外的像素是一等公民。** 圖層可以持有畫布外的像素（放大、平移出去的部分），選取卻永遠夾在畫布內 —— 兩者交會的地方要明確處理：清除（Delete）沿選取貼到的畫布邊往外延伸（`EditCommands.CoverageBeyondCanvas`，沒有選取＝整層含畫布外）；效果「限套用當時的選取」遇到全選就當整層、不帶遮罩（`LayerEffect.CreateFor` 是唯一入口）。效果遮罩釘在**圖層**上（`LayerEffect.MaskAnchor`＝建立當時的圖層位移），不是釘在畫布上，圖層平移遮罩跟著內容走。守門：`EraseBeyondCanvasTests`、`EffectMaskAnchorTests`。
+18. **選取類工具選的是畫面上看到的樣子。** 魔術棒、物件選取讀 `DisplaySurface`（效果堆疊算好的那份，先 `RenderLayerNow`），不是基底像素；會寫回基底像素的工具（油漆桶）才讀基底。守門：`RenderedSelectionTests`。
 12. **Skia 物件的生命週期要明確。** `SKImage`／`SKBitmap`／`SKPath` 誰擁有誰釋放寫在註解裡；多份物件共用同一張 `SKImage` 時（`LayerPixelSource.Rebased`），只有一個擁有者，其餘 `Detach()`。合成執行緒可能在物件釋放後才畫到它，尺寸類屬性建構時就快取。
 
 ### UI 一致性

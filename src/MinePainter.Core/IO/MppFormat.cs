@@ -128,6 +128,12 @@ public static class MppFormat
         public uint Color { get; set; } = 0xFF000000;
         public string? MaskEntry { get; set; }
         public int[]? MaskBounds { get; set; } // [l,t,r,b] doc 座標
+        /// <summary>
+        /// 遮罩建立當時的圖層位移 [x,y]（<see cref="LayerEffect.MaskAnchor"/>）。舊版程式讀到會忽略
+        /// （照它原本的「遮罩釘在畫布上」顯示），檔案照樣打得開，所以不升 FormatVersion。
+        /// 舊檔沒有這一欄：以載入當下的圖層位移為錨點 —— 使用者存檔時看到的樣子就此固定下來。
+        /// </summary>
+        public int[]? MaskAnchor { get; set; }
     }
 
     public sealed class Outline
@@ -395,6 +401,8 @@ public static class MppFormat
                 masks.Add((entry, ReadMaskAlpha(mask, mb), mb));
                 dto.MaskEntry = entry;
                 dto.MaskBounds = [mb.Left, mb.Top, mb.Right, mb.Bottom];
+                var anchor = fx.MaskAnchor ?? layer.EffectOffset;
+                dto.MaskAnchor = [anchor.X, anchor.Y];
             }
             list.Add(dto);
         }
@@ -570,7 +578,7 @@ public static class MppFormat
         layer.BlendMode = Enum.TryParse<BlendMode>(node.Blend, out var blend) ? blend : BlendMode.Normal;
         layer.Mask = LoadLayerMask(node, zip);
         // 效果堆疊掛在 LayerNode：一般圖層與群組同一條路徑
-        if (layer.CanHaveEffects && LoadEffects(node, zip) is { Count: > 0 } fx) layer.SetEffects(fx);
+        if (layer.CanHaveEffects && LoadEffects(node, zip, layer.EffectOffset) is { Count: > 0 } fx) layer.SetEffects(fx);
         return layer;
     }
 
@@ -759,7 +767,7 @@ public static class MppFormat
     }
 
     /// <summary>檔案裡的效果堆疊（一般圖層與群組共用）。未知效果略過，不擋開檔。</summary>
-    private static List<LayerEffect> LoadEffects(Node node, ZipArchive zip)
+    private static List<LayerEffect> LoadEffects(Node node, ZipArchive zip, SKPointI legacyAnchor)
     {
         var list = new List<LayerEffect>();
         if (node.Effects is { Count: > 0 } effects)
@@ -789,6 +797,8 @@ public static class MppFormat
                 list.Add(new LayerEffect(dto.Id == Guid.Empty ? Guid.NewGuid() : dto.Id, effect, dto.Enabled, mask)
                 {
                     Color = new SKColor(dto.Color),
+                    MaskAnchor = mask == null ? null
+                        : dto.MaskAnchor is [var ax, var ay] ? new SKPointI(ax, ay) : legacyAnchor,
                 });
             }
         }

@@ -246,6 +246,7 @@ public sealed class TransformSession : IDisposable
         if (_disposed) return;
         var frame = FrameRect;
         var center = new SKPoint(frame.MidX, frame.MidY);
+        var pixelMatrixBefore = PixelMatrix; // 下面會丟掉前段，先記住原始像素目前落在哪
 
         _quad = null; _quadStart = null; _stampedQuad = null;
         _warp = null; _warpStart = null; _stampedWarp = null;
@@ -270,6 +271,9 @@ public sealed class TransformSession : IDisposable
             }
             if (src is { } original)
             {
+                // 續接的框貼著實際內容（SessionTransforms.BuildResumeFromLayers），不一定是整張原圖的框；
+                // 重設後的框是整張原圖，中心要用「原圖中心目前落在哪」，不然內容會偏一段
+                center = pixelMatrixBefore.MapPoint(original.MidX, original.MidY);
                 _preMatrix = SKMatrix.Identity;
                 _preIsIdentity = true;
                 _baseRotation = 0f;

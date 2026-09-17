@@ -131,7 +131,52 @@ internal sealed class SessionTransforms(EditorSession session)
             rect = new SKRect(rect.Left + delta.X, rect.Top + delta.Y,
                 rect.Right + delta.X, rect.Bottom + delta.Y);
         }
-        return new TransformResume(target, items, matrix, rect, first.RotationDeg, first.OriginalSize);
+        // 來源記的框是「整張原圖」落在畫布上的位置，使用者看到（也抓著）的是貼著實際內容的框：
+        // 素材四周有透明邊、或去背之後內容縮了，兩個框就不一樣大 —— 一開始縮放框就換了一個，
+        // 看起來是「放大的時候跳一下」（2026-09-17 使用者回報）。沒旋轉時框只是縮放的參考矩形，
+        // 換成內容框映射照樣成立；「原始尺寸」按同比例換算，重設與 Shift 等比才對得上。
+        var originalSize = first.OriginalSize;
+        if (first.RotationDeg == 0f && rect.Width > 0.5f && rect.Height > 0.5f &&
+            VisibleContentRect(layers) is { } visible)
+        {
+            originalSize = new SKSize(
+                originalSize.Width * visible.Width / rect.Width,
+                originalSize.Height * visible.Height / rect.Height);
+            rect = visible;
+        }
+        return new TransformResume(target, items, matrix, rect, first.RotationDeg, originalSize);
+    }
+
+    /// <summary>
+    /// 這些圖層實際內容的外框（像素 ∪ 物件框，doc 座標，不含效果外擴）——
+    /// 與 <see cref="TransformSourceCapture.Begin"/> 第一輪用的框同一個定義。
+    /// </summary>
+    private SKRect? VisibleContentRect(List<RasterLayer> layers)
+    {
+        SKRect? acc = null;
+        void Add(SKRect r) => acc = acc is { } a
+            ? new SKRect(Math.Min(a.Left, r.Left), Math.Min(a.Top, r.Top),
+                Math.Max(a.Right, r.Right), Math.Max(a.Bottom, r.Bottom))
+            : r;
+
+        lock (Document.SyncRoot)
+        {
+            foreach (var layer in layers)
+            {
+                var b = layer.Surface.ExactContentBounds();
+                if (b.Width > 0 && b.Height > 0)
+                {
+                    Add(new SKRect(b.Left + layer.Offset.X, b.Top + layer.Offset.Y,
+                        b.Right + layer.Offset.X, b.Bottom + layer.Offset.Y));
+                }
+                foreach (var el in layer.Elements)
+                {
+                    var eb = el.FrameBounds;
+                    if (!eb.IsEmpty) Add(eb);
+                }
+            }
+        }
+        return acc is { Width: >= 1, Height: >= 1 } ? acc : null;
     }
 
     /// <summary>把變形結果烙進圖層並記單一步 undo；恰好回到原狀時無損還原、不記步驟。</summary>

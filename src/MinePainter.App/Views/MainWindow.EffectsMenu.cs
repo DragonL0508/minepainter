@@ -139,8 +139,8 @@ public partial class MainWindow
         // 群組：自動色階也走群組的效果堆疊（直方圖取整組合成後的樣子）
         if (session.Document.ActiveLayer is GroupLayer group)
         {
-            var groupEntry = LayerEffect.Create(new AdjustmentEffect(new LevelsAdjustment()),
-                session.Selection?.Clone().Mask, session.Foreground);
+            var groupEntry = LayerEffect.CreateFor(group, session.Document.Bounds,
+                new AdjustmentEffect(new LevelsAdjustment()), session.Selection, session.Foreground);
             using var groupPreview = new LayerEffectPreview(session, group, groupEntry, isNew: true);
             var groupLevels = LevelsAdjustment.FromHistogram(groupPreview.Histogram());
             groupPreview.Commit(new AdjustmentEffect(groupLevels));
@@ -160,7 +160,7 @@ public partial class MainWindow
         // 效果一律記錄在圖層效果堆疊（非破壞性；使用者 2026-09-06 明示不再提供直接寫入像素的選項）
         var effect = new AdjustmentEffect(levels);
         LayerEffectCommands.Add(session.Document, session.History, layer,
-            LayerEffect.Create(effect, session.Selection?.Clone().Mask, session.Foreground));
+            LayerEffect.CreateFor(layer, session.Document.Bounds, effect, session.Selection, session.Foreground));
         _lastEffect = effect;
         Toasts.Show("自動色階（已記錄在圖層）");
         AfterEffect();
@@ -193,7 +193,7 @@ public partial class MainWindow
     /// <summary>非破壞性：效果進圖層效果堆疊（有選取就帶遮罩），對話框即時預覽由合成器背景重算。</summary>
     private async Task ApplyToLayerStackAsync(EditorSession session, LayerNode layer, IEffect effect, string name, bool showDialog)
     {
-        var entry = LayerEffect.Create(effect, session.Selection?.Clone().Mask, session.Foreground);
+        var entry = LayerEffect.CreateFor(layer, session.Document.Bounds, effect, session.Selection, session.Foreground);
         using var preview = new LayerEffectPreview(session, layer, entry, isNew: true);
         if (!showDialog)
         {

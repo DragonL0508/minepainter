@@ -565,7 +565,7 @@ internal sealed class LayerEffectStackEditor
 
     private async void AddToStack(LayerNode layer, IEffect effect, bool showDialog)
     {
-        var entry = LayerEffect.Create(effect, _session.Selection?.Clone().Mask, _session.Foreground);
+        var entry = LayerEffect.CreateFor(layer, _session.Document.Bounds, effect, _session.Selection, _session.Foreground);
         if (!showDialog)
         {
             LayerEffectCommands.Add(_session.Document, _session.History, layer, entry);

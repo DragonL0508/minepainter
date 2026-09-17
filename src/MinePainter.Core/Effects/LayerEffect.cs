@@ -5,8 +5,13 @@ using SkiaSharp;
 namespace MinePainter.Core.Effects;
 
 /// <summary>
-/// 圖層效果堆疊的一筆（非破壞性）：效果＋開關＋套用時的選取遮罩（doc 座標，null = 整層）。
+/// 圖層效果堆疊的一筆（非破壞性）：效果＋開關＋套用時的選取遮罩（null = 整層）。
 /// 不可變：改參數／開關 = 換新實例（undo 只需換整份清單）。
+///
+/// **遮罩釘在圖層上，不是釘在畫布上。** 遮罩本身存的是套用當下的 doc 座標，
+/// <see cref="MaskAnchor"/> 記下當時的圖層位移；之後圖層座標 L 對到遮罩座標 L + MaskAnchor，
+/// 圖層怎麼平移遮罩都跟著內容走。以前直接拿「現在的」位移去讀，圖層一搬家遮罩就留在原地，
+/// 下一次重算（例如拖出畫布再拖回來）效果就從一部分內容上消失（2026-09-17 使用者回報）。
 /// </summary>
 public sealed record LayerEffect(Guid Id, IEffect Effect, bool Enabled = true, MaskSurface? Mask = null)
 {
@@ -15,8 +20,45 @@ public sealed record LayerEffect(Guid Id, IEffect Effect, bool Enabled = true, M
     /// <summary>套用當時的主色（雲朵、物件外框等會用到）。</summary>
     public SKColor Color { get; init; } = SKColors.Black;
 
+    /// <summary>
+    /// 遮罩建立當時的圖層位移（<see cref="Layers.LayerNode.EffectOffset"/>）。
+    /// null＝沒記（沒有遮罩、或舊資料）：照舊以目前的位移讀。
+    /// </summary>
+    public SKPointI? MaskAnchor { get; init; }
+
     public static LayerEffect Create(IEffect effect, MaskSurface? mask = null, SKColor? color = null) =>
         new(Guid.NewGuid(), effect, true, mask) { Color = color ?? SKColors.Black };
+
+    /// <summary>
+    /// 「把效果套到這個圖層、限目前的選取範圍」的唯一入口（選單、效果堆疊面板共用）。
+    /// 選取蓋滿整張畫布（全選）＝整層，不帶遮罩 —— 選取永遠夾在畫布內，帶著它的話
+    /// 圖層在畫布外的那部分就套不到效果，之後一拖進畫面就露出沒處理過的樣子。
+    /// </summary>
+    public static LayerEffect CreateFor(Layers.LayerNode layer, SKRectI canvas, IEffect effect,
+        Selections.SelectionMask? selection, SKColor? color = null)
+    {
+        if (selection is not { IsEmpty: false } || CoversCanvas(selection, canvas))
+            return Create(effect, null, color);
+        return Create(effect, selection.Clone().Mask, color) with { MaskAnchor = layer.EffectOffset };
+    }
+
+    private static bool CoversCanvas(Selections.SelectionMask selection, SKRectI canvas)
+    {
+        if (!selection.Bounds.Contains(canvas)) return false;
+        foreach (var idx in TileIndex.CoveringRect(canvas))
+        {
+            var tile = selection.Mask.GetForRead(idx);
+            if (tile == null) return false;
+            var rect = idx.ToPixelRect();
+            var inter = SKRectI.Intersect(rect, canvas);
+            for (var y = inter.Top; y < inter.Bottom; y++)
+            {
+                var row = tile.Alpha.AsSpan((y - rect.Top) * MaskTile.Size + (inter.Left - rect.Left), inter.Width);
+                if (row.IndexOfAnyExcept((byte)255) >= 0) return false;
+            }
+        }
+        return true;
+    }
 }
 
 /// <summary>

@@ -33,6 +33,30 @@ public sealed class HandleDragController
     private SKRect _startRect;
     private SelectionMask? _startSelection;
     private float _transformPad; // 變形框顯示用的效果外擴量（TargetRect 本身不含）
+    // 按下點與把手真正位置的差：把手有命中容差，開始變形時框也可能換一個（內容框 → 續接框），
+    // 直接把角設到指標位置，內容會在第一步「跳一下」（2026-09-17 使用者回報）。整趟拖曳都扣掉它。
+    private SKPoint _grab;
+
+    /// <summary>把手 <paramref name="corner"/> 在 <paramref name="r"/> 上的位置（0–3 四角順時針自左上，4–7 上右下左邊中點）。</summary>
+    private static SKPoint HandlePoint(SKRect r, int corner) => corner switch
+    {
+        0 => new SKPoint(r.Left, r.Top),
+        1 => new SKPoint(r.Right, r.Top),
+        2 => new SKPoint(r.Right, r.Bottom),
+        3 => new SKPoint(r.Left, r.Bottom),
+        4 => new SKPoint(r.MidX, r.Top),
+        5 => new SKPoint(r.Right, r.MidY),
+        6 => new SKPoint(r.MidX, r.Bottom),
+        _ => new SKPoint(r.Left, r.MidY),
+    };
+
+    private void SetGrab(SKPoint p, SKRect rect, int corner)
+    {
+        var h = HandlePoint(rect, corner);
+        _grab = new SKPoint(p.X - h.X, p.Y - h.Y);
+    }
+
+    private SKPoint Ungrab(SKPoint p) => new(p.X - _grab.X, p.Y - _grab.Y);
 
     // 四角（透視）／彎曲（扭曲）模式的拖曳：起始網格＋按下點，每步從起點換算不累積
     private SKPoint[]? _startQuad;
@@ -344,6 +368,7 @@ public sealed class HandleDragController
             _kind = TargetKind.Transform;
             _corner = tCorner;
             _startRect = shownRect;
+            SetGrab(local, shownRect, tCorner);
             transform.BeginGesturePreview(session.LiveElementRendering); // 拖曳期間 render thread 直接畫，不逐步蓋章
             return true;
         }
@@ -369,6 +394,7 @@ public sealed class HandleDragController
             _kind = TargetKind.Floating;
             _corner = corner;
             _startRect = floating.TargetRect;
+            SetGrab(p, _startRect, corner);
             return true;
         }
 
@@ -386,9 +412,25 @@ public sealed class HandleDragController
             var rect = new SKRect(b.Left, b.Top, b.Right, b.Bottom);
             var corner = MoveTool.HitCorner(rect, p, tolerance);
             if (corner < 0) return false;
+
+            // 移動工具：動的是「選取的內容」不是選取範圍本身 —— 拖角＝提起像素再縮放，
+            // 與框內拖曳＝提起再移動同一個語意（2026-09-17 使用者回報「框選後移動工具只能移動，
+            // 不能變換大小」：原本這裡只縮放螞蟻線）。文字圖層沒有像素可提，照舊縮放選取範圍。
+            if (session.ActiveTool == session.Move &&
+                session.Document.ActiveLayer is RasterLayer { IsTextLayer: false } &&
+                session.LiftSelection() is { } lifted)
+            {
+                _kind = TargetKind.Floating;
+                _corner = corner;
+                _startRect = lifted.TargetRect;
+                SetGrab(p, _startRect, corner);
+                return true;
+            }
+
             _kind = TargetKind.Selection;
             _corner = corner;
             _startRect = rect;
+            SetGrab(p, rect, corner);
             _startSelection = selection;
             return true;
         }
@@ -412,6 +454,10 @@ public sealed class HandleDragController
             _corner = corner;
             _transformPad = EffectPad(begun.Target);
             _startRect = Inflated(begun.TargetRect, _transformPad);
+            // 差值以「變形框自己的把手」為準（可能已旋轉、也可能與剛才的內容框不是同一個框）：
+            // 第一步算出來的目標框就恰好等於起始框，內容一格都不動
+            SetGrab(MoveTool.RotatePoint(p, new SKPoint(_startRect.MidX, _startRect.MidY), -begun.RotationDeg),
+                _startRect, corner);
             begun.BeginGesturePreview(session.LiveElementRendering);
             return true;
         }
@@ -438,7 +484,7 @@ public sealed class HandleDragController
                 var floatingAspect = floating.PixelSize.Height > 0
                     ? (float)floating.PixelSize.Width / floating.PixelSize.Height : (float?)null;
                 var resizedRect = SelectionMask.SnapToPixels(
-                    MoveTool.ResizeRect(_startRect, _corner, p, keepAspect, floatingAspect));
+                    MoveTool.ResizeRect(_startRect, _corner, Ungrab(p), keepAspect, floatingAspect));
                 if (resizedRect == floating.TargetRect) break; // 同一格像素內的抖動
                 floating.TargetRect = resizedRect;
                 MoveTool.InvalidateFloating(session, floating, before); // 覆疊/重合成的取捨在那裡
@@ -448,7 +494,7 @@ public sealed class HandleDragController
             case TargetKind.Selection when _startSelection != null:
             {
                 var target = SelectionMask.SnapToPixels(
-                    MoveTool.ResizeRect(_startRect, _corner, p, keepAspect));
+                    MoveTool.ResizeRect(_startRect, _corner, Ungrab(p), keepAspect));
                 var resized = _startSelection.TransformedTo(target, session.Document.Bounds);
                 if (resized != null)
                     session.Selection = resized; // 拖曳期間即時更新（不進 history）；把手框自動跟上
@@ -485,8 +531,8 @@ public sealed class HandleDragController
             case TargetKind.Transform when session.Transform is { } transform:
             {
                 // 框可能已旋轉：在未旋轉空間裡算縮放（指標先反轉），角度不變
-                var local = MoveTool.RotatePoint(p,
-                    new SKPoint(_startRect.MidX, _startRect.MidY), -transform.RotationDeg);
+                var local = Ungrab(MoveTool.RotatePoint(p,
+                    new SKPoint(_startRect.MidX, _startRect.MidY), -transform.RotationDeg));
                 // Shift＝回到內容最原始的比例（ResetSize 是這輪／續接前的原始尺寸）
                 var originalAspect = transform.ResetSize.Height > 0
                     ? transform.ResetSize.Width / transform.ResetSize.Height : (float?)null;

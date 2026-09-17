@@ -75,21 +75,31 @@ public static class EditCommands
             docRect.Right - layer.Offset.X, docRect.Bottom - layer.Offset.Y);
 
         IHistoryEntry? entry;
+        var touchedRect = layerRect; // 圖層座標：undo 與失效的範圍
         lock (doc.SyncRoot)
         {
             using var before = layer.Surface.Snapshot();
+
+            // 清除要延伸到畫布外（見 CoverageBeyondCanvas）；填色照舊只畫在畫布內
+            if (!color.HasValue)
+            {
+                var content = layer.Surface.ExactContentBounds();
+                if (content.Width > 0 && content.Height > 0) touchedRect = SKRectI.Union(layerRect, content);
+            }
 
             // 清除：原始高清來源也把同一塊挖掉（快速模式輸出時才不會拿代理放大）；填色就只能作廢
             var sourceBefore = color.HasValue ? null : layer.ValidPixelSource;
             LayerPixelSource? sourceAfter = null;
             if (sourceBefore != null)
             {
-                var coverage = selection is { IsEmpty: false } sel
-                    ? BackgroundRemovalCommand.ReadCoverage(sel, layerRect, layer.Offset)
-                    : null;
-                var keep = new byte[layerRect.Width * layerRect.Height];
-                for (var i = 0; i < keep.Length; i++) keep[i] = (byte)(255 - (coverage?[i] ?? 255));
-                sourceAfter = sourceBefore.Masked(layerRect, keep, outside: 255);
+                var keep = new byte[touchedRect.Width * touchedRect.Height];
+                for (var y = 0; y < touchedRect.Height; y++)
+                for (var x = 0; x < touchedRect.Width; x++)
+                {
+                    keep[y * touchedRect.Width + x] = (byte)(255 - CoverageBeyondCanvas(selection, doc.Bounds,
+                        touchedRect.Left + x + layer.Offset.X, touchedRect.Top + y + layer.Offset.Y));
+                }
+                sourceAfter = sourceBefore.Masked(touchedRect, keep, outside: 255);
                 layer.TakePixelSource(); // 舊的留給 undo
             }
 
@@ -134,7 +144,8 @@ public static class EditCommands
             }
 
             paint.Dispose();
-            entry = TileDeltaEntry.Capture(label, layer, before, layerRect);
+            if (!color.HasValue) EraseBeyondCanvas(layer, selection, doc.Bounds, touchedRect);
+            entry = TileDeltaEntry.Capture(label, layer, before, touchedRect);
             if (sourceAfter != null)
             {
                 sourceAfter.Revision = layer.Surface.Revision;
@@ -144,6 +155,63 @@ public static class EditCommands
         }
 
         if (entry != null) session.History.Push(entry);
-        layer.Invalidate(docRect);
+        layer.Invalidate(new SKRectI(
+            touchedRect.Left + layer.Offset.X, touchedRect.Top + layer.Offset.Y,
+            touchedRect.Right + layer.Offset.X, touchedRect.Bottom + layer.Offset.Y));
+    }
+
+    /// <summary>
+    /// 清除用的選取覆蓋度，定義域延伸到畫布外：畫布外的點取「夾回畫布後最近那一格」的覆蓋度
+    /// （沒有選取＝整層，一律 255）。選取範圍本身永遠夾在畫布內，但圖層可以持有畫布外的像素
+    /// （放大、平移出去的部分）；不延伸的話那些像素永遠選不到也清不掉，卻照樣被外框／光暈算進去
+    /// （2026-09-17 使用者回報「放大後去背，畫布外沒清掉的會留著影響外框，用 delete 還清不掉」）。
+    /// 語意＝選取貼到畫布哪一邊，那一邊外面的東西就一起清。
+    /// </summary>
+    internal static byte CoverageBeyondCanvas(SelectionMask? selection, SKRectI canvas, int docX, int docY)
+    {
+        if (selection is not { IsEmpty: false }) return 255;
+        return selection.CoverageAt(
+            Math.Clamp(docX, canvas.Left, canvas.Right - 1),
+            Math.Clamp(docY, canvas.Top, canvas.Bottom - 1));
+    }
+
+    /// <summary>把 <paramref name="rect"/>（圖層座標）裡落在畫布外的像素依延伸覆蓋度清掉。須在 SyncRoot 內呼叫。</summary>
+    private static unsafe void EraseBeyondCanvas(RasterLayer layer, SelectionMask? selection, SKRectI canvas, SKRectI rect)
+    {
+        // 選取沒貼到畫布任何一邊：畫布外的延伸覆蓋度全是 0，不必掃
+        if (selection is { IsEmpty: false } s)
+        {
+            var b = s.Bounds;
+            if (b.Left > canvas.Left && b.Top > canvas.Top && b.Right < canvas.Right && b.Bottom < canvas.Bottom) return;
+        }
+
+        var offset = layer.Offset;
+        foreach (var idx in TileIndex.CoveringRect(rect))
+        {
+            if (layer.Surface.GetTileForRead(idx) == null) continue;
+            var tileRect = idx.ToPixelRect();
+            var tileDoc = new SKRectI(tileRect.Left + offset.X, tileRect.Top + offset.Y,
+                tileRect.Right + offset.X, tileRect.Bottom + offset.Y);
+            if (canvas.Contains(tileDoc)) continue; // 整格都在畫布內，上面那一趟處理過了
+
+            var tile = layer.Surface.GetTileForWrite(idx);
+            var px = (uint*)tile.Pixels;
+            for (var y = 0; y < Tile.Size; y++)
+            {
+                var docY = tileDoc.Top + y;
+                var rowInside = docY >= canvas.Top && docY < canvas.Bottom;
+                var row = px + y * Tile.Size;
+                for (var x = 0; x < Tile.Size; x++)
+                {
+                    var docX = tileDoc.Left + x;
+                    if (rowInside && docX >= canvas.Left && docX < canvas.Right) continue;
+                    if (row[x] == 0) continue;
+                    var cov = CoverageBeyondCanvas(selection, canvas, docX, docY);
+                    if (cov == 0) continue;
+                    row[x] = LayerPixelSource.ScalePremul(row[x], (byte)(255 - cov));
+                }
+            }
+            if (tile.IsBlank()) layer.Surface.RemoveTile(idx);
+        }
     }
 }

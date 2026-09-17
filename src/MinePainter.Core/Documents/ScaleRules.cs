@@ -207,7 +207,16 @@ internal static class ScaleRules
             value = clampToSlider ? Math.Clamp(value, slider.Min, slider.Max) : Math.Max(value, slider.Min);
             current = slider.With(current, value);
         }
-        return entry with { Effect = (IEffect)current, Mask = mask == null ? null : ScaleMask(mask, sx, sy) };
+        // 遮罩的錨點是當時的圖層位移，圖層位移跟著縮，它也要
+        var anchor = entry.MaskAnchor is { } a
+            ? new SKPointI((int)MathF.Round(a.X * sx), (int)MathF.Round(a.Y * sy))
+            : (SKPointI?)null;
+        return entry with
+        {
+            Effect = (IEffect)current,
+            Mask = mask == null ? null : ScaleMask(mask, sx, sy),
+            MaskAnchor = anchor,
+        };
     }
 
     /// <summary>doc 座標的 8-bit 遮罩重新取樣到新尺寸（高品質；邊緣會有一格內的過渡）。</summary>

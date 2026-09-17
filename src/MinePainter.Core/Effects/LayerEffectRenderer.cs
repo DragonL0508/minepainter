@@ -563,7 +563,7 @@ public static class LayerEffectRenderer
 
             var masks = new List<byte[]?>(effects.Count);
             foreach (var e in effects)
-                masks.Add(e.Mask == null || compute.IsEmpty ? null : ReadMask(e.Mask, compute, layer.EffectOffset));
+                masks.Add(e.Mask == null || compute.IsEmpty ? null : ReadMask(e.Mask, compute, e.MaskAnchor ?? layer.EffectOffset));
 
             var job = new Job
             {
@@ -828,7 +828,10 @@ public static class LayerEffectRenderer
         return pixels;
     }
 
-    /// <summary>把 doc 座標的遮罩讀成圖層座標範圍的 byte 陣列。</summary>
+    /// <summary>
+    /// 把遮罩讀成圖層座標範圍的 byte 陣列。<paramref name="offset"/>＝圖層座標 → 遮罩座標的位移
+    /// （<see cref="LayerEffect.MaskAnchor"/>：遮罩建立當時的圖層位移，不是現在的）。
+    /// </summary>
     private static byte[] ReadMask(MaskSurface mask, SKRectI layerRect, SKPointI offset)
     {
         var result = new byte[layerRect.Width * layerRect.Height];

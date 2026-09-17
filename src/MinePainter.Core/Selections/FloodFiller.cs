@@ -14,8 +14,13 @@ public static class FloodFiller
     /// <summary>
     /// 於圖層上執行 flood fill。seed 為 doc 座標；tolerance 0..255（各通道最大差）。
     /// 回傳 doc 座標的遮罩（含圖層 offset 校正）。
+    /// <paramref name="rendered"/>＝讀「畫面上看到的那份」（效果堆疊算好的結果）而不是基底像素：
+    /// 選取類工具要選的是眼睛看到的形狀 —— 圖層套了傾斜／波浪這類變形效果之後，基底像素還在原位，
+    /// 拿它來選，選到的就是「還沒變形的區域」（2026-09-17 使用者回報）。呼叫端要先把效果算到最新
+    /// （<see cref="Effects.LayerEffectRenderer.RenderLayerNow"/>）。油漆桶寫的是基底像素，維持讀基底。
     /// </summary>
-    public static unsafe SelectionMask Fill(RasterLayer layer, SKPointI seedDoc, byte tolerance, SKRectI docBounds)
+    public static unsafe SelectionMask Fill(RasterLayer layer, SKPointI seedDoc, byte tolerance, SKRectI docBounds,
+        bool rendered = false)
     {
         var mask = new SelectionMask();
         var off = layer.Offset;
@@ -27,7 +32,7 @@ public static class FloodFiller
         if (seed.X < limit.Left || seed.X >= limit.Right || seed.Y < limit.Top || seed.Y >= limit.Bottom)
             return mask;
 
-        var reader = new PixelReader(layer.Surface);
+        var reader = new PixelReader(rendered ? layer.DisplaySurface : layer.Surface);
         var writer = new MaskWriter(mask, off);
         var target = reader.Get(seed.X, seed.Y);
 
